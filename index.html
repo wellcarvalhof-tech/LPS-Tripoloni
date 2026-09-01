@@ -398,9 +398,14 @@
     return id;
   }
   async function sbDeleteObra(id){ var r=await SB.from('obras').delete().eq('id',id); if(r.error)throw r.error; }
+  async function sbUpdateObra(id,patch){
+    await sbRequireSession();
+    var r=await SB.from('obras').update(patch).eq('id',id);
+    if(r.error)throw r.error;
+  }
   async function sbLoadCadastro(obraId){
     var res=await Promise.all([
-      SB.from('obras').select('nome,data_inicio,feriados').eq('id',obraId).single(),
+      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId)
@@ -412,7 +417,7 @@
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
-    window._OBRA={nome:obra.nome,data_inicio:obra.data_inicio,feriados:Array.isArray(obra.feriados)?obra.feriados:[]};
+    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:Array.isArray(obra.feriados)?obra.feriados:[]};
   }
 
   function showAuth(){var g=document.getElementById('authGate');if(g)g.hidden=false;}
@@ -594,23 +599,16 @@
   };
 
   VIEWS['cad-obra']=function(){
-    var isNew = selectedObra && selectedObra.novo;
-    var action = isNew
-      ? '<button class="btn" id="cancelNewObra">Cancelar</button><button class="btn primary" id="saveNewObra">Salvar e continuar →</button>'
-      : '<button class="btn primary">Salvar</button>';
-    var banner = isNew
-      ? '<div class="banner">Cadastrando uma <b>nova obra</b>. Preencha a identificação e siga por Serviços, Lotes, Equipes e Calendário. Ao salvar, a obra passa a aparecer na tela inicial.</div>'
-      : '';
-    var f = isNew
-      ? '<div class="grid g2"><div class="card"><div class="eyebrow">Identificação</div>'+
-          field('Nome da obra','','Ex: Duplicação BR-135')+field('Código','','Ex: BR135-L3-2026')+field('Rodovia / trecho','','Ex: BR-135 · km 0+000 a 42+000')+'</div>'+
-        '<div class="card"><div class="eyebrow">Prazo</div>'+field('Início','','dd/mm/aaaa')+field('Término previsto','','dd/mm/aaaa')+
-          field('Dias úteis','Seg a Sex')+'</div></div>'
-      : '<div class="grid g2"><div class="card"><div class="eyebrow">Identificação</div>'+
-          field('Nome da obra','Duplicação BR-135')+field('Código','BR135-L3-2026')+field('Rodovia / trecho','BR-135 · km 0+000 a 42+000')+'</div>'+
-        '<div class="card"><div class="eyebrow">Prazo</div>'+field('Início','05/05/2026')+field('Término previsto','30/04/2027')+
-          field('Dias úteis','Seg a Sex')+'</div></div>';
-    return head(isNew?'Nova obra':'Obra','Identificação e parâmetros gerais da obra', action)+banner+f;
+    var o=window._OBRA||{};
+    var f='<div class="grid g2"><div class="card"><div class="eyebrow">Identificação</div>'+
+        field('obraNome','Nome da obra',o.nome,'Ex: Duplicação BR-135')+
+        field('obraCodigo','Código',o.codigo,'Ex: BR135-L3-2026')+
+        field('obraRodovia','Rodovia / trecho',o.rodovia,'Ex: BR-135 · km 0+000 a 42+000')+'</div>'+
+      '<div class="card"><div class="eyebrow">Prazo</div>'+
+        field('obraInicio','Início',o.data_inicio,'','date')+
+        field('obraFim','Término previsto',o.data_fim_prevista,'','date')+
+        '<div class="field"><label>Dias úteis</label><div class="note">Seg a Sex (padrão)</div></div></div></div>';
+    return head('Obra','Identificação e parâmetros gerais da obra','<button class="btn primary" id="saveObraBtn">Salvar</button>')+f;
   };
 
   VIEWS['cad-lotes']=function(){
@@ -705,7 +703,8 @@
     var col={info:'--info',crit:'--crit',good:'--good',accent:'--accent',warn:'--warn'}[kind]||'--info';
     return '<div class="kpi"><div class="stripe" style="background:var('+col+')"></div><div class="lab">'+lab+'</div><div class="val num">'+val+'</div><div class="foot">'+foot+'</div></div>';
   }
-  function field(l,v,ph){return '<div class="field"><label>'+l+'</label><input class="inp" value="'+(v||'')+'"'+(ph?' placeholder="'+ph+'"':'')+'></div>';}
+  function escAttr(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+  function field(id,l,v,ph,type){return '<div class="field"><label>'+l+'</label><input class="inp" id="'+id+'" type="'+(type||'text')+'" value="'+escAttr(v)+'"'+(ph?' placeholder="'+escAttr(ph)+'"':'')+'></div>';}
   /* ---- Editores de cadastro (fiéis ao app) ---- */
   var LAG=[0,1,0,1,1,0];
   function tinp(v,w,type){return '<input class="einp" type="'+(type||'text')+'" value="'+(v===''||v==null?'':v)+'"'+(w?' style="width:'+w+'"':'')+'>';}
@@ -1077,11 +1076,27 @@
       });
     }
     if(view==='cad-equipes'){var g=document.getElementById('gotoServ');if(g)g.addEventListener('click',function(){go('cad-serv');});}
-    if(view==='cad-obra' && selectedObra && selectedObra.novo){
-      var sv=document.getElementById('saveNewObra');
-      if(sv)sv.addEventListener('click',function(){go('cad-serv');});
-      var cc=document.getElementById('cancelNewObra');
-      if(cc)cc.addEventListener('click',showLanding);
+    if(view==='cad-obra'){
+      var sb=document.getElementById('saveObraBtn');
+      if(sb)sb.addEventListener('click',async function(){
+        if(!selectedObra)return;
+        var patch={
+          nome:(document.getElementById('obraNome').value||'').trim()||'Nova obra',
+          codigo:document.getElementById('obraCodigo').value.trim()||null,
+          rodovia:document.getElementById('obraRodovia').value.trim()||null,
+          data_inicio:document.getElementById('obraInicio').value||null,
+          data_fim_prevista:document.getElementById('obraFim').value||null
+        };
+        sb.disabled=true;
+        try{
+          await sbUpdateObra(selectedObra.id,patch);
+          window._OBRA=Object.assign({},window._OBRA,patch);
+          selectedObra.nome=patch.nome; CUR.nome=patch.nome;
+          document.getElementById('obraSelName').textContent=patch.nome;
+          toast('Obra salva.');
+        }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+        sb.disabled=false;
+      });
     }
   }
 
