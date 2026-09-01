@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>LPS Tripoloni · Sistema</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -350,7 +351,7 @@
   </form>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
 <script>
 (function(){
   "use strict";
@@ -368,16 +369,33 @@
     setItem:function(k,v){_mem[k]=v;try{window.localStorage.setItem(k,v);}catch(e){}},
     removeItem:function(k){delete _mem[k];try{window.localStorage.removeItem(k);}catch(e){}}
   };
-  try{ if(window.supabase&&window.supabase.createClient) SB=window.supabase.createClient(SUPA_URL,SUPA_KEY,{auth:{storage:safeStore,persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}}); }catch(e){ console.error('supabase init',e); }
+  try{ if(window.supabase&&window.supabase.createClient) SB=window.supabase.createClient(SUPA_URL,SUPA_KEY,{auth:{storage:safeStore,storageKey:'lps-tripoloni-auth',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}}); }catch(e){ console.error('supabase init',e); }
   var CUR=null; var PALVARS=['--c1','--c2','--c3','--c4','--c5','--c6'];
 
+  async function sbRequireSession(){
+    var s=await SB.auth.getSession();
+    if(s.error||!(s.data&&s.data.session)){ showAuth(); throw new Error('Sua sessão expirou. Faça login novamente.'); }
+    return s.data.session;
+  }
   async function sbListObras(){
     var r=await SB.from('obras').select('id,nome,codigo,rodovia,data_inicio').order('created_at',{ascending:false});
     if(r.error)throw r.error; return r.data||[];
   }
+  function newUuid(){
+    if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});
+  }
   async function sbCreateObra(o){
-    var r=await SB.from('obras').insert({nome:(o.nome||'Nova obra').trim(),codigo:o.codigo||null,rodovia:o.rodovia||null}).select('id').single();
-    if(r.error)throw r.error; return r.data.id;
+    await sbRequireSession();
+    // Insert sem RETURNING: com RETURNING, a policy de SELECT do RETURNING pode
+    // ser avaliada antes do trigger tg_obra_add_criador "assentar" o membro na
+    // mesma transação, mesmo a linha já existindo (confirmado em teste manual no
+    // SQL Editor). Gerar o id no client evita depender do RETURNING.
+    var id=newUuid();
+    var payload={id:id,nome:(o.nome||'Nova obra').trim(),codigo:o.codigo||null,rodovia:o.rodovia||null};
+    var r=await SB.from('obras').insert(payload);
+    if(r.error)throw r.error;
+    return id;
   }
   async function sbDeleteObra(id){ var r=await SB.from('obras').delete().eq('id',id); if(r.error)throw r.error; }
   async function sbLoadCadastro(obraId){
