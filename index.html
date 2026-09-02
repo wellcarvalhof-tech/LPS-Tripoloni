@@ -294,6 +294,14 @@
   @media (max-width:900px){ .topbar-brand{display:flex} }
 
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+  @media print{
+    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast{display:none!important}
+    .app{display:block}
+    .content{max-width:none!important;padding:0!important}
+    .card{box-shadow:none;border:1px solid #ccc}
+    .tc-wrap{max-height:none!important;overflow:visible!important;zoom:1!important}
+  }
 </style>
 
 <!-- LANDING: seleção de obras -->
@@ -359,6 +367,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -1468,6 +1477,131 @@
     await sbUpdateObra(selectedObra.id,{ajustes_manuais:OVR});
   }
 
+  /* ================= IMPORTAÇÃO / EXPORTAÇÃO (Excel + PDF) ================= */
+  function pickExcelFile(cb){
+    var inp=document.getElementById('xlsFileInput');
+    if(!inp){ inp=document.createElement('input'); inp.type='file'; inp.accept='.xlsx,.xls'; inp.id='xlsFileInput'; inp.style.display='none'; document.body.appendChild(inp); }
+    inp.value='';
+    inp.onchange=function(){ if(inp.files&&inp.files[0])cb(inp.files[0]); };
+    inp.click();
+  }
+  function readWorkbookFile(file){
+    if(typeof XLSX==='undefined')return Promise.reject(new Error('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.'));
+    return file.arrayBuffer().then(function(buf){ return XLSX.read(buf,{type:'array'}); });
+  }
+  function sheetRows(ws){ return ws?XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false}):[]; }
+
+  function exportExcel(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
+    var wb=XLSX.utils.book_new();
+    var servRows=[['Nome','Unidade','Cor','Equipes','Produtividade','Lag (semanas)','Predecessores']];
+    SERV.forEach(function(s){
+      var preds=((s.cfg&&s.cfg.predecessors)||[]).map(function(pid){var p=SERV.filter(function(x){return x.id===pid;})[0];return p?p.n:null;}).filter(Boolean).join('; ');
+      servRows.push([s.n,s.u,s.hex||'',s.eq,pnum(s.p),s.lag||0,preds]);
+    });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(servRows),'Servicos');
+
+    var lotRows=[['#','Nome']];
+    LOTS.forEach(function(l,i){lotRows.push([i+1,l]);});
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(lotRows),'Lotes');
+
+    var qtyRows=[['Lote'].concat(SERV.map(function(s){return s.n;}))];
+    LOTS.forEach(function(l,li){ qtyRows.push([l].concat(SERV.map(function(s,si){return QTY[li][si]||0;}))); });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(qtyRows),'Quantidades');
+
+    var segs=buildSchedule().slice().sort(function(a,b){return a.start-b.start||a.si-b.si||a.li-b.li;});
+    var cronRows=[['Serviço','Lote','Equipe','Semana início','Semana fim','Quantidade']];
+    segs.forEach(function(sg){ cronRows.push([SERV[sg.si]?SERV[sg.si].n:'',LOTS[sg.li]||'',sg.team,sg.start,sg.start+sg.dur-1,sg.qty]); });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(cronRows),'Cronograma');
+
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    XLSX.writeFile(wb,nome+'_tempo_caminho.xlsx');
+    toast('Excel exportado.');
+  }
+  function exportPdf(){ window.print(); }
+
+  async function applyImportWorkbook(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var wsServ=wb.Sheets['Servicos']||wb.Sheets['Serviços'];
+    var wsLot=wb.Sheets['Lotes'];
+    var wsQty=wb.Sheets['Quantidades'];
+    if(!wsServ&&!wsLot&&!wsQty){
+      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Quantidades") — gere um modelo com "Exportar Excel".');
+      return;
+    }
+    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe.'))return;
+
+    var byName={}; SERV.forEach(function(s){byName[s.n.trim().toLowerCase()]=s;});
+    var createdServ=0, updatedServ=0;
+    var servRows=sheetRows(wsServ).slice(1);
+    for(var i=0;i<servRows.length;i++){
+      var r=servRows[i]; if(!r||!r[0])continue;
+      var nome=String(r[0]).trim(); if(!nome)continue;
+      var patch={nome:nome,unidade:(r[1]!=null&&String(r[1]).trim())||'un',teams:Math.max(1,parseInt(r[3],10)||1),produtividade:pnum(r[4]),lag_semanas:parseInt(r[5],10)||0};
+      if(r[2]!=null&&String(r[2]).trim())patch.cor=String(r[2]).trim();
+      var existing=byName[nome.toLowerCase()];
+      if(existing){ await sbUpdateServico(existing.id,patch); updatedServ++; }
+      else { await sbCreateServico(selectedObra.id,Object.assign({ordem:SERV.length+createdServ},patch)); createdServ++; }
+    }
+
+    var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
+    var createdLot=0;
+    var lotRows=sheetRows(wsLot).slice(1);
+    for(var j=0;j<lotRows.length;j++){
+      var lr=lotRows[j]; if(!lr)continue;
+      var lname=String((lr[1]!=null?lr[1]:lr[0])||'').trim(); if(!lname)continue;
+      if(!lotByName.hasOwnProperty(lname.toLowerCase())){
+        await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot});
+        createdLot++;
+      }
+    }
+
+    await sbLoadCadastro(selectedObra.id);
+
+    var qtyCount=0;
+    var qtyAoa=sheetRows(wsQty);
+    if(qtyAoa.length>1){
+      var header=qtyAoa[0], svcCols=header.slice(1).map(function(n){return String(n||'').trim();});
+      var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
+      var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+      for(var r2=1;r2<qtyAoa.length;r2++){
+        var row=qtyAoa[r2]; if(!row||!row[0])continue;
+        var li2=lotIdxByName[String(row[0]).trim().toLowerCase()]; if(li2==null)continue;
+        for(var c2=0;c2<svcCols.length;c2++){
+          var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
+          var val=Number(row[c2+1]); if(!isFinite(val))continue;
+          await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
+          qtyCount++;
+        }
+      }
+      await sbLoadCadastro(selectedObra.id);
+    }
+
+    go(current);
+    toast('Importado: '+createdServ+' serviço(s) novo(s), '+updatedServ+' atualizado(s), '+createdLot+' lote(s) novo(s), '+qtyCount+' quantidade(s).');
+  }
+
+  async function importTempoCaminhoWorkbook(wb){
+    var ws=wb.Sheets['Cronograma'];
+    if(!ws){alert('Essa planilha não tem uma aba "Cronograma" (gerada pelo "Exportar Excel" deste app).');return;}
+    if(!confirm('Importar esse cronograma como ajustes manuais (semana de início) sobre o cálculo atual? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
+    var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
+    var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
+    var applied=0;
+    sheetRows(ws).slice(1).forEach(function(r){
+      if(!r||!r[0]||!r[1])return;
+      var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[1]).trim().toLowerCase()];
+      if(si==null||li==null)return;
+      var startWeek=parseInt(r[3],10); if(!(startWeek>0))return;
+      var k=ovrKey(li,si); if(!k)return;
+      OVR[k]=Object.assign({},OVR[k],{startWeek:startWeek});
+      applied++;
+    });
+    if(applied>0)ADJ_DIRTY=true;
+    go(current);
+    toast(applied+' semana(s) de início importada(s) como ajuste manual.'+(applied>0?' Clique em "Salvar ajustes" pra confirmar.':''));
+  }
+
   function matrixTableHTML(withSummary){
     var segs=buildSchedule();
     var totalWeeks=1; segs.forEach(function(sg){totalWeeks=Math.max(totalWeeks,sg.start+sg.dur-1);});
@@ -1691,6 +1825,11 @@
       b.addEventListener('click',function(){
         var a=b.getAttribute('data-act');
         if(a==='sair'){showLanding();return;}
+        if(a==='exp-xls'){exportExcel();return;}
+        if(a==='exp-pdf'){exportPdf();return;}
+        if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='imp-mpp'||a==='imp-img'){toast(b.getAttribute('data-label')+' — ainda não implementado nesta etapa.');return;}
         toast(b.getAttribute('data-label')+' — função do app (mockup visual)');
       });
     });
@@ -1798,7 +1937,11 @@
   document.getElementById('obraSel').addEventListener('click',function(){ renderLanding(); showLanding(); });
   document.getElementById('obraSearch').addEventListener('input',function(e){renderLanding(e.target.value);});
 
-  document.getElementById('content').addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-import]');if(t)toast('Importar Excel — função do app (mockup visual)');});
+  document.getElementById('content').addEventListener('click',function(e){
+    var t=e.target.closest&&e.target.closest('[data-import]');
+    if(!t)return;
+    pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});
+  });
 
   // Login wiring
   var af=document.getElementById('authForm'); if(af)af.addEventListener('submit',function(e){e.preventDefault();doAuth('in');});
