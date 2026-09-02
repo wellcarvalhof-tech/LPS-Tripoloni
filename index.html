@@ -691,7 +691,7 @@
     var rows=LOTS.map(function(l,li){
       var qcells=SERV.map(function(s,si){return '<td><input class="einp" data-qty-si="'+si+'" type="number" style="width:96px" value="'+(QTY[li][si]||0)+'"></td>';}).join('');
       return '<tr data-li="'+li+'"><td><div style="display:flex;align-items:center;gap:4px"><span style="width:18px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
-        '<button class="iconbtn" title="subir">↑</button><button class="iconbtn" title="descer">↓</button></div></td>'+
+        '<button class="iconbtn" data-up="'+li+'" title="subir"'+(li===0?' disabled':'')+'>↑</button><button class="iconbtn" data-down="'+li+'" title="descer"'+(li===LOTS.length-1?' disabled':'')+'>↓</button></div></td>'+
         '<td><input class="einp" data-lotenome style="width:150px" value="'+escAttr(l)+'"></td>'+qcells+'<td><button class="iconbtn" data-dellote>✕</button></td></tr>';
     }).join('');
     return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.',impBtn()+'<button class="btn primary" id="addLote">+ Adicionar</button>')+
@@ -877,6 +877,21 @@
       go('cad-lotes'); toast('Lote adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
+  async function moveLote(li,dir){
+    var target=li+dir;
+    if(target<0||target>=LOTS.length)return;
+    var lotIds=window._LOTIDS||[];
+    var idA=lotIds[li], idB=lotIds[target];
+    if(!idA||!idB)return;
+    try{
+      await sbUpdateLote(idA,{ordem:target+1});
+      await sbUpdateLote(idB,{ordem:li+1});
+      var tmpName=LOTS[li]; LOTS[li]=LOTS[target]; LOTS[target]=tmpName;
+      var tmpId=lotIds[li]; lotIds[li]=lotIds[target]; lotIds[target]=tmpId;
+      var tmpQty=QTY[li]; QTY[li]=QTY[target]; QTY[target]=tmpQty;
+      go('cad-lotes'); toast('Lote reordenado.');
+    }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
+  }
   async function saveObraSimpleField(field,val){
     if(!selectedObra)return;
     var patch={}; patch[field]=val;
@@ -938,6 +953,15 @@
       return '<span class="predchip'+(on?' on':'')+'" data-predsi="'+si+'" data-predid="'+p.id+'" title="Clique para marcar/desmarcar como predecessor" style="cursor:pointer">'+p.n.split(' — ')[0]+'</span>';
     }).join('')+'</div>';
   }
+  async function saveTeamProd(si,team,val){
+    var s=SERV[si]; if(!s)return;
+    var arr=((s.cfg&&s.cfg.teamProductivities)||[]).slice();
+    while(arr.length<s.eq)arr.push(0);
+    arr[team-1]=Math.max(0,pnum(val));
+    var cfg=Object.assign({},s.cfg,{teamProductivities:arr});
+    try{ await sbUpdateServico(s.id,{config:cfg}); s.cfg=cfg; go('cad-serv'); toast('Salvo.'); }
+    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  }
   async function togglePredecessor(si,predId){
     var s=SERV[si]; if(!s)return;
     s.cfg=s.cfg||{}; var preds=(s.cfg.predecessors||[]).slice();
@@ -951,7 +975,8 @@
     var teams=[];for(var i=1;i<=s.eq;i++)teams.push(i);
     var lotOpts='<option>Auto</option>'+LOTS.map(function(l){return '<option>'+l+'</option>';}).join('');
     var startLots=teams.map(function(t){return '<span class="ed-team"><em>Equipe '+t+':</em><select class="esel">'+lotOpts+'</select></span>';}).join('');
-    var prods=teams.map(function(t){return '<span class="ed-team"><em>Equipe '+t+':</em>'+tinp(pnum(s.p),'82px','number')+'</span>';}).join('');
+    var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
+    var prods=teams.map(function(t){var v=teamProds[t-1]>0?teamProds[t-1]:pnum(s.p);return '<span class="ed-team"><em>Equipe '+t+':</em><input class="einp" type="number" data-teamprod="'+t+'" value="'+v+'" style="width:82px"></span>';}).join('');
     var teamSel='<select class="esel">'+teams.map(function(t){return '<option>Equipe '+t+'</option>';}).join('')+'</select>';
     var lotSel='<select class="esel">'+LOTS.map(function(l){return '<option>'+l+'</option>';}).join('')+'</select>';
     var boost='<span class="ed-team"><em>Equipe:</em>'+teamSel+'<em>A partir do lote:</em>'+lotSel+'<em>Nova prod.:</em>'+tinp(pnum(s.p),'82px','number')+'<em>'+s.u+'/sem</em><button class="iconbtn">✕</button></span>';
@@ -1324,6 +1349,12 @@
       document.querySelectorAll('[data-predid]').forEach(function(chip){
         chip.addEventListener('click',function(){togglePredecessor(+chip.getAttribute('data-predsi'),chip.getAttribute('data-predid'));});
       });
+      document.querySelectorAll('[data-teamprod]').forEach(function(inp){
+        var tr=inp.closest('tr.ed-detail');
+        var si=tr?+tr.id.replace('det',''):null;
+        if(si==null||isNaN(si))return;
+        inp.addEventListener('change',function(){saveTeamProd(si,+inp.getAttribute('data-teamprod'),inp.value);});
+      });
       var addB=document.getElementById('addServico');
       if(addB)addB.addEventListener('click',addServicoRow);
     }
@@ -1337,6 +1368,10 @@
         });
         var del=tr.querySelector('[data-dellote]');
         if(del)del.addEventListener('click',function(){deleteLoteRow(li);});
+        var up=tr.querySelector('[data-up]');
+        if(up)up.addEventListener('click',function(){moveLote(li,-1);});
+        var down=tr.querySelector('[data-down]');
+        if(down)down.addEventListener('click',function(){moveLote(li,1);});
       });
       var addL=document.getElementById('addLote');
       if(addL)addL.addEventListener('click',addLoteRow);
@@ -1613,9 +1648,11 @@
       });
       teamLots.forEach(function(lotIdxs,tIdx){
         var team=tIdx+1, teamPos=0;
+        var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
+        var teamProd=teamProds[tIdx]>0?teamProds[tIdx]:prod;
         lotIdxs.forEach(function(li){
           var qty=QTY[li][si], o=ovrGet(li,si);
-          var effProd=(o&&o.productivity>0)?o.productivity:prod;
+          var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
           var earliestPos=predReadyWeek(s,li)-1;
           var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
           var startPos=Math.max(earliestPos,teamPos,pinPos);
