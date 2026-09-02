@@ -295,12 +295,21 @@
 
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
+  .print-only{display:none}
   @media print{
-    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast{display:none!important}
+    @page{size:landscape;margin:10mm}
+    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign{display:none!important}
     .app{display:block}
     .content{max-width:none!important;padding:0!important}
     .card{box-shadow:none;border:1px solid #ccc}
     .tc-wrap{max-height:none!important;overflow:visible!important;zoom:1!important}
+    .print-only{display:block}
+    .print-head{margin-bottom:8px}
+    .print-head h2{font-family:"Archivo",sans-serif;font-size:16px;margin:0}
+    #printFoot table{border-collapse:collapse;font-size:10.5px;margin-top:6px}
+    #printFoot td{padding:3px 8px;border:1px solid #ccc}
+    #printFoot .swatch{width:11px;height:11px;border-radius:3px;display:inline-block}
+    #printFoot ul{margin:8px 0 0;padding-left:16px;font-size:10px;color:#444}
   }
 </style>
 
@@ -631,7 +640,9 @@
       '<div class="banner" style="margin-bottom:14px">Rascunho — você ainda está montando o cronograma. Quando estiver pronto, congele como <b>Rev00</b> para criar a baseline e o cronograma dinâmico de acompanhamento.</div>'+
       '<div class="subtabs" id="cronoTabs">'+tabs+'</div>'+
       '<div class="legend" id="matLeg" style="margin:12px 0"></div>'+
+      '<div class="print-only print-head"><h2 id="printTitle"></h2><div class="note" id="printSub"></div></div>'+
       '<div id="cronoContent"></div>'+
+      '<div class="print-only" id="printFoot" style="margin-top:12px"></div>'+
       '<div style="margin-top:10px">'+wip()+'</div>'+
     '</div>';
   };
@@ -1402,8 +1413,18 @@
   function fmtBR(n){return Math.round(n).toLocaleString('pt-BR');}
 
   /* ---- Datas / semana ISO ---- */
-  var TC_START='2026-05-04'; // segunda-feira de início do projeto (exemplo)
-  function mondayOf(w){var d=new Date(TC_START+'T00:00:00');d.setDate(d.getDate()+(w-1)*7);return d;}
+  function TC_START(){ return (window._OBRA&&window._OBRA.data_inicio)||'2026-05-04'; }
+  function mondayOf(w){
+    var d=new Date(TC_START()+'T00:00:00');
+    var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff); // ajusta pra segunda-feira
+    var feriados={}; ((window._OBRA&&window._OBRA.feriados)||[]).forEach(function(f){feriados[f]=true;});
+    var count=0, guard=0;
+    while(guard++<2000){
+      if(!feriados[d.toISOString().slice(0,10)]){ count++; if(count===w)return d; }
+      d=new Date(d); d.setDate(d.getDate()+7);
+    }
+    return d;
+  }
   function fmtDate(d){var p=function(n){return (n<10?'0':'')+n;};return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear();}
   function isoWeek(d){var t=new Date(d.getTime());t.setHours(0,0,0,0);t.setDate(t.getDate()+3-((t.getDay()+6)%7));var w1=new Date(t.getFullYear(),0,4);return 1+Math.round(((t-w1)/864e5-3+((w1.getDay()+6)%7))/7);}
 
@@ -1491,46 +1512,90 @@
   }
   function sheetRows(ws){ return ws?XLSX.utils.sheet_to_json(ws,{header:1,blankrows:false}):[]; }
 
+  function excelDateToIso(v){
+    if(v==null||v==='')return '';
+    if(v instanceof Date)return v.toISOString().slice(0,10);
+    if(typeof v==='number'){
+      var epoch=new Date(Date.UTC(1899,11,30)); epoch.setUTCDate(epoch.getUTCDate()+Math.round(v));
+      return epoch.toISOString().slice(0,10);
+    }
+    var s=String(v).trim();
+    var m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m)return m[0];
+    var m2=s.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if(m2)return m2[3]+'-'+m2[2]+'-'+m2[1];
+    return s;
+  }
+  function expandRangeToMondays(startIso,endIso){
+    var out=[], d=new Date(startIso+'T00:00:00');
+    var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff);
+    var end=new Date(endIso+'T00:00:00');
+    var guard=0;
+    while(d<=end&&guard++<520){ out.push(d.toISOString().slice(0,10)); d=new Date(d); d.setDate(d.getDate()+7); }
+    return out;
+  }
+
   function exportExcel(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
     var wb=XLSX.utils.book_new();
-    var servRows=[['Nome','Unidade','Cor','Equipes','Produtividade','Lag (semanas)','Predecessores']];
+
+    var servRows=[['Nome','Unidade','Cor','Equipes','Produtividade','Lag','Predecessores']];
     SERV.forEach(function(s){
       var preds=((s.cfg&&s.cfg.predecessors)||[]).map(function(pid){var p=SERV.filter(function(x){return x.id===pid;})[0];return p?p.n:null;}).filter(Boolean).join('; ');
       servRows.push([s.n,s.u,s.hex||'',s.eq,pnum(s.p),s.lag||0,preds]);
     });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(servRows),'Servicos');
 
-    var lotRows=[['#','Nome']];
-    LOTS.forEach(function(l,i){lotRows.push([i+1,l]);});
+    var lotHeader=['Lote','Ordem'].concat(SERV.map(function(s){return s.n;}));
+    var lotRows=[lotHeader];
+    LOTS.forEach(function(l,li){ lotRows.push([l,li+1].concat(SERV.map(function(s,si){return QTY[li][si]||0;}))); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(lotRows),'Lotes');
 
-    var qtyRows=[['Lote'].concat(SERV.map(function(s){return s.n;}))];
-    LOTS.forEach(function(l,li){ qtyRows.push([l].concat(SERV.map(function(s,si){return QTY[li][si]||0;}))); });
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(qtyRows),'Quantidades');
+    var calRows=[['Início',(window._OBRA&&window._OBRA.data_inicio)||'']];
+    ((window._OBRA&&window._OBRA.feriados)||[]).forEach(function(f){ calRows.push(['Paralisação',f,f]); });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(calRows),'Calendario');
 
     var segs=buildSchedule().slice().sort(function(a,b){return a.start-b.start||a.si-b.si||a.li-b.li;});
-    var cronRows=[['Serviço','Lote','Equipe','Semana início','Semana fim','Quantidade']];
-    segs.forEach(function(sg){ cronRows.push([SERV[sg.si]?SERV[sg.si].n:'',LOTS[sg.li]||'',sg.team,sg.start,sg.start+sg.dur-1,sg.qty]); });
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(cronRows),'Cronograma');
+    var tcRows=[['Servico','Equipe','Lote','SemanaInicio','SemanaFim','Duracao','Quantidade']];
+    segs.forEach(function(sg){ tcRows.push([SERV[sg.si]?SERV[sg.si].n:'',sg.team,LOTS[sg.li]||'',sg.start,sg.start+sg.dur-1,sg.dur,sg.qty]); });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(tcRows),'TempoCaminho');
 
     var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
     XLSX.writeFile(wb,nome+'_tempo_caminho.xlsx');
     toast('Excel exportado.');
   }
-  function exportPdf(){ window.print(); }
+  function exportPdf(){
+    window._cronoTab='tc'; // relatório sempre a partir da visão limpa (com totais por lote)
+    renderCrono();
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    var d=new Date(), p2=function(n){return (n<10?'0':'')+n;};
+    var gerado=p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear()+' '+p2(d.getHours())+':'+p2(d.getMinutes());
+    var t=document.getElementById('printTitle'); if(t)t.textContent=nome+' — Rascunho';
+    var s=document.getElementById('printSub'); if(s)s.textContent='Gerado em '+gerado+' — '+tw+' semana'+(tw===1?'':'s');
+    var foot=document.getElementById('printFoot');
+    if(foot){
+      var legRows=SERV.map(function(sv){
+        return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span></td><td>'+sv.n+'</td><td>'+sv.u+'</td><td class="r">'+fmtBR(pnum(sv.p))+'</td><td class="r">'+sv.eq+'</td></tr>';
+      }).join('');
+      foot.innerHTML='<table><thead><tr><th></th><th>Serviço</th><th>Unidade</th><th class="r">Prod. (un/equipe/sem.)</th><th class="r">Equipes</th></tr></thead><tbody>'+legRows+'</tbody></table>'+
+        '<ul><li>Tons mais escuros lado a lado no mesmo serviço identificam diferentes equipes.</li>'+
+        '<li>Sub-células lado a lado numa mesma semana = atividades em paralelo no mesmo lote.</li>'+
+        '<li>A última semana de uma atividade mostra o saldo (qtd. &lt; produção semanal cheia).</li></ul>';
+    }
+    window.print();
+  }
 
   async function applyImportWorkbook(wb){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
     var wsServ=wb.Sheets['Servicos']||wb.Sheets['Serviços'];
     var wsLot=wb.Sheets['Lotes'];
-    var wsQty=wb.Sheets['Quantidades'];
-    if(!wsServ&&!wsLot&&!wsQty){
-      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Quantidades") — gere um modelo com "Exportar Excel".');
+    var wsCal=wb.Sheets['Calendario']||wb.Sheets['Calendário'];
+    if(!wsServ&&!wsLot&&!wsCal){
+      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar Excel".');
       return;
     }
-    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe.'))return;
+    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. O cronograma é recalculado pelo app a partir desses dados (use "Importar Tempo-Caminho" se quiser reproduzir exatamente as semanas de uma aba TempoCaminho).'))return;
 
+    // 1) Serviços (nome/unidade/cor/equipes/produtividade/lag)
     var byName={}; SERV.forEach(function(s){byName[s.n.trim().toLowerCase()]=s;});
     var createdServ=0, updatedServ=0;
     var servRows=sheetRows(wsServ).slice(1);
@@ -1543,63 +1608,112 @@
       if(existing){ await sbUpdateServico(existing.id,patch); updatedServ++; }
       else { await sbCreateServico(selectedObra.id,Object.assign({ordem:SERV.length+createdServ},patch)); createdServ++; }
     }
+    await sbLoadCadastro(selectedObra.id); // recarrega com ids reais antes de gravar predecessores
 
-    var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
-    var createdLot=0;
-    var lotRows=sheetRows(wsLot).slice(1);
-    for(var j=0;j<lotRows.length;j++){
-      var lr=lotRows[j]; if(!lr)continue;
-      var lname=String((lr[1]!=null?lr[1]:lr[0])||'').trim(); if(!lname)continue;
-      if(!lotByName.hasOwnProperty(lname.toLowerCase())){
-        await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot});
-        createdLot++;
+    // 1b) Predecessores (precisa dos ids reais do banco, por isso roda depois do reload)
+    if(wsServ){
+      var byNameNow={}; SERV.forEach(function(s){byNameNow[s.n.trim().toLowerCase()]=s;});
+      for(var pi=0;pi<servRows.length;pi++){
+        var pr=servRows[pi]; if(!pr||!pr[0]||!pr[6])continue;
+        var self=byNameNow[String(pr[0]).trim().toLowerCase()]; if(!self)continue;
+        var predIds=String(pr[6]).split(';').map(function(n){return n.trim();}).filter(Boolean)
+          .map(function(n){var p=byNameNow[n.toLowerCase()];return p?p.id:null;}).filter(Boolean);
+        if(predIds.length){
+          var cfg=Object.assign({},self.cfg,{predecessors:predIds});
+          await sbUpdateServico(self.id,{config:cfg});
+          self.cfg=cfg;
+        }
       }
     }
 
-    await sbLoadCadastro(selectedObra.id);
-
-    var qtyCount=0;
-    var qtyAoa=sheetRows(wsQty);
-    if(qtyAoa.length>1){
-      var header=qtyAoa[0], svcCols=header.slice(1).map(function(n){return String(n||'').trim();});
-      var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
-      var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
-      for(var r2=1;r2<qtyAoa.length;r2++){
-        var row=qtyAoa[r2]; if(!row||!row[0])continue;
-        var li2=lotIdxByName[String(row[0]).trim().toLowerCase()]; if(li2==null)continue;
-        for(var c2=0;c2<svcCols.length;c2++){
-          var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
-          var val=Number(row[c2+1]); if(!isFinite(val))continue;
-          await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
-          qtyCount++;
+    // 2) Lotes + quantidades — uma sheet só: Lote, Ordem, <serviço1>, <serviço2>...
+    var createdLot=0, qtyCount=0;
+    if(wsLot){
+      var lotAoa=sheetRows(wsLot);
+      if(lotAoa.length>1){
+        var header=lotAoa[0], svcCols=header.slice(2).map(function(n){return String(n||'').trim();});
+        var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
+        var rows=[];
+        for(var j=1;j<lotAoa.length;j++){
+          var row=lotAoa[j]; if(!row||row[0]==null||row[0]==='')continue;
+          var lname=String(row[0]).trim(); if(!lname)continue;
+          if(!lotByName.hasOwnProperty(lname.toLowerCase())){
+            await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1});
+            createdLot++;
+          }
+          rows.push(row);
         }
+        if(createdLot>0)await sbLoadCadastro(selectedObra.id);
+        var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
+        var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+        for(var k=0;k<rows.length;k++){
+          var qrow=rows[k];
+          var li2=lotIdxByName[String(qrow[0]).trim().toLowerCase()]; if(li2==null)continue;
+          for(var c2=0;c2<svcCols.length;c2++){
+            var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
+            var val=Number(qrow[c2+2]); if(!isFinite(val))continue;
+            await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
+            qtyCount++;
+          }
+        }
+        await sbLoadCadastro(selectedObra.id);
       }
-      await sbLoadCadastro(selectedObra.id);
+    }
+
+    // 3) Calendário — linha "Início" (data) + linha(s) "Paralisação"/"Paralisações" (início,fim)
+    var calChanged=false;
+    if(wsCal){
+      var calPatch={};
+      var feriadosSet={}; (window._OBRA.feriados||[]).forEach(function(f){feriadosSet[f]=true;});
+      sheetRows(wsCal).forEach(function(row){
+        if(!row||!row[0])return;
+        var label=String(row[0]).trim().toLowerCase();
+        if(label.indexOf('inicio')===0||label.indexOf('início')===0){
+          if(row[1])calPatch.data_inicio=excelDateToIso(row[1]);
+        } else if(label.indexOf('paralisa')===0){
+          if(row[1]){
+            var s0=excelDateToIso(row[1]), s1=row[2]?excelDateToIso(row[2]):s0;
+            expandRangeToMondays(s0,s1).forEach(function(iso){feriadosSet[iso]=true;});
+          }
+        }
+      });
+      var feriadosArr=Object.keys(feriadosSet).sort();
+      if(calPatch.data_inicio||feriadosArr.length){
+        calPatch.feriados=feriadosArr;
+        await sbUpdateObra(selectedObra.id,calPatch);
+        window._OBRA=Object.assign({},window._OBRA,calPatch);
+        calChanged=true;
+      }
     }
 
     go(current);
-    toast('Importado: '+createdServ+' serviço(s) novo(s), '+updatedServ+' atualizado(s), '+createdLot+' lote(s) novo(s), '+qtyCount+' quantidade(s).');
+    toast('Importado: '+createdServ+' serviço(s) novo(s), '+updatedServ+' atualizado(s), '+createdLot+' lote(s) novo(s), '+qtyCount+' quantidade(s)'+(calChanged?', calendário atualizado':'')+'.');
   }
 
   async function importTempoCaminhoWorkbook(wb){
-    var ws=wb.Sheets['Cronograma'];
-    if(!ws){alert('Essa planilha não tem uma aba "Cronograma" (gerada pelo "Exportar Excel" deste app).');return;}
-    if(!confirm('Importar esse cronograma como ajustes manuais (semana de início) sobre o cálculo atual? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
+    var ws=wb.Sheets['TempoCaminho']||wb.Sheets['Cronograma'];
+    if(!ws){alert('Essa planilha não tem uma aba "TempoCaminho" (ou "Cronograma") com o cronograma calculado.');return;}
+    if(!confirm('Importar esse cronograma como ajustes manuais (semana de início, equipe e duração) sobre o cálculo atual? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
     var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
     var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
     var applied=0;
     sheetRows(ws).slice(1).forEach(function(r){
-      if(!r||!r[0]||!r[1])return;
-      var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[1]).trim().toLowerCase()];
+      if(!r||r[0]==null||r[2]==null)return;
+      var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[2]).trim().toLowerCase()];
       if(si==null||li==null)return;
-      var startWeek=parseInt(r[3],10); if(!(startWeek>0))return;
+      var team=parseInt(r[1],10), startWeek=parseInt(r[3],10), duracao=parseInt(r[5],10);
       var k=ovrKey(li,si); if(!k)return;
-      OVR[k]=Object.assign({},OVR[k],{startWeek:startWeek});
+      var patch={};
+      if(startWeek>0)patch.startWeek=startWeek;
+      if(team>0)patch.team=team;
+      if(duracao>0)patch.duration=duracao;
+      if(Object.keys(patch).length===0)return;
+      OVR[k]=Object.assign({},OVR[k],patch);
       applied++;
     });
     if(applied>0)ADJ_DIRTY=true;
     go(current);
-    toast(applied+' semana(s) de início importada(s) como ajuste manual.'+(applied>0?' Clique em "Salvar ajustes" pra confirmar.':''));
+    toast(applied+' atividade(s) importada(s) como ajuste manual.'+(applied>0?' Clique em "Salvar ajustes" pra confirmar.':''));
   }
 
   function matrixTableHTML(withSummary){
