@@ -521,18 +521,19 @@
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
-      ['cad-obra','Obra'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
-      ['cad-equipes','Equipes'],['cad-cal','Calendário']]},
-    {id:'crono', label:'Cronograma', icon:'chart', items:[
-      ['cr-matriz','Matriz Tempo-Caminho'],['cr-cenarios','Cenários'],['cr-lb','Linha de Balanço']]},
+      ['cad-obra','Obra']]},
+    {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
+      ['cr-matriz','Matriz Tempo-Caminho'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
+      ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-cenarios','Cenários'],['cr-lb','Linha de Balanço']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
       ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]}
   ];
   var CRUMB={torre:['Torre de Controle'],
-    'cad-obra':['Cadastro','Obra'],'cad-serv':['Cadastro','Serviços'],'cad-lotes':['Cadastro','Lotes & Quantidades'],'cad-equipes':['Cadastro','Equipes'],'cad-cal':['Cadastro','Calendário'],
-    'cr-matriz':['Cronograma','Matriz Tempo-Caminho'],'cr-cenarios':['Cronograma','Cenários'],'cr-lb':['Cronograma','Linha de Balanço'],
+    'cad-obra':['Cadastro','Obra'],
+    'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-cenarios':['Tempo Caminho','Cenários'],'cr-lb':['Tempo Caminho','Linha de Balanço'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
     'lp-medio':['Last Planner','Médio Prazo'],'lp-semana':['Last Planner','Programação Semanal'],'lp-ppc':['Last Planner','PPC & Causas']};
 
