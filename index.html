@@ -216,6 +216,10 @@
   td.tcm-dropcol{outline:2px dashed var(--accent);outline-offset:-2px}
   .tcm-grip{position:absolute;left:2px;opacity:.4;font-weight:400}
   .tcm-badge{position:absolute;top:0;right:0;display:flex;align-items:center;gap:2px;padding:0 3px;font-size:9px;font-weight:700;color:#fff;border-bottom-left-radius:4px}
+  .tcm-team{position:absolute;bottom:0;left:2px;font-size:8px;font-weight:700;line-height:1;opacity:.75}
+  .tcm-rain{font-size:9px;font-weight:600;color:var(--info);white-space:nowrap}
+  tr.tcm-holrow td{background:var(--elev);color:var(--muted)}
+  td.tcm-holcell{text-align:center;font-size:11px;font-weight:600;letter-spacing:.03em}
   table.tcm tr.sumrow td{padding:6px 8px;font-weight:600;border-color:var(--line)}
   table.tcm td.sumname{text-align:center;font-weight:700;font-size:11.5px}
   table.tcm td.sumq{text-align:center;font-family:"IBM Plex Mono",monospace;color:var(--ink)}
@@ -701,18 +705,36 @@
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipe</th><th class="r">Produtividade</th><th class="r">Lotes atribuídos</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div></div>';
   };
 
+  function rainRowHTML(r,idx){
+    var cap=Math.round((1-(Math.min(100,Math.max(0,+r.producao||0))/100))*(1-(Math.min(100,Math.max(0,+r.dias||0))/100))*100);
+    return '<div class="assign" style="margin-bottom:10px" data-rain="'+idx+'">'+
+      '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr .8fr 1fr auto;gap:10px;align-items:end">'+
+        '<div class="field" style="margin:0"><label>Descrição</label><input class="inp" data-rf="desc" value="'+escAttr(r.desc||'')+'"></div>'+
+        '<div class="field" style="margin:0"><label>Início</label><input class="inp" type="date" data-rf="start" value="'+escAttr(r.start||'')+'"></div>'+
+        '<div class="field" style="margin:0"><label>Fim</label><input class="inp" type="date" data-rf="end" value="'+escAttr(r.end||'')+'"></div>'+
+        '<div class="field" style="margin:0"><label>-% produção</label><input class="inp" type="number" data-rf="producao" value="'+(r.producao||0)+'"></div>'+
+        '<div class="field" style="margin:0"><label>-% dias trabalhados</label><input class="inp" type="number" data-rf="dias" value="'+(r.dias||0)+'"></div>'+
+        '<button class="iconbtn" data-delrain="'+idx+'" style="margin-bottom:2px">✕</button>'+
+      '</div>'+
+      '<div class="note" style="margin-top:6px">Capacidade efetiva nas semanas do período: <b>'+cap+'%</b> da produtividade cadastrada.</div>'+
+    '</div>';
+  }
   VIEWS['cad-cal']=function(){
     var o=window._OBRA||{};
-    var holidays=Array.isArray(o.feriados)?o.feriados:[];
+    var holidays=calHolidays(), rains=calRainPeriods();
     var hrows=holidays.map(function(h,hi){return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input class="einp" data-holi="'+hi+'" type="date" value="'+escAttr(h)+'" style="width:170px"><button class="iconbtn" data-delholi="'+hi+'">✕</button></div>';}).join('');
-    return head('Calendário','Nome e início do projeto, e as semanas de paralisação puladas no cronograma.',impBtn())+
+    var rrows=rains.map(rainRowHTML).join('');
+    return head('Calendário','Nome e início do projeto, semanas de paralisação total e períodos de baixa praticabilidade (clima).',impBtn())+
     '<div class="grid g2">'+
       '<div class="card"><div class="eyebrow">Início do projeto</div>'+
         '<div class="field"><label>Nome do projeto</label><input class="inp" id="calNome" value="'+escAttr(o.nome)+'"></div>'+
-        '<div class="field"><label>Data de início</label><input class="inp" id="calInicio" type="date" value="'+escAttr(o.data_inicio)+'"></div></div>'+
+        '<div class="field"><label>Data de início (ajustada para segunda-feira)</label><input class="inp" id="calInicio" type="date" value="'+escAttr(o.data_inicio)+'"></div></div>'+
       '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="eyebrow" style="margin:0">Semanas de paralisação</div><button class="btn" id="addHoliday" style="padding:5px 10px">+ Adicionar</button></div>'+
-        hrows+(holidays.length?'':'<div class="note">Nenhuma data cadastrada.</div>')+'<div class="note">Cada data marcada é pulada na geração do cronograma (feriado, chuva, recesso).</div></div>'+
-    '</div>';
+        hrows+(holidays.length?'':'<div class="note">Nenhuma data cadastrada.</div>')+'<div class="note">Semana inteira sem produção (feriado, recesso) — some da contagem de semanas.</div></div>'+
+    '</div>'+
+    '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="eyebrow" style="margin:0">☔ Períodos de baixa praticabilidade (clima)</div><button class="btn" id="addRain" style="padding:5px 10px">+ Adicionar período</button></div>'+
+      '<div id="rainList">'+rrows+'</div>'+(rains.length?'':'<div class="note">Nenhum período cadastrado.</div>')+
+      '<div class="note" style="margin-top:6px">Reduz a capacidade de produção nas semanas do período, sem tirá-las da contagem — aparece como aviso na Matriz Tempo-Caminho.</div></div>';
   };
 
   VIEWS['cr-cenarios']=function(){
@@ -864,22 +886,47 @@
       toast('Salvo.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-cal'); }
   }
+  async function saveCalendarObj(holidays,rains){
+    var obj={holidayWeeks:holidays,rainPeriods:rains};
+    await sbUpdateObra(selectedObra.id,{feriados:obj});
+    window._OBRA=Object.assign({},window._OBRA,{feriados:obj});
+  }
   async function saveHoliday(hi,val){
     if(!selectedObra||!window._OBRA)return;
-    var arr=(window._OBRA.feriados||[]).slice(); arr[hi]=val;
-    try{ await sbUpdateObra(selectedObra.id,{feriados:arr}); window._OBRA.feriados=arr; toast('Salvo.'); }
+    var arr=calHolidays().slice(); arr[hi]=val;
+    try{ await saveCalendarObj(arr,calRainPeriods()); toast('Salvo.'); }
     catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-cal'); }
   }
   async function deleteHoliday(hi){
     if(!selectedObra||!window._OBRA)return;
-    var arr=(window._OBRA.feriados||[]).slice(); arr.splice(hi,1);
-    try{ await sbUpdateObra(selectedObra.id,{feriados:arr}); window._OBRA.feriados=arr; go('cad-cal'); toast('Removido.'); }
+    var arr=calHolidays().slice(); arr.splice(hi,1);
+    try{ await saveCalendarObj(arr,calRainPeriods()); go('cad-cal'); toast('Removido.'); }
     catch(e){ alert('Falha ao remover: '+((e&&e.message)||e)); }
   }
   async function addHoliday(){
     if(!selectedObra||!window._OBRA)return;
-    var arr=(window._OBRA.feriados||[]).slice(); arr.push(todayISO());
-    try{ await sbUpdateObra(selectedObra.id,{feriados:arr}); window._OBRA.feriados=arr; go('cad-cal'); toast('Adicionado.'); }
+    var arr=calHolidays().slice(); arr.push(todayISO());
+    try{ await saveCalendarObj(arr,calRainPeriods()); go('cad-cal'); toast('Adicionado.'); }
+    catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
+  }
+  async function saveRainField(idx,field,val){
+    if(!selectedObra||!window._OBRA)return;
+    var arr=calRainPeriods().map(function(r){return Object.assign({},r);});
+    if(!arr[idx])return;
+    arr[idx][field]=val;
+    try{ await saveCalendarObj(calHolidays(),arr); go('cad-cal'); }
+    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-cal'); }
+  }
+  async function deleteRain(idx){
+    if(!selectedObra||!window._OBRA)return;
+    var arr=calRainPeriods().slice(); arr.splice(idx,1);
+    try{ await saveCalendarObj(calHolidays(),arr); go('cad-cal'); toast('Removido.'); }
+    catch(e){ alert('Falha ao remover: '+((e&&e.message)||e)); }
+  }
+  async function addRain(){
+    if(!selectedObra||!window._OBRA)return;
+    var arr=calRainPeriods().slice(); arr.push({desc:'Período chuvoso',start:'',end:'',producao:20,dias:20});
+    try{ await saveCalendarObj(calHolidays(),arr); go('cad-cal'); toast('Adicionado.'); }
     catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
   function predChips(si){
@@ -1306,6 +1353,17 @@
       });
       var addH=document.getElementById('addHoliday');
       if(addH)addH.addEventListener('click',addHoliday);
+      document.querySelectorAll('[data-rain]').forEach(function(box){
+        var idx=+box.getAttribute('data-rain');
+        box.querySelectorAll('[data-rf]').forEach(function(inp){
+          inp.addEventListener('change',function(){saveRainField(idx,inp.getAttribute('data-rf'),inp.value);});
+        });
+      });
+      document.querySelectorAll('[data-delrain]').forEach(function(b){
+        b.addEventListener('click',function(){deleteRain(+b.getAttribute('data-delrain'));});
+      });
+      var addR=document.getElementById('addRain');
+      if(addR)addR.addEventListener('click',addRain);
     }
     if(view==='cad-equipes'){var g=document.getElementById('gotoServ');if(g)g.addEventListener('click',function(){go('cad-serv');});}
     if(view==='cad-obra'){
@@ -1406,6 +1464,11 @@
   function rgb2hsl(r,g,b){r/=255;g/=255;b/=255;var mx=Math.max(r,g,b),mn=Math.min(r,g,b),h=0,s=0,l=(mx+mn)/2;if(mx!==mn){var d=mx-mn;s=l>0.5?d/(2-mx-mn):d/(mx+mn);if(mx===r)h=(g-b)/d+(g<b?6:0);else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h/=6;}return [h,s,l];}
   function hsl2rgb(h,s,l){var r,g,b;if(s===0){r=g=b=l;}else{var q=l<0.5?l*(1+s):l+s-l*s,p=2*l-q,f=function(p,q,t){if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p;};r=f(p,q,h+1/3);g=f(p,q,h);b=f(p,q,h-1/3);}return [r*255,g*255,b*255];}
   function teamColor(base,team,total){if(total<=1)return base;var rgb=hx2rgb(base),hsl=rgb2hsl(rgb[0],rgb[1],rgb[2]);var range=0.36,t=(team-1)/(total-1),off=t*range-range/2;var nl=Math.max(0.12,Math.min(0.88,hsl[2]+off));var o=hsl2rgb(hsl[0],hsl[1],nl);return rgb2hx(o[0],o[1],o[2]);}
+  function teamLabel(serviceName,team){
+    var words=String(serviceName||'').replace(/\(.*?\)/g,' ').split(/[\s\-\/]+/).filter(Boolean).slice(0,2);
+    var initials=words.map(function(w){return w.charAt(0).toUpperCase();}).join('');
+    return (initials||'S')+team;
+  }
   function pickFont(hex){var h=hex.replace('#','');var r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return (0.299*r+0.587*g+0.114*b)/255>0.6?'#0a0a0a':'#ffffff';}
   function cssHex(v){var c=getComputedStyle(root).getPropertyValue(v).trim();if(c.charAt(0)==='#'){if(c.length===4)return '#'+c[1]+c[1]+c[2]+c[2]+c[3]+c[3];return c;}var m=c.match(/\d+/g);return m?rgb2hx(+m[0],+m[1],+m[2]):'#888888';}
   function svcColor(s){return (s&&s.hex)||cssHex(s&&s.c);}
@@ -1417,7 +1480,7 @@
   function mondayOf(w){
     var d=new Date(TC_START()+'T00:00:00');
     var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff); // ajusta pra segunda-feira
-    var feriados={}; ((window._OBRA&&window._OBRA.feriados)||[]).forEach(function(f){feriados[f]=true;});
+    var feriados={}; calHolidays().forEach(function(f){feriados[f]=true;});
     var count=0, guard=0;
     while(guard++<2000){
       if(!feriados[d.toISOString().slice(0,10)]){ count++; if(count===w)return d; }
@@ -1454,9 +1517,75 @@
     SERV.forEach(function(s,si){visit(si);});
     return order;
   }
+  /* ---- Calendário: feriados (paralisação total) + períodos de chuva (capacidade parcial) ---- */
+  function calData(){
+    var f=(window._OBRA&&window._OBRA.feriados)||[];
+    if(Array.isArray(f))return {holidayWeeks:f,rainPeriods:[]};
+    return {holidayWeeks:Array.isArray(f.holidayWeeks)?f.holidayWeeks:[],rainPeriods:Array.isArray(f.rainPeriods)?f.rainPeriods:[]};
+  }
+  function calHolidays(){ return calData().holidayWeeks; }
+  function calRainPeriods(){ return calData().rainPeriods; }
+  function climateFactorForDate(iso,periods){
+    if(!periods||!periods.length)return 1;
+    var factor=1;
+    periods.forEach(function(rp){
+      if(!rp.start||!rp.end)return;
+      if(iso>=rp.start&&iso<=rp.end){
+        var prod=Math.min(100,Math.max(0,+rp.producao||0));
+        var dias=Math.min(100,Math.max(0,+rp.dias||0));
+        factor*=(1-prod/100)*(1-dias/100);
+      }
+    });
+    return Math.max(0,factor);
+  }
+  function weekFactor(w,periods,cache){
+    if(!periods||!periods.length)return 1;
+    if(cache&&cache[w]!=null)return cache[w];
+    var monday=mondayOf(w), sum=0;
+    for(var day=0;day<7;day++){
+      var dt=new Date(monday); dt.setDate(dt.getDate()+day);
+      sum+=climateFactorForDate(dt.toISOString().slice(0,10),periods);
+    }
+    var f=sum/7; if(cache)cache[w]=f; return f;
+  }
+  /** Aloca weeksNeeded semanas de capacidade a partir de startPos (posição fracionária em
+   *  semanas). Semanas de chuva rendem menos (weekFactor<1), alongando a duração real —
+   *  e se a equipe termina um lote no meio de uma semana, o próximo lote começa exatamente
+   *  dali, consumindo o resto da capacidade daquela mesma semana. */
+  function packSegment(startPos,weeksNeeded,prod,qty,periods,cache,fixedDuration){
+    if(fixedDuration>0){
+      var endPos0=startPos+fixedDuration;
+      var start0=Math.floor(startPos+1e-9)+1, end0=Math.max(start0,Math.ceil(endPos0-1e-9));
+      var weights=[];
+      for(var w0=start0;w0<=end0;w0++){
+        var a=Math.max(startPos,w0-1), b=Math.min(endPos0,w0);
+        weights.push(Math.max(0,(b-a)*weekFactor(w0,periods,cache)));
+      }
+      var sum0=weights.reduce(function(x,y){return x+y;},0);
+      var wq0=sum0>0?weights.map(function(x){return qty*x/sum0;}):weights.map(function(){return 0;});
+      return {start:start0,end:end0,duration:end0-start0+1,endPos:endPos0,wq:wq0};
+    }
+    var pos=startPos, remaining=weeksNeeded, perWeek={}, guard=0;
+    while(remaining>1e-9&&guard++<20000){
+      var wk=Math.floor(pos+1e-9)+1, avail=wk-pos, f=weekFactor(wk,periods,cache);
+      if(f<=0){ pos=wk; continue; }
+      var capacity=avail*f;
+      if(capacity>=remaining-1e-9){
+        perWeek[wk]=(perWeek[wk]||0)+remaining*prod;
+        pos+=remaining/f; remaining=0;
+      } else {
+        perWeek[wk]=(perWeek[wk]||0)+capacity*prod;
+        remaining-=capacity; pos=wk;
+      }
+    }
+    var endPos=pos, start=Math.floor(startPos+1e-9)+1, end=Math.max(start,Math.ceil(endPos-1e-9));
+    var wq=[]; for(var w=start;w<=end;w++)wq.push(perWeek[w]||0);
+    return {start:start,end:end,duration:end-start+1,endPos:endPos,wq:wq};
+  }
   function buildSchedule(){
     var segs=[], startByKey={}, endByKey={};
     var order=topoSortServices();
+    var periods=calRainPeriods(), wfCache={};
     function predReadyWeek(s,li){
       var earliest=1;
       var preds=(s.cfg&&s.cfg.predecessors)||[];
@@ -1472,23 +1601,30 @@
       return earliest;
     }
     order.forEach(function(si){
-      var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s), cur={};
+      var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s);
       if(teams<=0||prod<=0)return;
-      for(var t=1;t<=teams;t++)cur[t]=0;
+      var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
       LOTS.forEach(function(l,li){
-        var qty=QTY[li][si]; if(qty<=0)return;
+        if(QTY[li][si]<=0)return;
         var o=ovrGet(li,si);
         var team=(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1);
-        var effProd=(o&&o.productivity>0)?o.productivity:prod;
-        var dur=(o&&o.duration>0)?o.duration:Math.max(1,Math.ceil(qty/effProd));
-        var predReady=predReadyWeek(s,li);
-        var pin=(o&&o.startWeek>0)?o.startWeek:0;
-        var start=Math.max(predReady,cur[team]||0,pin);
-        cur[team]=start+dur;
-        var wq=[];for(var i=0;i<dur;i++)wq.push(i===dur-1?Math.max(1,qty-effProd*(dur-1)):effProd);
-        segs.push({li:li,si:si,team:team,teams:teams,start:start,dur:dur,qty:qty,wq:wq,
-          color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!o});
-        startByKey[li+'::'+si]=start; endByKey[li+'::'+si]=start+dur-1;
+        teamLots[team-1].push(li);
+      });
+      teamLots.forEach(function(lotIdxs,tIdx){
+        var team=tIdx+1, teamPos=0;
+        lotIdxs.forEach(function(li){
+          var qty=QTY[li][si], o=ovrGet(li,si);
+          var effProd=(o&&o.productivity>0)?o.productivity:prod;
+          var earliestPos=predReadyWeek(s,li)-1;
+          var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
+          var startPos=Math.max(earliestPos,teamPos,pinPos);
+          var fixedDur=(o&&o.duration>0)?o.duration:undefined;
+          var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
+          segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
+            color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!o});
+          startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
+          teamPos=packed.endPos;
+        });
       });
     });
     return segs;
@@ -1550,7 +1686,7 @@
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(lotRows),'Lotes');
 
     var calRows=[['Início',(window._OBRA&&window._OBRA.data_inicio)||'']];
-    ((window._OBRA&&window._OBRA.feriados)||[]).forEach(function(f){ calRows.push(['Paralisação',f,f]); });
+    calHolidays().forEach(function(f){ calRows.push(['Paralisação',f,f]); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(calRows),'Calendario');
 
     var segs=buildSchedule().slice().sort(function(a,b){return a.start-b.start||a.si-b.si||a.li-b.li;});
@@ -1664,7 +1800,7 @@
     var calChanged=false;
     if(wsCal){
       var calPatch={};
-      var feriadosSet={}; (window._OBRA.feriados||[]).forEach(function(f){feriadosSet[f]=true;});
+      var feriadosSet={}; calHolidays().forEach(function(f){feriadosSet[f]=true;});
       sheetRows(wsCal).forEach(function(row){
         if(!row||!row[0])return;
         var label=String(row[0]).trim().toLowerCase();
@@ -1679,7 +1815,7 @@
       });
       var feriadosArr=Object.keys(feriadosSet).sort();
       if(calPatch.data_inicio||feriadosArr.length){
-        calPatch.feriados=feriadosArr;
+        calPatch.feriados={holidayWeeks:feriadosArr,rainPeriods:calRainPeriods()};
         await sbUpdateObra(selectedObra.id,calPatch);
         window._OBRA=Object.assign({},window._OBRA,calPatch);
         calChanged=true;
@@ -1716,6 +1852,19 @@
     toast(applied+' atividade(s) importada(s) como ajuste manual.'+(applied>0?' Clique em "Salvar ajustes" pra confirmar.':''));
   }
 
+  function buildCalendarRows(totalWorkingWeeks){
+    var holidays={}; calHolidays().forEach(function(h){holidays[h]=true;});
+    var start=new Date(TC_START()+'T00:00:00');
+    var day=start.getDay(), diff=day===0?-6:1-day; start.setDate(start.getDate()+diff);
+    var rows=[], cur=new Date(start), working=0, guard=0;
+    while(working<totalWorkingWeeks&&guard++<3000){
+      var iso=cur.toISOString().slice(0,10), isHol=!!holidays[iso];
+      if(!isHol)working++;
+      rows.push({date:new Date(cur),working:isHol?null:working,isHoliday:isHol});
+      cur=new Date(cur); cur.setDate(cur.getDate()+7);
+    }
+    return rows;
+  }
   function matrixTableHTML(withSummary){
     var segs=buildSchedule();
     var totalWeeks=1; segs.forEach(function(sg){totalWeeks=Math.max(totalWeeks,sg.start+sg.dur-1);});
@@ -1725,9 +1874,18 @@
         (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i],isStart:i===0,isEnd:i===sg.dur-1,w:w});}
     });
     var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l){return '<th class="lot">'+l+'</th>';}).join('');
+    var periods=calRainPeriods(), wfCache2={};
+    var calRows=buildCalendarRows(totalWeeks);
     var body='';
-    for(var idx=0;idx<totalWeeks;idx++){
-      var w=totalWeeks-idx, d=mondayOf(w), tds='';
+    for(var idx=calRows.length-1;idx>=0;idx--){
+      var entry=calRows[idx], d=entry.date;
+      if(entry.isHoliday){
+        body+='<tr class="tcm-holrow"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td><td class="tcm-holcell" colspan="'+Math.max(1,LOTS.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
+        continue;
+      }
+      var w=entry.working, tds='';
+      var f=weekFactor(w,periods,wfCache2);
+      var rainBadge=f<0.999?' <span class="tcm-rain" title="Capacidade reduzida por período de baixa praticabilidade">🌧 '+Math.round(f*100)+'%</span>':'';
       for(var li=0;li<LOTS.length;li++){
         var subs=cell[w+'::'+li];
         if(!subs){tds+='<td class="cell" data-lot="'+li+'"></td>';continue;}
@@ -1735,14 +1893,15 @@
           var rk=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, r=RESTR[rk];
           var badge=r?'<span class="tcm-badge" style="background:'+r.cat+'" title="'+r.lab+'">▲'+r.n+'</span>':'';
           var grip=sc.isStart?'<span class="tcm-grip">⋮</span>':'';
+          var teamTag=sc.isStart?'<span class="tcm-team">'+teamLabel(sc.sg.name,sc.sg.team)+'</span>':'';
           var adj=sc.sg.adjusted?';outline:2px solid #fff;outline-offset:-2px':'';
           return '<div class="tcm-seg" data-li="'+sc.sg.li+'" data-si="'+sc.sg.si+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
             (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+adj+'" title="'+sc.sg.name+' — Equipe '+sc.sg.team+(sc.isEnd?' (saldo)':'')+(sc.sg.adjusted?' (ajustado)':'')+'">'+
-            grip+fmtBR(sc.qty)+badge+'</div>';
+            grip+fmtBR(sc.qty)+badge+teamTag+'</div>';
         }).join('');
         tds+='<td class="cell" data-lot="'+li+'"><div class="tcm-row">'+inner+'</div></td>';
       }
-      body+='<tr data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td>'+tds+'</tr>';
+      body+='<tr data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+rainBadge+'</td>'+tds+'</tr>';
     }
     if(withSummary){
       body+=SERV.map(function(s,si){
@@ -1933,7 +2092,12 @@
 
   function setupCrono(){
     var leg=document.getElementById('matLeg');
-    if(leg)leg.innerHTML=SERV.map(function(x){return '<span><span class="swatch" style="background:'+svcColor(x)+'"></span>'+x.n+'</span>';}).join('');
+    if(leg){
+      var legHtml=SERV.map(function(x){return '<span><span class="swatch" style="background:'+svcColor(x)+'"></span>'+x.n+'</span>';}).join('');
+      if(calRainPeriods().length)legHtml+='<span>🌧 Período chuvoso (produção reduzida)</span>';
+      if(calHolidays().length)legHtml+='<span>⏸ Semana paralisada (produção zero)</span>';
+      leg.innerHTML=legHtml;
+    }
     var tbar=document.getElementById('cronoToolbar');
     if(tbar)tbar.querySelectorAll('[data-act]').forEach(function(b){
       b.addEventListener('click',function(){
