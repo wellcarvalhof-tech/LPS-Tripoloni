@@ -81,7 +81,7 @@
   .avatar{width:34px;height:34px;border-radius:99px;background:linear-gradient(140deg,var(--c4),var(--c1));display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
 
   /* ---------- Content ---------- */
-  .content{padding:22px;max-width:1180px;width:100%}
+  .content{padding:22px;max-width:1700px;width:100%}
   .page-head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:18px}
   .page-head h2{font-family:"Archivo",sans-serif;font-weight:800;font-size:22px;margin:0;letter-spacing:-.02em}
   .page-head .desc{font-size:13px;color:var(--muted);margin-top:3px}
@@ -206,7 +206,10 @@
   table.tcm td.wk{padding:3px 8px;text-align:center;font-weight:600;background:var(--elev);font-family:"IBM Plex Mono",monospace;color:var(--ink-2)}
   table.tcm td.cell{padding:0}
   .tcm-row{display:flex;min-height:28px;width:100%}
-  .tcm-seg{flex:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:"IBM Plex Mono",monospace;position:relative;padding:2px 3px;cursor:grab}
+  .tcm-seg{flex:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:"IBM Plex Mono",monospace;position:relative;padding:2px 3px;cursor:grab;touch-action:none}
+  .tcm-seg:active{cursor:grabbing}
+  tr.tcm-droprow{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+  td.tcm-dropcol{outline:2px dashed var(--accent);outline-offset:-2px}
   .tcm-grip{position:absolute;left:2px;opacity:.4;font-weight:400}
   .tcm-badge{position:absolute;top:0;right:0;display:flex;align-items:center;gap:2px;padding:0 3px;font-size:9px;font-weight:700;color:#fff;border-bottom-left-radius:4px}
   table.tcm tr.sumrow td{padding:6px 8px;font-weight:600;border-color:var(--line)}
@@ -456,6 +459,7 @@
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
+    ADJ_DIRTY=false;
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:Array.isArray(obra.feriados)?obra.feriados:[]};
   }
@@ -574,6 +578,7 @@
   ];
   var LOTS=['Lote 01','Lote 02','Lote 03','Lote 04','Lote 05','Lote 06'];
   var OVR={}; // ajustes manuais: {"loteId::servicoId": {startWeek, team, duration, productivity}}
+  var ADJ_DIRTY=false; // true quando há ajustes ainda não salvos no Supabase
 
   /* ================= VIEWS ================= */
   var VIEWS={};
@@ -1526,8 +1531,12 @@
     var tab=window._cronoTab||'tc';
     if(tab==='ajuste') return '<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
       '<div><h3>Ajuste manual (arraste para mover)</h3>'+
-      '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.</p></div>'+
-      '<button class="btn" id="clearAdjustsBtn" style="white-space:nowrap">↺ Limpar ajustes</button></div>'+
+      '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.'+
+      (ADJ_DIRTY?' <b style="color:var(--warn)">Há ajustes não salvos.</b>':'')+'</p></div>'+
+      '<div style="display:flex;gap:8px;white-space:nowrap">'+
+        '<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
+        '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 Salvar ajustes</button>'+
+      '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
     if(tab==='equipe') return editarPorEquipeHTML();
     if(tab==='resumo') return resumoHTML();
@@ -1540,14 +1549,21 @@
     if((window._cronoTab||'tc')==='ajuste'){
       renderAssignPanel(); wireDragMatrix();
       var clearB=document.getElementById('clearAdjustsBtn');
-      if(clearB)clearB.addEventListener('click',async function(){
-        if(!confirm('Remover todos os ajustes manuais deste cronograma?'))return;
-        OVR={};
-        try{ await saveOverrides(); toast('Ajustes removidos.'); }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
-        renderCrono();
+      if(clearB)clearB.addEventListener('click',function(){
+        if(!confirm('Remover todos os ajustes manuais deste cronograma? (precisa clicar em "Salvar ajustes" pra valer)'))return;
+        OVR={}; ADJ_DIRTY=true; renderCrono();
+      });
+      var saveB=document.getElementById('saveAdjustsBtn');
+      if(saveB)saveB.addEventListener('click',async function(){
+        saveB.disabled=true; saveB.textContent='Salvando…';
+        try{ await saveOverrides(); ADJ_DIRTY=false; toast('Ajustes salvos.'); renderCrono(); }
+        catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); saveB.disabled=false; saveB.textContent='💾 Salvar ajustes'; }
       });
     }
   }
+  // Arraste: só reposiciona visualmente (transform) durante o movimento — não
+  // reconstrói a tabela nem grava no banco a cada pixel. O ajuste só entra em
+  // OVR (em memória) no soltar, e só vai pro Supabase quando clicar "Salvar".
   var _drag=null;
   function wireDragMatrix(){
     document.querySelectorAll('.tcm-seg[data-li]').forEach(function(el){
@@ -1557,32 +1573,39 @@
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
         var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
         if(!seg)return;
-        _drag={li:li,si:si,originalStart:seg.start,originalLi:li,currentStart:seg.start,currentLi:li};
-        el.style.opacity='0.65';
+        _drag={li:li,si:si,startWeek:seg.start,currentStart:seg.start,currentLi:li,x0:e.clientX,y0:e.clientY,el:el,hlRow:null,hlCol:null};
+        el.style.position='relative'; el.style.zIndex='10'; el.style.boxShadow='0 4px 14px rgba(0,0,0,.35)';
       });
       el.addEventListener('pointermove',function(e){
-        if(!_drag)return;
+        if(!_drag||_drag.el!==el)return;
+        el.style.transform='translate('+(e.clientX-_drag.x0)+'px,'+(e.clientY-_drag.y0)+'px)';
         var elAt=document.elementFromPoint(e.clientX,e.clientY);
         if(!elAt)return;
         var rowEl=elAt.closest('[data-week]'), lotEl=elAt.closest('[data-lot]');
         if(rowEl){var w=+rowEl.getAttribute('data-week'); if(w>0)_drag.currentStart=w;}
         if(lotEl){var li2=+lotEl.getAttribute('data-lot'); if(!isNaN(li2))_drag.currentLi=li2;}
+        if(_drag.hlRow&&_drag.hlRow!==rowEl)_drag.hlRow.classList.remove('tcm-droprow');
+        if(rowEl){rowEl.classList.add('tcm-droprow'); _drag.hlRow=rowEl;}
+        if(_drag.hlCol&&_drag.hlCol!==lotEl)_drag.hlCol.classList.remove('tcm-dropcol');
+        if(lotEl){lotEl.classList.add('tcm-dropcol'); _drag.hlCol=lotEl;}
       });
-      el.addEventListener('pointerup',async function(e){
-        if(!_drag)return;
+      el.addEventListener('pointerup',function(e){
+        if(!_drag||_drag.el!==el)return;
         try{el.releasePointerCapture(e.pointerId);}catch(err){}
-        el.style.opacity='';
+        el.style.transform=''; el.style.zIndex=''; el.style.boxShadow='';
+        if(_drag.hlRow)_drag.hlRow.classList.remove('tcm-droprow');
+        if(_drag.hlCol)_drag.hlCol.classList.remove('tcm-dropcol');
         var d=_drag; _drag=null;
         var si=d.si, kOrig=ovrKey(d.li,si), changed=false;
-        if(d.currentStart!==d.originalStart&&kOrig){
+        if(d.currentStart!==d.startWeek&&kOrig){
           OVR[kOrig]=Object.assign({},OVR[kOrig],{startWeek:d.currentStart});
           changed=true;
         }
-        if(d.currentLi!==d.originalLi){
+        if(d.currentLi!==d.li){
           var kDst=ovrKey(d.currentLi,si);
           if(kOrig&&kDst){
             var segs=buildSchedule();
-            var srcSeg=segs.filter(function(sg){return sg.li===d.originalLi&&sg.si===si;})[0];
+            var srcSeg=segs.filter(function(sg){return sg.li===d.li&&sg.si===si;})[0];
             var dstSeg=segs.filter(function(sg){return sg.li===d.currentLi&&sg.si===si;})[0];
             if(srcSeg&&dstSeg&&srcSeg.team!==dstSeg.team){
               OVR[kOrig]=Object.assign({},OVR[kOrig],{team:dstSeg.team});
@@ -1591,19 +1614,12 @@
             }
           }
         }
-        if(changed){
-          try{ await saveOverrides(); toast('Ajuste salvo.'); }
-          catch(err){ alert('Falha ao salvar ajuste: '+((err&&err.message)||err)); }
-        }
-        renderCrono();
+        if(changed){ ADJ_DIRTY=true; renderCrono(); }
       });
-      el.addEventListener('dblclick',async function(){
+      el.addEventListener('dblclick',function(){
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
         var k=ovrKey(li,si); if(!k||!OVR[k])return;
-        delete OVR[k];
-        try{ await saveOverrides(); toast('Ajuste removido.'); }
-        catch(err){ alert('Falha ao salvar: '+((err&&err.message)||err)); }
-        renderCrono();
+        delete OVR[k]; ADJ_DIRTY=true; renderCrono();
       });
     });
   }
@@ -1664,13 +1680,12 @@
     var selT=document.getElementById('assignTeam');
     if(selT)selT.addEventListener('change',function(){window._tcAssignTeam=+selT.value;renderAssignPanel();});
     p.querySelectorAll('[data-li]').forEach(function(cb){
-      cb.addEventListener('change',async function(){
+      cb.addEventListener('change',function(){
         var li=+cb.getAttribute('data-li');
         var k=ovrKey(li,si); if(!k)return;
         if(cb.checked){ OVR[k]=Object.assign({},OVR[k],{team:team}); }
         else if(OVR[k]){ delete OVR[k].team; if(Object.keys(OVR[k]).length===0)delete OVR[k]; }
-        try{ await saveOverrides(); toast('Salvo.'); }
-        catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+        ADJ_DIRTY=true;
         renderCrono();
       });
     });
