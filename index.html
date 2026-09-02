@@ -124,7 +124,11 @@
   .field{margin-bottom:11px}.field label{display:block;font-size:11.5px;color:var(--ink-2);font-weight:600;margin-bottom:4px}
 
   /* Matrix (tempo-caminho) */
-  .tc-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:560px}
+  .tc-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:76vh}
+  .tc-zoom{display:flex;align-items:center;gap:6px;margin-bottom:10px}
+  .tc-zoom button{width:28px;height:28px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;font-weight:700}
+  .tc-zoom button:hover{border-color:var(--accent)}
+  .tc-zoom .lvl{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-2);min-width:38px;text-align:center}
   table.tc{border-collapse:separate;border-spacing:0;font-size:11px;min-width:640px}
   table.tc th,table.tc td{border-bottom:1px solid var(--line-2);border-right:1px solid var(--line-2);padding:0}
   table.tc thead th{position:sticky;top:0;background:var(--surface);z-index:3;padding:8px 6px;font-size:10.5px;color:var(--ink-2);text-transform:none;letter-spacing:0;text-align:center}
@@ -1198,6 +1202,7 @@
       content='<div class="banner" style="margin-bottom:12px">Modo <b>Tempo-Caminho</b>: clique numa célula (semana × lote) para lançar o realizado direto na matriz.</div>'+matrixTableHTML(false);
     } else { content=estacasHTML(); }
     root.innerHTML=tabs+content;
+    if(window._prodMode==='tc')wireMatrixZoom();
     root.querySelectorAll('[data-pmode]').forEach(function(b){b.addEventListener('click',function(){window._prodMode=b.getAttribute('data-pmode');renderProd();});});
     var add=document.getElementById('pdAdd');if(add)add.addEventListener('click',function(){window.PROD_LIST.unshift({data:document.getElementById('pdData').value||todayISO(),serv:+document.getElementById('pdServ').value,lote:+document.getElementById('pdLote').value,qtd:+document.getElementById('pdQtd').value||0});renderProd();});
     root.querySelectorAll('[data-pddel]').forEach(function(b){b.addEventListener('click',function(){window.PROD_LIST.splice(+b.getAttribute('data-pddel'),1);renderProd();});});
@@ -1498,7 +1503,32 @@
         return '<tr class="sumrow"><td class="sumname" colspan="2" style="background:'+hex+';color:'+pickFont(hex)+'">'+s.n+' ('+s.u+')</td>'+cells+'</tr>';
       }).join('');
     }
-    return '<div class="tc-wrap"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    var z=window._matrixZoom||1;
+    var zoomBar='<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
+      '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
+      (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+'</div>';
+    return zoomBar+'<div class="tc-wrap" id="tcWrap" style="zoom:'+z+'"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+  }
+  function wireMatrixZoom(){
+    document.querySelectorAll('[data-zoom]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var act=b.getAttribute('data-zoom'), z=window._matrixZoom||1;
+        if(act==='in')z=Math.min(1.6,+(z+0.1).toFixed(2));
+        else if(act==='out')z=Math.max(0.4,+(z-0.1).toFixed(2));
+        else if(act==='reset')z=1;
+        else if(act==='fit'){
+          var wrap=document.getElementById('tcWrap');
+          if(wrap){
+            var table=wrap.querySelector('table');
+            var containerW=wrap.parentElement?wrap.parentElement.clientWidth:0;
+            var naturalW=table?table.scrollWidth/(window._matrixZoom||1):0;
+            if(naturalW>0&&containerW>0)z=Math.max(0.4,Math.min(1.2,+(containerW/naturalW).toFixed(2)));
+          }
+        }
+        window._matrixZoom=z;
+        go(current);
+      });
+    });
   }
 
   function editarPorEquipeHTML(){
@@ -1546,6 +1576,7 @@
   function renderCrono(){
     var c=document.getElementById('cronoContent'); if(!c)return;
     c.innerHTML=cronoContent();
+    wireMatrixZoom();
     if((window._cronoTab||'tc')==='ajuste'){
       renderAssignPanel(); wireDragMatrix();
       var clearB=document.getElementById('clearAdjustsBtn');
@@ -1564,7 +1595,16 @@
   // Arraste: só reposiciona visualmente (transform) durante o movimento — não
   // reconstrói a tabela nem grava no banco a cada pixel. O ajuste só entra em
   // OVR (em memória) no soltar, e só vai pro Supabase quando clicar "Salvar".
-  var _drag=null;
+  // Ghost solto (position:fixed) que "salta" pra célula alvo — o .tcm-seg
+  // original nunca sai do DOM (só fica esmaecido), então o pointer capture
+  // nunca se perde, mesmo re-renderizando a matriz depois de soltar.
+  var _drag=null, _ghost=null;
+  function dragCleanup(){
+    if(_drag&&_drag.el){_drag.el.style.opacity='';}
+    if(_ghost){_ghost.remove();_ghost=null;}
+    if(_drag&&_drag.hlRow)_drag.hlRow.classList.remove('tcm-droprow');
+    if(_drag&&_drag.hlCol)_drag.hlCol.classList.remove('tcm-dropcol');
+  }
   function wireDragMatrix(){
     document.querySelectorAll('.tcm-seg[data-li]').forEach(function(el){
       el.addEventListener('pointerdown',function(e){
@@ -1573,17 +1613,28 @@
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
         var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
         if(!seg)return;
-        _drag={li:li,si:si,startWeek:seg.start,currentStart:seg.start,currentLi:li,x0:e.clientX,y0:e.clientY,el:el,hlRow:null,hlCol:null};
-        el.style.position='relative'; el.style.zIndex='10'; el.style.boxShadow='0 4px 14px rgba(0,0,0,.35)';
+        var r=el.getBoundingClientRect();
+        _ghost=document.createElement('div');
+        _ghost.className='tcm-seg';
+        _ghost.style.cssText='position:fixed;pointer-events:none;z-index:999;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;'+
+          'background:'+seg.color+';color:'+pickFont(seg.color)+';border-radius:5px;box-shadow:0 6px 18px rgba(0,0,0,.4);transition:left .1s,top .1s,width .1s,height .1s;';
+        _ghost.textContent=el.textContent;
+        document.body.appendChild(_ghost);
+        el.style.opacity='0.25';
+        _drag={li:li,si:si,startWeek:seg.start,currentStart:seg.start,currentLi:li,el:el,hlRow:null,hlCol:null};
       });
       el.addEventListener('pointermove',function(e){
-        if(!_drag||_drag.el!==el)return;
-        el.style.transform='translate('+(e.clientX-_drag.x0)+'px,'+(e.clientY-_drag.y0)+'px)';
+        if(!_drag||_drag.el!==el||!_ghost)return;
         var elAt=document.elementFromPoint(e.clientX,e.clientY);
         if(!elAt)return;
         var rowEl=elAt.closest('[data-week]'), lotEl=elAt.closest('[data-lot]');
         if(rowEl){var w=+rowEl.getAttribute('data-week'); if(w>0)_drag.currentStart=w;}
-        if(lotEl){var li2=+lotEl.getAttribute('data-lot'); if(!isNaN(li2))_drag.currentLi=li2;}
+        if(lotEl){
+          var li2=+lotEl.getAttribute('data-lot'); if(!isNaN(li2))_drag.currentLi=li2;
+          var tr=lotEl.getBoundingClientRect();
+          _ghost.style.left=tr.left+'px'; _ghost.style.top=tr.top+'px';
+          _ghost.style.width=tr.width+'px'; _ghost.style.height=tr.height+'px';
+        }
         if(_drag.hlRow&&_drag.hlRow!==rowEl)_drag.hlRow.classList.remove('tcm-droprow');
         if(rowEl){rowEl.classList.add('tcm-droprow'); _drag.hlRow=rowEl;}
         if(_drag.hlCol&&_drag.hlCol!==lotEl)_drag.hlCol.classList.remove('tcm-dropcol');
@@ -1592,10 +1643,7 @@
       el.addEventListener('pointerup',function(e){
         if(!_drag||_drag.el!==el)return;
         try{el.releasePointerCapture(e.pointerId);}catch(err){}
-        el.style.transform=''; el.style.zIndex=''; el.style.boxShadow='';
-        if(_drag.hlRow)_drag.hlRow.classList.remove('tcm-droprow');
-        if(_drag.hlCol)_drag.hlCol.classList.remove('tcm-dropcol');
-        var d=_drag; _drag=null;
+        var d=_drag; dragCleanup(); _drag=null;
         var si=d.si, kOrig=ovrKey(d.li,si), changed=false;
         if(d.currentStart!==d.startWeek&&kOrig){
           OVR[kOrig]=Object.assign({},OVR[kOrig],{startWeek:d.currentStart});
@@ -1615,6 +1663,10 @@
           }
         }
         if(changed){ ADJ_DIRTY=true; renderCrono(); }
+      });
+      el.addEventListener('pointercancel',function(){
+        if(!_drag||_drag.el!==el)return;
+        dragCleanup(); _drag=null;
       });
       el.addEventListener('dblclick',function(){
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
