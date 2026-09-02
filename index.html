@@ -1382,9 +1382,10 @@
     var segs=[];
     SERV.forEach(function(s,si){
       var teams=s.eq, prod=pnum(s.p), hex=cssHex(s.c), cur={};
-      for(var t=1;t<=teams;t++)cur[t]=base[si];
+      for(var t=1;t<=teams;t++)cur[t]=base[si]||0;
       LOTS.forEach(function(l,li){
         var qty=QTY[li][si]; if(qty<=0)return;
+        if(prod<=0)return; // sem produtividade cadastrada ainda — não dá pra calcular duração
         var team=(li%teams)+1, dur=Math.max(1,Math.ceil(qty/prod)), start=cur[team];
         cur[team]=start+dur;
         var wq=[];for(var i=0;i<dur;i++)wq.push(i===dur-1?Math.max(1,qty-prod*(dur-1)):prod);
