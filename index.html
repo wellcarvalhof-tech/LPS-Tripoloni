@@ -86,6 +86,7 @@
   .page-head h2{font-family:"Archivo",sans-serif;font-weight:800;font-size:22px;margin:0;letter-spacing:-.02em}
   .page-head .desc{font-size:13px;color:var(--muted);margin-top:3px}
   .page-actions{margin-left:auto;display:flex;gap:8px}
+  .page-head-mini{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:12px}
   .btn{font-family:inherit;font-size:13px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
   .btn:hover{border-color:var(--accent)}
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -510,7 +511,7 @@
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
-    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un'};});
+    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||''};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
@@ -643,8 +644,7 @@
 
   /* ---------- Shared bits ---------- */
   function head(title,desc,actions){
-    return '<div class="page-head"><div><h2>'+title+'</h2><div class="desc">'+desc+'</div></div>'+
-      (actions?'<div class="page-actions">'+actions+'</div>':'')+'</div>';
+    return actions?'<div class="page-head-mini" title="'+escAttr(desc||title||'')+'">'+actions+'</div>':'';
   }
   function wip(){return '<span class="wip">◔ layout — dados de exemplo</span>';}
 
@@ -828,25 +828,51 @@
   };
 
   var HIST_FILTER='todos', HIST_SVC=null;
+  var HIST_OPEN={};
+  function sectionCard(key,title,note,actionsHtml,bodyHtml){
+    var open=HIST_OPEN[key]!==false;
+    return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;'+(open?'margin-bottom:10px':'')+'">'+
+      '<div style="display:flex;align-items:flex-start;gap:6px"><button class="iconbtn" data-histtoggle="'+key+'" title="'+(open?'Recolher':'Expandir')+'">'+(open?'▾':'▸')+'</button>'+
+      '<div><div class="eyebrow" style="margin:0">'+title+'</div>'+(note?'<div class="note">'+note+'</div>':'')+'</div></div>'+
+      (actionsHtml?'<div style="display:flex;gap:8px;flex-wrap:wrap">'+actionsHtml+'</div>':'')+
+    '</div>'+(open?bodyHtml:'')+'</div>';
+  }
   function realizadoHTML(hist){
     var tw=hist.tw;
-    if(!RECURSOS.length||!tw)return '<div class="card" style="margin-top:14px"><div class="eyebrow">Realizado (apontamento semanal)</div><div class="note">Cadastre recursos e o cronograma pra apontar o realizado.</div></div>';
+    if(!RECURSOS.length||!tw)return sectionCard('realizado','Realizado (previsto × realizado)','',null,'<div class="note">Cadastre recursos e o cronograma pra apontar o realizado.</div>');
     var realDirty=Object.keys(REALIZADO_DIRTY).length;
-    var th='<th>Recurso</th>', w;
-    for(w=1;w<=tw;w++)th+='<th class="r">S'+isoWeek(mondayOf(w))+'</th>';
-    var rows=RECURSOS.map(function(r){
-      var cells='';
-      for(var w2=1;w2<=tw;w2++){
-        var d=mondayOf(w2).toISOString().slice(0,10);
-        var v=REALIZADO_REC[r.id+'::'+d]||0;
-        cells+='<td><input class="einp" type="number" data-realres="'+r.id+'" data-realdate="'+d+'" value="'+(v||0)+'" style="width:64px"></td>';
-      }
-      return '<tr><td>'+r.n+'</td>'+cells+'</tr>';
-    }).join('');
-    return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">'+
-      '<div><div class="eyebrow" style="margin:0">Realizado (apontamento semanal)</div><div class="note">Preencha manualmente ou importe uma planilha exportada por este app.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':'')+'</div></div>'+
-      '<div style="display:flex;gap:8px"><button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button></div>'+
-    '</div><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    var groups={}, order=[];
+    RECURSOS.forEach(function(r){
+      var cat=r.cat||'Sem categoria';
+      if(!groups[cat]){groups[cat]=[];order.push(cat);}
+      groups[cat].push(r);
+    });
+    var w, th='<th style="min-width:150px">Recurso</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
+    var th2='<th></th>';
+    for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
+    var rows='';
+    order.forEach(function(cat){
+      rows+='<tr><td colspan="'+(1+tw*2)+'" style="background:var(--elev);font-weight:700;padding:6px 8px">'+cat+'</td></tr>';
+      groups[cat].forEach(function(r){
+        var cells='';
+        for(var w2=1;w2<=tw;w2++){
+          var d=mondayOf(w2).toISOString().slice(0,10);
+          var p=(hist.byResource[r.id]||[])[w2-1]||0;
+          var rv=REALIZADO_REC[r.id+'::'+d]||0;
+          var bg=rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)');
+          var fg=rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)');
+          cells+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(p>0?fmtBR(p):'—')+'</td>'+
+            '<td style="background:'+bg+'"><input class="einp" type="number" data-realres="'+r.id+'" data-realdate="'+d+'" value="'+(rv||0)+'" style="width:52px;background:transparent;border-color:transparent;color:'+fg+';font-weight:700;text-align:right;padding:2px 4px"></td>';
+        }
+        rows+='<tr><td>'+r.n+'</td>'+cells+'</tr>';
+      });
+    });
+    return sectionCard('realizado','Realizado (previsto × realizado)',
+      'P = previsto (cronograma × equipe típica). R = realizado — acima do previsto fica vermelho, abaixo fica amarelo, igual fica verde.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
+      '<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    );
   }
   VIEWS['cr-hist']=function(){
     var hist=computeHistogram();
@@ -854,23 +880,21 @@
     var recRows=RECURSOS.map(function(r,ri){
       var peak=hist.peakByResource[r.id]||0;
       return '<tr data-ri="'+ri+'">'+
-        '<td>'+sinp('nome',r.n,'170px')+'</td>'+
+        '<td>'+sinp('nome',r.n,'150px')+'</td>'+
+        '<td>'+sinp('categoria',r.cat,'110px')+'</td>'+
         '<td><select class="esel" data-field="tipo"><option value="funcao"'+(r.tipo==='funcao'?' selected':'')+'>Função</option><option value="equipamento"'+(r.tipo==='equipamento'?' selected':'')+'>Equipamento</option></select></td>'+
         '<td>'+sinp('unidade',r.u,'70px')+'</td>'+
         '<td class="r mono">'+fmtBR(peak)+'</td>'+
         '<td><button class="iconbtn" data-delrec="'+ri+'">✕</button></td></tr>';
     }).join('');
-    var catalogo='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:10px">'+
-      '<div><div class="eyebrow" style="margin:0">Funções e equipamentos</div><div class="note">Cadastre ou importe a lista (Nome, Tipo, Unidade).</div></div>'+
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
-        '<button class="btn" id="histModelo">Modelo</button>'+
-        '<button class="btn" id="histImportar">↥ Importar lista</button>'+
-        '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
-        '<button class="btn primary" id="addRecurso">+ Adicionar</button>'+
-        '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>'+
-      '</div></div>'+
-      (RECURSOS.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Nome</th><th>Tipo</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+recRows+'</tbody></table></div>':'<div class="note">Nenhum recurso cadastrado ainda.</div>')+
-    '</div>';
+    var catalogo=sectionCard('catalogo','Funções e equipamentos','Cadastre ou importe a lista (Nome, Categoria, Tipo, Unidade).',
+      '<button class="btn" id="histModelo">Modelo</button>'+
+      '<button class="btn" id="histImportar">↥ Importar lista</button>'+
+      '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
+      '<button class="btn primary" id="addRecurso">+ Adicionar</button>'+
+      '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>',
+      RECURSOS.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Nome</th><th>Categoria</th><th>Tipo</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+recRows+'</tbody></table></div>':'<div class="note">Nenhum recurso cadastrado ainda.</div>'
+    );
 
     var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
     var svc=svcSel!=null?SERV[svcSel]:null;
@@ -886,31 +910,30 @@
       }).join('');
     }
     var equipeSel='<select class="esel" id="histSvcSel">'+SERV.map(function(s,si){return '<option value="'+si+'"'+(si===svcSel?' selected':'')+'>'+s.n+'</option>';}).join('')+'</select>';
-    var equipe='<div class="card" style="margin-top:14px"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+
-      '<div class="eyebrow" style="margin:0">Equipe típica do serviço</div>'+(SERV.length?equipeSel:'')+
-      (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+
-    '</div>'+
-    (!svc||!RECURSOS.length?'<div class="note">Cadastre serviços e recursos pra montar a equipe típica.</div>':
-      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')+
-    '</div>';
+    var equipe=sectionCard('equipe','Equipe típica do serviço',null,
+      null,
+      (SERV.length?'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+equipeSel+
+        (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+'</div>':'')+
+      (!svc||!RECURSOS.length?'<div class="note">Cadastre serviços e recursos pra montar a equipe típica.</div>':
+        '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')
+    );
 
     var totRows=SERV.map(function(s,si){
       var comp=((s.cfg&&s.cfg.crew)||[]).map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ')||'—';
       return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td><td class="mono">'+s.eq+'</td><td class="note">'+comp+'</td><td class="r mono">'+fmtBR(hist.totalByService[si]||0)+'</td></tr>';
     }).join('');
-    var totais='<div class="card" style="margin-top:14px"><div class="eyebrow">Quantidades totais</div>'+
-      (SERV.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipes</th><th>Composição da equipe típica</th><th class="r">Total do serviço</th></tr></thead><tbody>'+totRows+
-        '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>')+
-    '</div>';
+    var totais=sectionCard('totais','Quantidades totais',null,null,
+      SERV.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipes</th><th>Composição da equipe típica</th><th class="r">Total do serviço</th></tr></thead><tbody>'+totRows+
+        '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>'
+    );
 
     var filtroBtns=['todos','funcao','equipamento'].map(function(f){
       var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
       return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
     }).join('');
-    var grafico='<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
-      '<div class="eyebrow" style="margin:0">Histograma de recursos no tempo</div><div style="display:flex;gap:4px">'+filtroBtns+'</div></div>'+
-      (RECURSOS.length?'<div class="note" style="margin-bottom:8px">Demanda por semana = equipes ativas do serviço × quantidade por equipe.</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>')+
-    '</div>';
+    var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,filtroBtns,
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Demanda por semana = equipes ativas do serviço × quantidade por equipe.</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+    );
 
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
       catalogo+equipe+totais+grafico+realizadoHTML(hist);
@@ -1701,6 +1724,13 @@
     if(view==='cad-equipes'){var g=document.getElementById('gotoServ');if(g)g.addEventListener('click',function(){go('cad-serv');});}
     if(view==='cr-hist'){
       renderHistChart();
+      document.querySelectorAll('[data-histtoggle]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var k=b.getAttribute('data-histtoggle');
+          HIST_OPEN[k]=(HIST_OPEN[k]===false);
+          go('cr-hist');
+        });
+      });
       document.querySelectorAll('table.edtbl tbody tr[data-ri]').forEach(function(tr){
         var ri=+tr.getAttribute('data-ri');
         tr.querySelectorAll('[data-field]').forEach(function(inp){
@@ -2145,6 +2175,7 @@
     if(field==='nome'){ val=val.trim(); if(!val){inp.value=r.n;return;} r.n=val; }
     else if(field==='unidade'){ r.u=val.trim()||'un'; }
     else if(field==='tipo'){ r.tipo=(val==='equipamento')?'equipamento':'funcao'; }
+    else if(field==='categoria'){ r.cat=val.trim(); }
     else return;
     REC_DIRTY[ri]=true;
     go('cr-hist');
@@ -2154,7 +2185,7 @@
     try{
       for(var i=0;i<idxs.length;i++){
         var r=RECURSOS[idxs[i]]; if(!r)continue;
-        await sbUpdateRecurso(r.id,{nome:r.n,tipo:r.tipo,unidade:r.u});
+        await sbUpdateRecurso(r.id,{nome:r.n,tipo:r.tipo,unidade:r.u,categoria:r.cat||null});
       }
       REC_DIRTY={};
       go('cr-hist'); toast('Recursos salvos.');
@@ -2166,7 +2197,7 @@
     var patch={nome:'Novo recurso',tipo:'funcao',unidade:'un',ordem:idx};
     try{
       var id=await sbCreateRecurso(selectedObra.id,patch);
-      RECURSOS.push({id:id,n:patch.nome,tipo:patch.tipo,u:patch.unidade});
+      RECURSOS.push({id:id,n:patch.nome,tipo:patch.tipo,u:patch.unidade,cat:''});
       go('cr-hist'); toast('Recurso adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
@@ -2294,9 +2325,9 @@
   function downloadResourcesTemplate(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var wb=XLSX.utils.book_new();
-    var ws=XLSX.utils.aoa_to_sheet([['Nome','Tipo','Unidade'],
-      ['Encarregado','funcao','un'],['Servente','funcao','un'],['Operador de máquinas','funcao','un'],
-      ['Escavadeira hidráulica','equipamento','un'],['Caminhão basculante','equipamento','un']]);
+    var ws=XLSX.utils.aoa_to_sheet([['Nome','Categoria','Tipo','Unidade'],
+      ['Encarregado','M.O.D.','funcao','un'],['Servente','M.O.D.','funcao','un'],['Operador de máquinas','M.O.I.','funcao','un'],
+      ['Escavadeira hidráulica','Equipamentos Pesados','equipamento','un'],['Caminhão basculante','Equipamentos Pesados','equipamento','un']]);
     XLSX.utils.book_append_sheet(wb,ws,'Recursos');
     XLSX.writeFile(wb,'modelo-recursos.xlsx');
   }
@@ -2310,12 +2341,13 @@
     for(var i=0;i<rows.length;i++){
       var r=rows[i]; if(!r||!r[0])continue;
       var nome=String(r[0]).trim(); if(!nome)continue;
-      var tipoRaw=String(r[1]||'').trim().toLowerCase();
+      var categoria=String(r[1]||'').trim();
+      var tipoRaw=String(r[2]||'').trim().toLowerCase();
       var tipo=(tipoRaw.indexOf('eq')===0||tipoRaw.indexOf('máquina')>=0||tipoRaw.indexOf('maquina')>=0)?'equipamento':'funcao';
-      var unidade=String(r[2]||'').trim()||'un';
+      var unidade=String(r[3]||'').trim()||'un';
       var key=nome.toLowerCase()+'::'+tipo; if(existing[key])continue;
-      var id=await sbCreateRecurso(selectedObra.id,{nome:nome,tipo:tipo,unidade:unidade,ordem:RECURSOS.length});
-      RECURSOS.push({id:id,n:nome,tipo:tipo,u:unidade});
+      var id=await sbCreateRecurso(selectedObra.id,{nome:nome,tipo:tipo,unidade:unidade,categoria:categoria||null,ordem:RECURSOS.length});
+      RECURSOS.push({id:id,n:nome,tipo:tipo,u:unidade,cat:categoria});
       existing[key]=true; created++;
     }
     go('cr-hist'); toast(created+' recurso(s) importado(s).');
@@ -2324,10 +2356,10 @@
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var hist=computeHistogram(), tw=hist.tw;
     var wb=XLSX.utils.book_new();
-    var header=['Recurso','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push('S'+isoWeek(mondayOf(w)));
+    var header=['Recurso','Categoria','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push('S'+isoWeek(mondayOf(w)));
     var rows=[header];
     RECURSOS.forEach(function(r){
-      var row=[r.n,r.tipo==='funcao'?'Função':'Equipamento',r.u,hist.peakByResource[r.id]||0];
+      var row=[r.n,r.cat||'',r.tipo==='funcao'?'Função':'Equipamento',r.u,hist.peakByResource[r.id]||0];
       (hist.byResource[r.id]||[]).forEach(function(v){row.push(v);});
       rows.push(row);
     });
@@ -2351,7 +2383,7 @@
     if(!ws){alert('Planilha não reconhecida.');return;}
     var aoa=sheetRows(ws); if(aoa.length<2){alert('Planilha vazia.');return;}
     var header=aoa[0];
-    var weekCols=[]; for(var c=4;c<header.length;c++){weekCols.push(c);} // pula Recurso/Tipo/Unidade/Pico
+    var weekCols=[]; for(var c=5;c<header.length;c++){weekCols.push(c);} // pula Recurso/Categoria/Tipo/Unidade/Pico
     var byName={}; RECURSOS.forEach(function(r){byName[r.n.trim().toLowerCase()]=r;});
     var applied=0;
     for(var i=1;i<aoa.length;i++){
