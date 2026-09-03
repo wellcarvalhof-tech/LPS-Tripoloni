@@ -608,12 +608,21 @@
       var grp=el.closest('.nav-group'); if(grp && !grp.classList.contains('nav-solo')) grp.classList.add('open');}
   }
   function go(view){
+    var sameView=(view===current);
+    var contentEl0=document.getElementById('content');
+    var keepContentScroll=sameView&&contentEl0?contentEl0.scrollTop:0;
+    var keepPageScroll=sameView?(window.scrollY||window.pageYOffset||0):0;
     current=view; markActive();
     var c=CRUMB[view]||['—'];
     document.getElementById('crumb').innerHTML=c.map(function(x,i){return i===c.length-1?'<b>'+x+'</b>':x;}).join(' <span style="opacity:.4">/</span> ');
     document.getElementById('content').innerHTML=(VIEWS[view]||VIEWS.torre)();
     afterRender(view);
-    document.getElementById('content').scrollTop=0; window.scrollTo(0,0);
+    if(sameView){
+      document.getElementById('content').scrollTop=keepContentScroll;
+      window.scrollTo(0,keepPageScroll);
+    }else{
+      document.getElementById('content').scrollTop=0; window.scrollTo(0,0);
+    }
     document.getElementById('side').classList.remove('open');
     refreshTopSaveBtn();
   }
