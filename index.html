@@ -1486,7 +1486,7 @@
       '<div class="ed-checks">'+
         '<label><input type="checkbox" data-cfgbool="parallelWithPredecessor" data-si="'+si+'"'+(cfg.parallelWithPredecessor?' checked':'')+'>Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
         '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
-        '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua, ignora chuva)</label>'+
+        '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua — evita equipe ociosa; chuva ainda reduz produção)</label>'+
         '<label>Semana alvo de término: <input class="einp" type="number" data-cfgnum="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:70px"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
       '</div>'+
       (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
@@ -2489,7 +2489,7 @@
   function buildSchedule(){
     var segs=[], startByKey={}, endByKey={};
     var order=topoSortServices();
-    var periods=calRainPeriods(), wfCache={}, wfCacheNoint={};
+    var periods=calRainPeriods(), wfCache={};
     function predReadyWeek(s,li){
       var earliest=1;
       var preds=(s.cfg&&s.cfg.predecessors)||[];
@@ -2508,18 +2508,24 @@
       var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s);
       if(teams<=0||prod<=0)return;
       var noInt=!!(s.cfg&&s.cfg.noInterruption);
-      var svcPeriods=noInt?[]:periods, svcCache=noInt?wfCacheNoint:wfCache;
       var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
+      // Posição mais cedo em que o lote pode começar: predecessor concluído + defasagem manual (o que vier depois).
+      function readyPosFor(li){
+        var o=ovrGet(li,si);
+        var earliestPos=predReadyWeek(s,li)-1;
+        var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
+        return Math.max(earliestPos,pinPos);
+      }
       if(s.cfg&&s.cfg.pullFromQueue){
-        // Fila dinâmica: os lotes entram numa fila única (na ordem de sequência) e cada um
-        // é entregue à equipe que estiver livre mais cedo, em vez de times fixos por lote.
+        // Fila dinâmica: ignora a equipe fixa por lote. A cada passo, prioriza o lote cuja
+        // predecessora ficou pronta mais cedo, e entrega pra equipe que estiver livre primeiro.
         var queue=[];
         LOTS.forEach(function(l,li){
           if(QTY[li][si]<=0)return;
           var o=ovrGet(li,si);
-          queue.push({li:li,seq:(o&&o.seq!=null)?o.seq:li});
+          queue.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
-        queue.sort(function(a,b){return a.seq-b.seq;});
+        queue.sort(function(a,b){return a.ready-b.ready||a.seq-b.seq;});
         var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(0);
         queue.forEach(function(item){
           var li=item.li, qty=QTY[li][si], o=ovrGet(li,si);
@@ -2527,37 +2533,38 @@
           for(var t1=1;t1<teams;t1++){ if(teamPos[t1]<teamPos[bestT])bestT=t1; }
           var teamProd=teamProds[bestT]>0?teamProds[bestT]:prod;
           var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
-          var earliestPos=predReadyWeek(s,li)-1;
-          var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
-          var startPos=Math.max(earliestPos,teamPos[bestT],pinPos);
+          var startPos=Math.max(item.ready,teamPos[bestT]);
           var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-          var packed=packSegment(startPos,qty/effProd,effProd,qty,svcPeriods,svcCache,fixedDur);
+          var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
           segs.push({li:li,si:si,team:bestT+1,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
             color:teamColor(hex,bestT+1,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
           startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
           teamPos[bestT]=packed.endPos;
         });
       } else {
+        // Times fixos por lote (manual ou round-robin). Sem paralisações ligado: dentro de
+        // cada equipe, executa primeiro o lote mais pronto (predecessora concluída antes) em
+        // vez da sequência manual, pra equipe não ficar ociosa — mas a chuva ainda reduz a
+        // produção normalmente (weekFactor não é ignorado).
         var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
         LOTS.forEach(function(l,li){
           if(QTY[li][si]<=0)return;
           var o=ovrGet(li,si);
           var team=(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1);
           var seq=(o&&o.seq!=null)?o.seq:li;
-          teamLots[team-1].push({li:li,seq:seq});
+          teamLots[team-1].push({li:li,seq:seq,ready:readyPosFor(li)});
         });
-        teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
+        var sortFn=noInt?function(a,b){return a.ready-b.ready||a.seq-b.seq;}:function(a,b){return a.seq-b.seq;};
+        teamLots.forEach(function(arr){arr.sort(sortFn);});
         teamLots.forEach(function(lotIdxs,tIdx){
           var team=tIdx+1, tPos=0;
           var teamProd=teamProds[tIdx]>0?teamProds[tIdx]:prod;
           lotIdxs.forEach(function(item){
             var li=item.li, qty=QTY[li][si], o=ovrGet(li,si);
             var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
-            var earliestPos=predReadyWeek(s,li)-1;
-            var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
-            var startPos=Math.max(earliestPos,tPos,pinPos);
+            var startPos=Math.max(item.ready,tPos);
             var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-            var packed=packSegment(startPos,qty/effProd,effProd,qty,svcPeriods,svcCache,fixedDur);
+            var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
             segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
               color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
             startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
