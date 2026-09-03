@@ -972,8 +972,8 @@
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
   }
   function saveHoliday(hi,val){
-    if(!selectedObra||!window._OBRA)return;
-    var arr=calHolidays().slice(); arr[hi]=val;
+    if(!selectedObra||!window._OBRA||!val)return;
+    var arr=calHolidays().slice(); arr[hi]=mondayOfIso(val);
     window._OBRA=Object.assign({},window._OBRA,{feriados:{holidayWeeks:arr,rainPeriods:calRainPeriods()}});
     CAL_DIRTY=true;
     go('cad-cal');
@@ -986,7 +986,7 @@
   }
   async function addHoliday(){
     if(!selectedObra||!window._OBRA)return;
-    var arr=calHolidays().slice(); arr.push(todayISO());
+    var arr=calHolidays().slice(); arr.push(mondayOfIso(todayISO()));
     try{ await saveCalendarObj(arr,calRainPeriods()); go('cad-cal'); toast('Adicionado.'); }
     catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
@@ -1585,10 +1585,15 @@
 
   /* ---- Datas / semana ISO ---- */
   function TC_START(){ return (window._OBRA&&window._OBRA.data_inicio)||'2026-05-04'; }
+  function mondayOfIso(iso){
+    var d=new Date(iso+'T00:00:00');
+    var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff);
+    return d.toISOString().slice(0,10);
+  }
   function mondayOf(w){
     var d=new Date(TC_START()+'T00:00:00');
     var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff); // ajusta pra segunda-feira
-    var feriados={}; calHolidays().forEach(function(f){feriados[f]=true;});
+    var feriados={}; calHolidays().forEach(function(f){feriados[mondayOfIso(f)]=true;});
     var count=0, guard=0;
     while(guard++<2000){
       if(!feriados[d.toISOString().slice(0,10)]){ count++; if(count===w)return d; }
@@ -1963,7 +1968,7 @@
   }
 
   function buildCalendarRows(totalWorkingWeeks){
-    var holidays={}; calHolidays().forEach(function(h){holidays[h]=true;});
+    var holidays={}; calHolidays().forEach(function(h){holidays[mondayOfIso(h)]=true;});
     var start=new Date(TC_START()+'T00:00:00');
     var day=start.getDay(), diff=day===0?-6:1-day; start.setDate(start.getDate()+diff);
     var rows=[], cur=new Date(start), working=0, guard=0;
