@@ -487,7 +487,7 @@
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
-    ADJ_DIRTY=false; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false;
+    ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false;
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[]};
   }
@@ -526,7 +526,7 @@
       ['cad-obra','Obra']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
-      ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-cenarios','Cenários'],['cr-lb','Linha de Balanço']]},
+      ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-cenarios','Cenários']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
@@ -535,7 +535,7 @@
   var CRUMB={torre:['Torre de Controle'],
     'cad-obra':['Cadastro','Obra'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
-    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-cenarios':['Tempo Caminho','Cenários'],'cr-lb':['Tempo Caminho','Linha de Balanço'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
     'lp-medio':['Last Planner','Médio Prazo'],'lp-semana':['Last Planner','Programação Semanal'],'lp-ppc':['Last Planner','PPC & Causas']};
 
@@ -604,7 +604,7 @@
       if(Object.keys(SVC_DIRTY).length)await saveServicosAll();
       if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length)await saveLotesAll();
       if(CAL_DIRTY)await saveCalendarAll();
-      if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; if(current==='cr-matriz')go(current); }
+      if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; if(current==='cr-matriz')go(current); }
       toast('Tudo salvo.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
     if(b){b.disabled=false;b.textContent='💾 Salvar alterações';}
@@ -630,6 +630,7 @@
   var LOTS=['Lote 01','Lote 02','Lote 03','Lote 04','Lote 05','Lote 06'];
   var OVR={}; // ajustes manuais: {"loteId::servicoId": {startWeek, team, duration, productivity}}
   var ADJ_DIRTY=false; // true quando há ajustes ainda não salvos no Supabase
+  var ADJ_PENDING={}; // {"loteId::servicoId": true} — ajustes feitos nesta sessão, ainda não salvos
 
   /* ================= VIEWS ================= */
   var VIEWS={};
@@ -680,6 +681,7 @@
     var rows=SERV.map(function(s,si){
       var hex=s.hex||'#64748b';
       var main='<tr data-si="'+si+'">'+
+        '<td style="width:56px"><div style="display:flex;gap:2px"><button class="iconbtn" data-svcup="'+si+'" title="subir"'+(si===0?' disabled':'')+'>↑</button><button class="iconbtn" data-svcdown="'+si+'" title="descer"'+(si===SERV.length-1?' disabled':'')+'>↓</button></div></td>'+
         '<td style="width:34px"><button class="iconbtn" data-exp="'+si+'">'+(si===0?'▾':'▸')+'</button></td>'+
         '<td><input type="color" class="esw" data-field="cor" value="'+hex+'"></td>'+
         '<td>'+sinp('nome',s.n,'180px')+'</td>'+
@@ -689,11 +691,11 @@
         '<td>'+predChips(si)+'</td>'+
         '<td>'+sinp('lag_semanas',s.lag||0,'54px','number')+'</td>'+
         '<td><button class="iconbtn" data-del="'+si+'">✕</button></td></tr>';
-      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="8">'+svcDetail(s)+'</td></tr>';
+      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="9">'+svcDetail(s)+'</td></tr>';
       return main+det;
     }).join('');
     return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.'+(Object.keys(SVC_DIRTY).length?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>'+'<button class="btn primary" id="saveServicos"'+(Object.keys(SVC_DIRTY).length?'':' disabled')+'>💾 Salvar alterações</button>')+
-    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th>Cor</th><th>Nome</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th></th><th>Cor</th><th>Nome</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '<div class="note" style="margin-top:10px">Clique em <b>▸</b> para configurar por equipe: lote inicial, produtividade, aumentos e regras (paralelo, fila dinâmica, sem paralisação, semana-alvo). '+(SERV.length?'':'Nenhum serviço cadastrado ainda.')+'</div></div>';
   };
 
@@ -773,12 +775,6 @@
     '<div class="card"><div class="eyebrow">Comparação — Curvas S sobrepostas</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg></div>';
   };
 
-  VIEWS['cr-lb']=function(){
-    return head('Linha de Balanço','Ritmo de produção por serviço ao longo dos lotes — a atividade de menor ritmo dita o prazo',impBtn())+
-    '<div class="banner">Para obra linear, a <b>linha de balanço</b> mostra o gargalo pelo ritmo (inclinação), não pela duração. A linha mais "deitada" é a que controla o prazo.</div>'+
-    '<div class="card"><div class="legend" id="lbLeg" style="margin-bottom:8px"></div><svg class="chart" id="lbc" viewBox="0 0 620 320"></svg></div>';
-  };
-
   VIEWS['ac-curvas']=function(){
     return head('Curva S','Avanço acumulado previsto × realizado, com projeção de tendência',
       impBtn()+'<button class="btn">Exportar</button>')+
@@ -853,6 +849,19 @@
       SVC_DIRTY={};
       go('cad-serv'); toast('Serviços salvos.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  }
+  async function moveServico(si,dir){
+    var target=si+dir;
+    if(target<0||target>=SERV.length)return;
+    var a=SERV[si], b=SERV[target];
+    if(!a||!a.id||!b||!b.id)return;
+    try{
+      await sbUpdateServico(a.id,{ordem:target});
+      await sbUpdateServico(b.id,{ordem:si});
+      var tmp=SERV[si]; SERV[si]=SERV[target]; SERV[target]=tmp;
+      QTY.forEach(function(row){var t=row[si]; row[si]=row[target]; row[target]=t;});
+      go('cad-serv'); toast('Serviço reordenado.');
+    }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
   }
   async function deleteServicoRow(si){
     var s=SERV[si]; if(!s)return;
@@ -1391,7 +1400,6 @@
     if(view==='ac-curvas'){sCurve('scv2',600,270,true);}
     if(view==='cr-matriz'){setupCrono();}
     if(view==='cr-cenarios'){cmpCurves();}
-    if(view==='cr-lb'){lineOfBalance();}
     if(view==='lp-medio'){renderMedio();}
     if(view==='lp-semana'){renderProg();}
     if(view==='ac-prod'){renderProd();}
@@ -1411,6 +1419,10 @@
         });
         var del=tr.querySelector('[data-del]');
         if(del)del.addEventListener('click',function(){deleteServicoRow(si);});
+        var up=tr.querySelector('[data-svcup]');
+        if(up)up.addEventListener('click',function(){moveServico(si,-1);});
+        var down=tr.querySelector('[data-svcdown]');
+        if(down)down.addEventListener('click',function(){moveServico(si,1);});
       });
       document.querySelectorAll('[data-predid]').forEach(function(chip){
         chip.addEventListener('click',function(){togglePredecessor(+chip.getAttribute('data-predsi'),chip.getAttribute('data-predid'));});
@@ -1539,31 +1551,6 @@
     s+='<path d="'+p(A)+'" fill="none" stroke="var(--c1)" stroke-width="2.5"/><path d="'+p(B)+'" fill="none" stroke="var(--c2)" stroke-width="2.5"/><path d="'+p(C)+'" fill="none" stroke="var(--c5)" stroke-width="2.5" stroke-dasharray="4 3"/>';
     el.innerHTML=s;
     document.getElementById('cmpc').insertAdjacentHTML('afterend','');
-  }
-
-  function lineOfBalance(){
-    var el=document.getElementById('lbc');if(!el)return;
-    var segs=buildSchedule(); var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
-    var nlot=LOTS.length;
-    var W=640,H=340,pl=44,pr=16,pt=16,pb=30,iw=W-pl-pr,ih=H-pt-pb;
-    var xx=function(w){return pl+iw*(w-1)/Math.max(1,tw-1);};
-    var yy=function(lotIdx){return pt+ih-ih*(lotIdx+0.5)/nlot;}; // L1 embaixo, crescendo p/ cima
-    var s='';
-    for(var g=1;g<=tw;g+=Math.ceil(tw/12)){s+='<line x1="'+xx(g)+'" y1="'+pt+'" x2="'+xx(g)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/><text class="axm" x="'+xx(g)+'" y="'+(H-9)+'" text-anchor="middle">S'+g+'</text>';}
-    for(var l=0;l<nlot;l++){s+='<line x1="'+pl+'" y1="'+yy(l)+'" x2="'+(W-pr)+'" y2="'+yy(l)+'" stroke="var(--line)" stroke-dasharray="2 3"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(l)+3)+'" text-anchor="end">'+LOTS[l]+'</text>';}
-    SERV.forEach(function(sv,si){
-      var pts=[]; for(var li=0;li<nlot;li++){var seg=segs.find(function(g){return g.si===si&&g.li===li;});if(seg)pts.push({li:li,s:seg.start,e:seg.start+seg.dur-1});}
-      if(pts.length<1)return; pts.sort(function(a,b){return a.li-b.li;});
-      var hex=svcColor(sv);
-      var dS=pts.map(function(p,i){return (i?'L':'M')+xx(p.s).toFixed(1)+' '+yy(p.li).toFixed(1);}).join(' ');
-      var dE=pts.map(function(p,i){return (i?'L':'M')+xx(p.e).toFixed(1)+' '+yy(p.li).toFixed(1);}).join(' ');
-      s+='<path d="'+dS+'" fill="none" stroke="'+hex+'" stroke-width="2.5"/>';
-      s+='<path d="'+dE+'" fill="none" stroke="'+hex+'" stroke-width="2.5" stroke-dasharray="4 3" opacity="0.65"/>';
-      pts.forEach(function(p){s+='<circle cx="'+xx(p.s).toFixed(1)+'" cy="'+yy(p.li).toFixed(1)+'" r="3" fill="'+hex+'"/>';});
-    });
-    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
-    var leg=document.getElementById('lbLeg');
-    if(leg)leg.innerHTML=SERV.map(function(x){return '<span><span class="swatch" style="background:'+svcColor(x)+'"></span>'+x.n+'</span>';}).join('');
   }
 
   /* ---- Cor por equipe (port do colors.ts do Lovable) ---- */
@@ -1736,7 +1723,7 @@
           var fixedDur=(o&&o.duration>0)?o.duration:undefined;
           var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
           segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
-            color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!o});
+            color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
           startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
           teamPos=packed.endPos;
         });
@@ -2105,12 +2092,12 @@
       var clearB=document.getElementById('clearAdjustsBtn');
       if(clearB)clearB.addEventListener('click',function(){
         if(!confirm('Remover todos os ajustes manuais deste cronograma? (precisa clicar em "Salvar ajustes" pra valer)'))return;
-        OVR={}; ADJ_DIRTY=true; renderCrono();
+        OVR={}; ADJ_PENDING={}; ADJ_DIRTY=true; renderCrono();
       });
       var saveB=document.getElementById('saveAdjustsBtn');
       if(saveB)saveB.addEventListener('click',async function(){
         saveB.disabled=true; saveB.textContent='Salvando…';
-        try{ await saveOverrides(); ADJ_DIRTY=false; toast('Ajustes salvos.'); renderCrono(); }
+        try{ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; toast('Ajustes salvos.'); renderCrono(); }
         catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); saveB.disabled=false; saveB.textContent='💾 Salvar ajustes'; }
       });
     }
@@ -2170,6 +2157,7 @@
         var si=d.si, kOrig=ovrKey(d.li,si), changed=false;
         if(d.currentStart!==d.startWeek&&kOrig){
           OVR[kOrig]=Object.assign({},OVR[kOrig],{startWeek:d.currentStart});
+          ADJ_PENDING[kOrig]=true;
           changed=true;
         }
         if(d.currentLi!==d.li){
@@ -2181,6 +2169,7 @@
             if(srcSeg&&dstSeg&&srcSeg.team!==dstSeg.team){
               OVR[kOrig]=Object.assign({},OVR[kOrig],{team:dstSeg.team});
               OVR[kDst]=Object.assign({},OVR[kDst],{team:srcSeg.team});
+              ADJ_PENDING[kOrig]=true; ADJ_PENDING[kDst]=true;
               changed=true;
             }
           }
@@ -2194,7 +2183,7 @@
       el.addEventListener('dblclick',function(){
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
         var k=ovrKey(li,si); if(!k||!OVR[k])return;
-        delete OVR[k]; ADJ_DIRTY=true; renderCrono();
+        delete OVR[k]; delete ADJ_PENDING[k]; ADJ_DIRTY=true; renderCrono();
       });
     });
   }
@@ -2270,6 +2259,7 @@
         var k=ovrKey(li,si); if(!k)return;
         if(cb.checked){ OVR[k]=Object.assign({},OVR[k],{team:team}); }
         else if(OVR[k]){ delete OVR[k].team; if(Object.keys(OVR[k]).length===0)delete OVR[k]; }
+        ADJ_PENDING[k]=true;
         ADJ_DIRTY=true;
         renderCrono();
       });
