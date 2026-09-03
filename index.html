@@ -496,6 +496,35 @@
     var r=await SB.from('apontamento_recursos').upsert({obra_id:obraId,recurso_id:recursoId,data_semana:dataSemana,quantidade:quantidade},{onConflict:'recurso_id,data_semana'});
     if(r.error)throw r.error;
   }
+  async function sbCreateCenario(obraId,patch){
+    await sbRequireSession();
+    var id=patch.id||newUuid();
+    var r=await SB.from('cenarios').insert(Object.assign({},patch,{id:id,obra_id:obraId}));
+    if(r.error)throw r.error;
+    return id;
+  }
+  async function sbUpdateCenario(id,patch){
+    await sbRequireSession();
+    var r=await SB.from('cenarios').update(patch).eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbDeleteCenario(id){
+    await sbRequireSession();
+    var r=await SB.from('cenarios').delete().eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbCreateProducao(obraId,patch){
+    await sbRequireSession();
+    var id=newUuid();
+    var r=await SB.from('producao_diaria').insert(Object.assign({id:id,obra_id:obraId},patch));
+    if(r.error)throw r.error;
+    return id;
+  }
+  async function sbDeleteProducao(id){
+    await sbRequireSession();
+    var r=await SB.from('producao_diaria').delete().eq('id',id);
+    if(r.error)throw r.error;
+  }
   async function sbLoadCadastro(obraId){
     var res=await Promise.all([
       SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos').eq('id',obraId).single(),
@@ -503,16 +532,20 @@
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId),
       SB.from('recursos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
-      SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId)
+      SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId),
+      SB.from('cenarios').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
+      SB.from('producao_diaria').select('*').eq('obra_id',obraId).order('data',{ascending:false})
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
-    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[], rec=res[4].data||[], apr=res[5].data||[];
+    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[], rec=res[4].data||[], apr=res[5].data||[], cen=res[6].data||[], prod=res[7].data||[];
     SERV=svc.map(function(r,i){return {id:r.id,n:r.nome,u:r.unidade||'un',c:PALVARS[i%6],hex:r.cor||'#64748b',eq:r.teams||1,p:String(r.produtividade||0),lag:r.lag_semanas||0,cfg:r.config||{}};});
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||''};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
+    CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,ovr:(r.ajustes_manuais&&typeof r.ajustes_manuais==='object')?r.ajustes_manuais:{},ordem:r.ordem||0,congeladoEm:r.congelado_em};});
+    window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     REC_DIRTY={}; REALIZADO_DIRTY={};
@@ -669,6 +702,7 @@
   var LOTS=['Lote 01','Lote 02','Lote 03','Lote 04','Lote 05','Lote 06'];
   var RECURSOS=[]; // catálogo de recursos (funções/equipamentos) da obra: {id,n,tipo,u}
   var REALIZADO_REC={}; // {"recursoId::data_semana(ISO)": quantidade}
+  var CENARIOS=[]; // {id,nome,tipo:'rascunho'|'baseline',revisao,ativo,ovr,ordem,congeladoEm}
   var REC_DIRTY={}; // {ri: true} — recursos com edição pendente
   var REALIZADO_DIRTY={}; // {"recursoId::data_semana": true} — apontamentos pendentes
   var OVR={}; // ajustes manuais: {"loteId::servicoId": {startWeek, team, duration, productivity}}
@@ -698,7 +732,7 @@
       ['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
     var tb=TB.map(function(t){var cls=(t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn';
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
-    tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Congelar como Rev00" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Congelar como Rev00</button>';
+    tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
 
     var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['medio','Médio prazo','lp-medio'],
       ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
@@ -710,7 +744,11 @@
     return head('Tempo-Caminho','Cronograma automático para obras rodoviárias — monte, importe, ajuste e exporte.','')+
     '<div class="card">'+
       '<div id="cronoToolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">'+tb+'</div>'+
-      '<div class="banner" style="margin-bottom:14px">Rascunho — você ainda está montando o cronograma. Quando estiver pronto, congele como <b>Rev00</b> para criar a baseline e o cronograma dinâmico de acompanhamento.</div>'+
+      '<div class="banner" style="margin-bottom:14px">'+(function(){
+        var b=activeBaseline();
+        return b?('Linha de base ativa: <b>'+b.revisao+'</b> — '+b.nome+'. Ajustes aqui não alteram a linha de base até você gerar uma nova revisão.'):
+          'Rascunho — você ainda está montando o cronograma. Quando estiver pronto, gere a <b>linha de base</b> (REV00) pra criar a referência de previsto e o histórico de revisões.';
+      })()+'</div>'+
       '<div class="subtabs" id="cronoTabs">'+tabs+'</div>'+
       '<div class="legend" id="matLeg" style="margin:12px 0"></div>'+
       '<div class="print-only print-head"><h2 id="printTitle"></h2><div class="note" id="printSub"></div></div>'+
@@ -1071,14 +1109,34 @@
       catalogoFuncoes+catalogoEquip+equipe+totais+servicoPR+grafico+realizadoHTML(hist);
   };
 
+  function scenarioStats(ovr){
+    var segs=scheduleWithOverrides(ovr), tw=0, peak=0;
+    segs.forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); });
+    for(var w=1;w<=tw;w++){
+      var teams=0;
+      segs.forEach(function(sg){ if(w>=sg.start&&w<sg.start+sg.dur&&(sg.wq[w-sg.start]||0)>0)teams++; });
+      peak=Math.max(peak,teams);
+    }
+    return {tw:tw,peak:peak};
+  }
   VIEWS['cr-cenarios']=function(){
-    var rows=[['Baseline (Rev00)','congelado 12/05','52 sem','9 equipes','<span class="pill good">baseline</span>'],
-      ['Cenário — +2 equipes terra','rascunho','47 sem','11 equipes','<span class="pill mut">rascunho</span>'],
-      ['Cenário — chuva estendida','rascunho','56 sem','9 equipes','<span class="pill mut">rascunho</span>']];
-    return head('Cenários','Simule alternativas de sequência/equipes e compare prazo e pico de recursos',impBtn()+'<button class="btn">Duplicar</button><button class="btn primary">+ Cenário</button>')+
-    '<div class="card" style="margin-bottom:14px"><div class="tbl-wrap"><table><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico</th><th></th></tr></thead><tbody>'+
-      rows.map(function(r){return '<tr><td><b>'+r[0]+'</b></td><td class="note">'+r[1]+'</td><td class="r mono">'+r[2]+'</td><td class="r mono">'+r[3]+'</td><td>'+r[4]+'</td></tr>';}).join('')+'</tbody></table></div></div>'+
-    '<div class="card"><div class="eyebrow">Comparação — Curvas S sobrepostas</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg></div>';
+    var liveStats=scenarioStats(OVR);
+    var liveRow='<tr style="background:var(--elev)"><td><b>Cronograma atual (ao vivo)</b></td><td><span class="pill mut">em edição</span></td>'+
+      '<td class="r mono">'+liveStats.tw+' sem</td><td class="r mono">'+liveStats.peak+' equipes</td>'+
+      '<td style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn primary" id="cnLiveBase">❄ Gerar linha de base</button></td></tr>';
+    var rows=CENARIOS.slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0);}).map(function(c){
+      var st=scenarioStats(c.ovr);
+      var estado=c.tipo==='baseline'?('<span class="pill '+(c.ativo?'good':'mut')+'">'+c.revisao+(c.ativo?' · ativa':'')+'</span>'):'<span class="pill mut">rascunho</span>';
+      var acoes='<button class="btn" data-cnload="'+c.id+'">Carregar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
+        (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button><button class="iconbtn" data-cndel="'+c.id+'">✕</button>':'');
+      return '<tr><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
+    }).join('');
+    return head('Cenários','Salve alternativas de sequenciamento/equipes, compare prazo e pico de recursos, e gere linhas de base (REV00, REV01...) ao longo da obra.',impBtn()+'<button class="btn primary" id="cnNovo">+ Cenário</button>')+
+    '<div class="card" style="margin-bottom:14px"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
+      liveRow+rows+'</tbody></table></div>'+
+      (CENARIOS.length?'':'<div class="note" style="margin-top:8px">Nenhum cenário salvo ainda. Clique em "+ Cenário" pra guardar um snapshot do cronograma atual, ou em "❄ Gerar linha de base" na linha acima pra criar a primeira revisão (REV00).</div>')+
+    '</div>'+
+    '<div class="card"><div class="eyebrow">Comparação — Curvas S sobrepostas (total da obra)</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária).</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div></div>';
   };
 
   VIEWS['ac-curvas']=function(){
@@ -1089,9 +1147,10 @@
     toggles+='<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;margin:0 12px 6px 0;cursor:pointer;font-weight:700"><input type="checkbox" data-cvtoggle="total"'+(hidden.total?'':' checked')+'><span class="swatch" style="background:var(--ink)"></span>Total</label>';
     return head('Curva S','Avanço acumulado previsto × realizado (%), por serviço e total.',impBtn())+
     '<div class="card"><div style="margin-bottom:8px">'+(SERV.length?toggles:'')+'</div>'+
+    '<div class="note" id="cvRef" style="margin-bottom:10px"></div>'+
     '<div class="grid g4" id="cvCards" style="margin-bottom:14px"></div>'+
     '<svg class="chart" id="scv2" viewBox="0 0 700 320"></svg>'+
-    '<div class="note" style="margin-top:6px">Linha cheia = previsto (do cronograma atual); a linha tracejada vermelha marca a semana de hoje. Realizado viria dos apontamentos de produção — sem apontamento ainda.</div></div>';
+    '<div class="note" style="margin-top:6px">Linha <b>tracejada</b> = previsto (linha de base ativa, ou o cronograma atual se nenhuma foi gerada). Linha <b>cheia</b> = realizado (apontamentos de Produção Diária). A linha vertical vermelha marca a semana de hoje.</div></div>';
   };
 
   VIEWS['ac-prod']=function(){
@@ -1675,10 +1734,7 @@
 
   /* ---- Produção Diária: lista / tempo-caminho / matriz de estacas ---- */
   window._prodMode=window._prodMode||'lista';
-  window.PROD_LIST=window.PROD_LIST||[
-    {data:'2026-08-26',serv:1,lote:2,qtd:8420},{data:'2026-08-26',serv:3,lote:1,qtd:142},
-    {data:'2026-08-26',serv:2,lote:0,qtd:610},{data:'2026-08-25',serv:1,lote:2,qtd:7900}
-  ];
+  window.PROD_LIST=window.PROD_LIST||[]; // {id,data,servId,loteId,qtd} — persistido em producao_diaria
   function estacasHTML(){
     window._estDe=window._estDe==null?0:window._estDe; window._estAte=window._estAte==null?500:window._estAte;
     var est=[]; for(var m=window._estDe;m<=window._estAte;m+=20)est.push(m);
@@ -1696,15 +1752,19 @@
     var tabs='<div class="subtabs" style="margin-bottom:14px">'+[['lista','Lista'],['tc','Tempo-Caminho'],['matriz','Matriz de estacas']].map(function(t){return '<button class="subtab'+(window._prodMode===t[0]?' active':'')+'" data-pmode="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>';
     var content='';
     if(window._prodMode==='lista'){
-      var svcOpts=SERV.map(function(s,i){return '<option value="'+i+'">'+s.n+'</option>';}).join('');
-      var lotOpts=LOTS.map(function(l,i){return '<option value="'+i+'">'+l+'</option>';}).join('');
+      var svcOpts=SERV.map(function(s){return '<option value="'+s.id+'">'+s.n+'</option>';}).join('');
+      var lotOpts=LOTS.map(function(l,i){var id=(window._LOTIDS||[])[i]||''; return '<option value="'+id+'">'+l+'</option>';}).join('');
       var form='<div class="assign" style="margin:0 0 14px"><div class="mpgrid">'+
         fwrap('Data','<input id="pdData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
         fwrap('Serviço','<select id="pdServ" class="einp" style="width:100%">'+svcOpts+'</select>')+
         fwrap('Lote','<select id="pdLote" class="einp" style="width:100%">'+lotOpts+'</select>')+
         fwrap('Quantidade','<input id="pdQtd" class="einp" type="number" style="width:100%" placeholder="0">')+
         '</div><div style="margin-top:10px"><button class="btn primary" id="pdAdd">+ Lançar produção</button></div></div>';
-      var rows=window.PROD_LIST.map(function(r,i){return '<tr><td class="mono">'+brDate(r.data)+'</td><td>'+SERV[r.serv].n+'</td><td>'+LOTS[r.lote]+'</td><td class="r num">'+fmtBR(r.qtd)+' '+SERV[r.serv].u+'</td><td><button class="iconbtn" data-pddel="'+i+'">✕</button></td></tr>';}).join('');
+      var rows=window.PROD_LIST.map(function(r){
+        var sv=SERV.filter(function(x){return x.id===r.servId;})[0];
+        var li=(window._LOTIDS||[]).indexOf(r.loteId), loteName=li>=0?LOTS[li]:'—';
+        return '<tr><td class="mono">'+brDate(r.data)+'</td><td>'+(sv?sv.n:'—')+'</td><td>'+loteName+'</td><td class="r num">'+fmtBR(r.qtd)+' '+(sv?sv.u:'')+'</td><td><button class="iconbtn" data-pddel="'+r.id+'">✕</button></td></tr>';
+      }).join('');
       content=form+'<div class="card"><div class="eyebrow">Lançamentos</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Data</th><th>Serviço</th><th>Lote</th><th class="r">Quantidade</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
     } else if(window._prodMode==='tc'){
       content='<div class="banner" style="margin-bottom:12px">Modo <b>Tempo-Caminho</b>: clique numa célula (semana × lote) para lançar o realizado direto na matriz.</div>'+matrixTableHTML(false);
@@ -1712,8 +1772,32 @@
     root.innerHTML=tabs+content;
     if(window._prodMode==='tc')wireMatrixZoom();
     root.querySelectorAll('[data-pmode]').forEach(function(b){b.addEventListener('click',function(){window._prodMode=b.getAttribute('data-pmode');renderProd();});});
-    var add=document.getElementById('pdAdd');if(add)add.addEventListener('click',function(){window.PROD_LIST.unshift({data:document.getElementById('pdData').value||todayISO(),serv:+document.getElementById('pdServ').value,lote:+document.getElementById('pdLote').value,qtd:+document.getElementById('pdQtd').value||0});renderProd();});
-    root.querySelectorAll('[data-pddel]').forEach(function(b){b.addEventListener('click',function(){window.PROD_LIST.splice(+b.getAttribute('data-pddel'),1);renderProd();});});
+    var add=document.getElementById('pdAdd');
+    if(add)add.addEventListener('click',async function(){
+      if(!selectedObra)return;
+      var data=document.getElementById('pdData').value||todayISO();
+      var servId=document.getElementById('pdServ').value, loteId=document.getElementById('pdLote').value;
+      var qtd=+document.getElementById('pdQtd').value||0;
+      if(!servId||!loteId||qtd<=0)return;
+      add.disabled=true;
+      try{
+        var id=await sbCreateProducao(selectedObra.id,{servico_id:servId,lote_id:loteId,data:data,quantidade:qtd});
+        window.PROD_LIST.unshift({id:id,data:data,servId:servId,loteId:loteId,qtd:qtd});
+        renderProd(); toast('Produção lançada.');
+      }catch(e){ alert('Falha ao lançar: '+((e&&e.message)||e)); }
+      add.disabled=false;
+    });
+    root.querySelectorAll('[data-pddel]').forEach(function(b){
+      b.addEventListener('click',async function(){
+        var id=b.getAttribute('data-pddel');
+        if(!confirm('Excluir este lançamento?'))return;
+        try{
+          await sbDeleteProducao(id);
+          window.PROD_LIST=window.PROD_LIST.filter(function(r){return r.id!==id;});
+          renderProd();
+        }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+      });
+    });
     var ea=document.getElementById('estApply');if(ea)ea.addEventListener('click',function(){window._estDe=+document.getElementById('estDe').value||0;window._estAte=Math.max(window._estDe+20,+document.getElementById('estAte').value||500);renderProd();});
   }
 
@@ -1749,7 +1833,63 @@
       });
     }
     if(view==='cr-matriz'){setupCrono();}
-    if(view==='cr-cenarios'){cmpCurves();}
+    if(view==='cr-cenarios'){
+      cmpCurves();
+      var novoCn=document.getElementById('cnNovo');
+      if(novoCn)novoCn.addEventListener('click',async function(){
+        if(!selectedObra)return;
+        var nome=prompt('Nome do cenário:','Cenário '+(CENARIOS.filter(function(c){return c.tipo==='rascunho';}).length+1));
+        if(nome==null)return;
+        novoCn.disabled=true;
+        try{
+          var snap=JSON.parse(JSON.stringify(OVR));
+          var id=await sbCreateCenario(selectedObra.id,{nome:nome||'Cenário',tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
+          CENARIOS.push({id:id,nome:nome||'Cenário',tipo:'rascunho',revisao:null,ativo:false,ovr:snap,ordem:CENARIOS.length,congeladoEm:null});
+          go('cr-cenarios'); toast('Cenário salvo.');
+        }catch(e){ alert('Falha ao salvar cenário: '+((e&&e.message)||e)); }
+        novoCn.disabled=false;
+      });
+      var liveBase=document.getElementById('cnLiveBase');
+      if(liveBase)liveBase.addEventListener('click',function(){ gerarLinhaDeBase(OVR,null); });
+      document.querySelectorAll('[data-cnload]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnload');})[0]; if(!c)return;
+          if(hasAnyDirty()&&!confirm('Há alterações não salvas no cronograma atual. Carregar este cenário substitui o que está em edição agora (o que já foi salvo no banco não é perdido). Continuar?'))return;
+          OVR=JSON.parse(JSON.stringify(c.ovr||{})); ADJ_DIRTY=true; ADJ_PENDING={};
+          toast('Cenário "'+c.nome+'" carregado no editor.');
+          go('cr-matriz');
+        });
+      });
+      document.querySelectorAll('[data-cndup]').forEach(function(b){
+        b.addEventListener('click',async function(){
+          var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cndup');})[0]; if(!c||!selectedObra)return;
+          var nome=prompt('Nome da cópia:',c.nome+' (cópia)'); if(nome==null)return;
+          try{
+            var snap=JSON.parse(JSON.stringify(c.ovr||{}));
+            var id=await sbCreateCenario(selectedObra.id,{nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
+            CENARIOS.push({id:id,nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',revisao:null,ativo:false,ovr:snap,ordem:CENARIOS.length,congeladoEm:null});
+            go('cr-cenarios'); toast('Cenário duplicado.');
+          }catch(e){ alert('Falha ao duplicar: '+((e&&e.message)||e)); }
+        });
+      });
+      document.querySelectorAll('[data-cnbase]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var id=b.getAttribute('data-cnbase'), c=CENARIOS.filter(function(x){return x.id===id;})[0]; if(!c)return;
+          gerarLinhaDeBase(c.ovr,id);
+        });
+      });
+      document.querySelectorAll('[data-cndel]').forEach(function(b){
+        b.addEventListener('click',async function(){
+          var id=b.getAttribute('data-cndel');
+          if(!confirm('Excluir este cenário (rascunho)?'))return;
+          try{
+            await sbDeleteCenario(id);
+            CENARIOS=CENARIOS.filter(function(x){return x.id!==id;});
+            go('cr-cenarios');
+          }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+        });
+      });
+    }
     if(view==='lp-medio'){renderMedio();}
     if(view==='lp-semana'){renderProg();}
     if(view==='ac-prod'){renderProd();}
@@ -1982,7 +2122,9 @@
   }
 
   function curvaSData(){
-    var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    var baseline=activeBaseline();
+    var segs=baseline?scheduleWithOverrides(baseline.ovr):buildSchedule();
+    var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
     var weekly=[]; for(var w=0;w<=tw;w++){weekly[w]=SERV.map(function(){return 0;});}
     segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ weekly[sg.start+i][sg.si]+=sg.wq[i]||0; } });
     var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
@@ -1997,9 +2139,34 @@
       grandAccum+=weekly[w2].reduce(function(a,b){return a+b;},0);
       totalSeries.push(grandTotal>0?(grandAccum/grandTotal*100):0);
     }
+    // realizado: apontamentos reais de Produção Diária, agregados na semana de trabalho correspondente à data
+    var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
+    var weekIdxCache={};
+    (window.PROD_LIST||[]).forEach(function(r){
+      var mon=mondayOfIso(r.data), w4=weekIdxCache[mon];
+      if(w4===undefined){
+        w4=null;
+        for(var wi=1;wi<=tw;wi++){ if(mondayOf(wi).toISOString().slice(0,10)===mon){w4=wi;break;} }
+        weekIdxCache[mon]=w4;
+      }
+      if(w4==null)return;
+      var si=null; SERV.forEach(function(s,i){if(s.id===r.servId)si=i;});
+      if(si==null)return;
+      realWeekly[w4][si]+=r.qtd||0;
+    });
+    var realSeries={}; SERV.forEach(function(s,si){realSeries[si]=[0];});
+    var realTotalSeries=[0], raccum=SERV.map(function(){return 0;}), rgrandAccum=0;
+    for(var w5=1;w5<=tw;w5++){
+      SERV.forEach(function(s,si){
+        raccum[si]+=realWeekly[w5][si]||0;
+        realSeries[si].push(totalByServ[si]>0?(raccum[si]/totalByServ[si]*100):0);
+      });
+      rgrandAccum+=realWeekly[w5].reduce(function(a,b){return a+b;},0);
+      realTotalSeries.push(grandTotal>0?(rgrandAccum/grandTotal*100):0);
+    }
     var today=new Date(); today.setHours(0,0,0,0);
     var hojeW=0; for(var i=1;i<=tw;i++){ if(mondayOf(i)<=today)hojeW=i; else break; }
-    return {tw:tw,series:series,totalSeries:totalSeries,hojeW:hojeW};
+    return {tw:tw,series:series,totalSeries:totalSeries,realSeries:realSeries,realTotalSeries:realTotalSeries,hojeW:hojeW,baseline:baseline};
   }
   function sCurve(id,data){
     var el=document.getElementById(id); if(!el)return;
@@ -2017,9 +2184,14 @@
     var hidden=window._curvaSHidden||{};
     SERV.forEach(function(sv,si){
       if(hidden[si])return;
-      s+='<path d="'+path(data.series[si])+'" fill="none" stroke="'+svcColor(sv)+'" stroke-width="2"/>';
+      var col=svcColor(sv);
+      s+='<path d="'+path(data.series[si])+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-dasharray="6 4"/>';
+      s+='<path d="'+path(data.realSeries[si])+'" fill="none" stroke="'+col+'" stroke-width="2.25"/>';
     });
-    if(!hidden.total)s+='<path d="'+path(data.totalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.5"/>';
+    if(!hidden.total){
+      s+='<path d="'+path(data.totalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.5" stroke-dasharray="6 4"/>';
+      s+='<path d="'+path(data.realTotalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.75"/>';
+    }
     if(data.hojeW>0&&data.hojeW<=tw){
       var hx=xx(data.hojeW);
       s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--crit)" stroke-width="1.5" stroke-dasharray="4 3"/>'+
@@ -2029,18 +2201,21 @@
   }
   function renderCurvaS(){
     var data=curvaSData(), hidden=window._curvaSHidden||{};
+    var refEl=document.getElementById('cvRef');
+    if(refEl)refEl.innerHTML=data.baseline?('Previsto: <b>linha de base '+data.baseline.revisao+'</b> — '+data.baseline.nome+(data.baseline.congeladoEm?(' (congelada em '+brDate(data.baseline.congeladoEm.slice(0,10))+')'):'')):
+      'Previsto: <b>cronograma atual</b> (nenhuma linha de base gerada ainda — congele uma em Cenários ou no Tempo-Caminho).';
     var cardsEl=document.getElementById('cvCards');
     if(cardsEl){
       var atWk=data.hojeW>0?'S'+isoWeek(mondayOf(data.hojeW)):'antes do início';
       var html='';
       SERV.forEach(function(s,si){
         if(hidden[si])return;
-        var pct=(data.series[si]&&data.series[si][data.hojeW])||0;
-        html+='<div class="kpi"><div class="stripe" style="background:'+svcColor(s)+'"></div><div class="lab">'+s.n+'</div><div class="val num">'+pct.toFixed(1)+'%</div><div class="foot">previsto até '+atWk+'</div></div>';
+        var p=(data.series[si]&&data.series[si][data.hojeW])||0, r=(data.realSeries[si]&&data.realSeries[si][data.hojeW])||0;
+        html+='<div class="kpi"><div class="stripe" style="background:'+svcColor(s)+'"></div><div class="lab">'+s.n+'</div><div class="val num">'+r.toFixed(1)+'%</div><div class="foot">realizado · previsto '+p.toFixed(1)+'% até '+atWk+'</div></div>';
       });
       if(!hidden.total){
-        var tp=(data.totalSeries&&data.totalSeries[data.hojeW])||0;
-        html+='<div class="kpi"><div class="stripe" style="background:var(--ink)"></div><div class="lab">Total</div><div class="val num">'+tp.toFixed(1)+'%</div><div class="foot">previsto até '+atWk+'</div></div>';
+        var tp=(data.totalSeries&&data.totalSeries[data.hojeW])||0, tr=(data.realTotalSeries&&data.realTotalSeries[data.hojeW])||0;
+        html+='<div class="kpi"><div class="stripe" style="background:var(--ink)"></div><div class="lab">Total</div><div class="val num">'+tr.toFixed(1)+'%</div><div class="foot">realizado · previsto '+tp.toFixed(1)+'% até '+atWk+'</div></div>';
       }
       cardsEl.innerHTML=html||'<div class="note">Marque ao menos um serviço acima pra ver o percentual.</div>';
     }
@@ -2107,14 +2282,42 @@
 
   function cmpCurves(){
     var el=document.getElementById('cmpc');if(!el)return;
-    var W=600,H=200,pl=30,pr=12,pt=10,pb=24,iw=W-pl-pr,ih=H-pt-pb;
-    var A=[5,14,26,40,54,66,77,86,93,100],B=[6,18,33,49,64,78,90,100,100,100],C=[4,11,20,31,43,54,64,73,82,100];
-    var n=A.length,xx=function(i){return pl+iw*i/(n-1);},yy=function(v){return pt+ih-ih*v/100;};
-    function p(a){return a.map(function(v,i){return(i?'L':'M')+xx(i).toFixed(1)+' '+yy(v).toFixed(1);}).join(' ');}
-    var s='';for(var g=0;g<=100;g+=50)s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/>';
-    s+='<path d="'+p(A)+'" fill="none" stroke="var(--c1)" stroke-width="2.5"/><path d="'+p(B)+'" fill="none" stroke="var(--c2)" stroke-width="2.5"/><path d="'+p(C)+'" fill="none" stroke="var(--c5)" stroke-width="2.5" stroke-dasharray="4 3"/>';
-    el.innerHTML=s;
-    document.getElementById('cmpc').insertAdjacentHTML('afterend','');
+    var legEl=document.getElementById('cmpcLeg');
+    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
+    var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+    function totalSeriesFor(ovr){
+      var segs=scheduleWithOverrides(ovr), tw=1;
+      segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+      var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=0;
+      segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++)weekly[sg.start+i]+=sg.wq[i]||0; });
+      var out=[0], acc=0;
+      for(var w2=1;w2<=tw;w2++){ acc+=weekly[w2]||0; out.push(grandTotal>0?(acc/grandTotal*100):0); }
+      return {tw:tw,series:out};
+    }
+    var palette=['#1e3a8a','#0ea5e9','#65a30d','#f97316','#7c3aed','#dc2626','#14b8a6','#a855f7'];
+    var lines=[{nome:'Cronograma atual',ovr:OVR,color:'var(--muted)'}];
+    CENARIOS.forEach(function(c,ci){ lines.push({nome:c.nome+(c.tipo==='baseline'?(' — '+c.revisao):''),ovr:c.ovr,color:palette[ci%palette.length]}); });
+    if(!SERV.length||!lines.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
+    var computed=lines.map(function(l){return Object.assign({},l,totalSeriesFor(l.ovr));});
+    var maxTw=1; computed.forEach(function(c){maxTw=Math.max(maxTw,c.tw);});
+    var realWeekly=[]; for(var w3=0;w3<=maxTw;w3++)realWeekly[w3]=0;
+    (window.PROD_LIST||[]).forEach(function(r){
+      var mon=mondayOfIso(r.data), w4=null;
+      for(var wi=1;wi<=maxTw;wi++){ if(mondayOf(wi).toISOString().slice(0,10)===mon){w4=wi;break;} }
+      if(w4!=null)realWeekly[w4]+=r.qtd||0;
+    });
+    var realSeries=[0], racc=0;
+    for(var w5=1;w5<=maxTw;w5++){ racc+=realWeekly[w5]||0; realSeries.push(grandTotal>0?(racc/grandTotal*100):0); }
+    var W=620,H=220,pl=34,pr=10,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb, n=maxTw+1;
+    var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
+    function path(a){var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
+    var s='';
+    for(var g=0;g<=100;g+=25)s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(g)+3)+'" text-anchor="end">'+g+'</text>';
+    computed.forEach(function(c){ s+='<path d="'+path(c.series)+'" fill="none" stroke="'+c.color+'" stroke-width="2" stroke-dasharray="6 4"/>'; });
+    s+='<path d="'+path(realSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.5"/>';
+    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+    if(legEl)legEl.innerHTML=computed.map(function(c){return '<span><span class="swatch" style="background:'+c.color+'"></span>'+c.nome+' — previsto</span>';}).join('')+
+      '<span><span class="swatch" style="background:var(--ink)"></span>Realizado (real)</span>';
   }
 
   /* ---- Cor por equipe (port do colors.ts do Lovable) ---- */
@@ -2298,6 +2501,42 @@
   async function saveOverrides(){
     if(!selectedObra)return;
     await sbUpdateObra(selectedObra.id,{ajustes_manuais:OVR});
+  }
+  /** Roda buildSchedule() com um snapshot de ajustes manuais diferente do OVR ao vivo (cenários/linha de base), sem alterar o estado global. */
+  function scheduleWithOverrides(snapshot){
+    var saved=OVR;
+    OVR=snapshot||{};
+    var segs;
+    try{ segs=buildSchedule(); } finally { OVR=saved; }
+    return segs;
+  }
+  function activeBaseline(){
+    return CENARIOS.filter(function(c){return c.tipo==='baseline'&&c.ativo;})[0]||null;
+  }
+  function nextRevisionLabel(){
+    var n=CENARIOS.filter(function(c){return c.tipo==='baseline';}).length;
+    return 'REV'+String(n).padStart(2,'0');
+  }
+  async function gerarLinhaDeBase(ajustesSnapshot,cenarioIdExistente){
+    if(!selectedObra)return;
+    var rev=nextRevisionLabel();
+    if(!confirm('Gerar a linha de base '+rev+' a partir deste cronograma?\n\nIsso fica registrado no histórico e passa a ser a referência (previsto) da Curva S até que uma nova revisão seja gerada.'))return;
+    try{
+      var atual=activeBaseline();
+      if(atual){ await sbUpdateCenario(atual.id,{ativo:false}); atual.ativo=false; }
+      if(cenarioIdExistente){
+        var patch={tipo:'baseline',revisao:rev,ativo:true,congelado_em:new Date().toISOString()};
+        await sbUpdateCenario(cenarioIdExistente,patch);
+        var c=CENARIOS.filter(function(x){return x.id===cenarioIdExistente;})[0];
+        if(c)Object.assign(c,{tipo:'baseline',revisao:rev,ativo:true,congeladoEm:patch.congelado_em});
+      }else{
+        var snap=JSON.parse(JSON.stringify(ajustesSnapshot||{}));
+        var id=await sbCreateCenario(selectedObra.id,{nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,ajustes_manuais:snap,ordem:CENARIOS.length,congelado_em:new Date().toISOString()});
+        CENARIOS.push({id:id,nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,ovr:snap,ordem:CENARIOS.length,congeladoEm:new Date().toISOString()});
+      }
+      toast('Linha de base '+rev+' gerada.');
+      go(current);
+    }catch(e){ alert('Falha ao gerar linha de base: '+((e&&e.message)||e)); }
   }
 
   /* ================= HISTOGRAMA DE RECURSOS ================= */
@@ -3002,6 +3241,7 @@
         if(a==='exp-pdf'){exportPdf();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='rev00'){gerarLinhaDeBase(OVR,null);return;}
         if(a==='imp-mpp'||a==='imp-img'){toast(b.getAttribute('data-label')+' — ainda não implementado nesta etapa.');return;}
         toast(b.getAttribute('data-label')+' — função do app (mockup visual)');
       });
