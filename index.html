@@ -961,7 +961,7 @@
       go('cad-lotes'); toast('Lote reordenado.');
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
   }
-  async function reorderLote(fromLi,toLi){
+  async function reorderLote(fromLi,toLi,onDone){
     if(fromLi==null||toLi==null||fromLi===toLi)return;
     var origIds=(window._LOTIDS||[]).slice();
     var names=LOTS.slice(), lotIds=origIds.slice(), qtyRows=QTY.slice();
@@ -971,7 +971,8 @@
     try{
       for(var i=0;i<lotIds.length;i++){ if(lotIds[i]!==origIds[i])await sbUpdateLote(lotIds[i],{ordem:i+1}); }
       LOTS=names; window._LOTIDS=lotIds; QTY=qtyRows; LOT_SELECTED={};
-      go('cad-lotes'); toast('Lote reordenado.');
+      toast('Lote reordenado.');
+      (onDone||function(){go('cad-lotes');})();
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
   }
   async function deleteSelectedLotes(){
@@ -2025,7 +2026,8 @@
       for(var i=0;i<sg.dur;i++){var w=sg.start+i;var k=w+'::'+sg.li;
         (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i],isStart:i===0,isEnd:i===sg.dur-1,w:w});}
     });
-    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l){return '<th class="lot">'+l+'</th>';}).join('');
+    var canDragCols=(window._cronoTab==='ajuste');
+    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l,li){return '<th class="lot"'+(canDragCols?' draggable="true" data-lotcol="'+li+'" style="cursor:grab" title="Arraste pra reordenar"':'')+'>'+l+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
     var calRows=buildCalendarRows(totalWeeks);
     var body='';
@@ -2166,6 +2168,18 @@
     if(_drag&&_drag.hlCol)_drag.hlCol.classList.remove('tcm-dropcol');
   }
   function wireDragMatrix(){
+    document.querySelectorAll('th[data-lotcol]').forEach(function(th){
+      th.addEventListener('dragstart',function(e){ window._lotDragSrc=+th.getAttribute('data-lotcol'); try{e.dataTransfer.effectAllowed='move';}catch(err){} th.style.opacity='.5'; });
+      th.addEventListener('dragend',function(){ th.style.opacity=''; });
+      th.addEventListener('dragover',function(e){ e.preventDefault(); th.style.outline='2px dashed var(--accent)'; });
+      th.addEventListener('dragleave',function(){ th.style.outline=''; });
+      th.addEventListener('drop',function(e){
+        e.preventDefault(); th.style.outline='';
+        var src=window._lotDragSrc; window._lotDragSrc=null;
+        var target=+th.getAttribute('data-lotcol');
+        if(src!=null)reorderLote(src,target,renderCrono);
+      });
+    });
     document.querySelectorAll('.tcm-seg[data-li]').forEach(function(el){
       el.addEventListener('pointerdown',function(e){
         e.preventDefault();
