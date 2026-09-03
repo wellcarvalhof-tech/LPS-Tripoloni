@@ -781,10 +781,15 @@
   };
 
   VIEWS['ac-curvas']=function(){
-    return head('Curva S','Avanço acumulado previsto × realizado, com projeção de tendência',
-      impBtn()+'<button class="btn">Exportar</button>')+
-    '<div class="card"><div class="legend" style="margin-bottom:10px"><span><span class="swatch" style="background:var(--c1)"></span>Previsto</span><span><span class="swatch" style="background:var(--accent)"></span>Realizado</span><span><span class="swatch" style="background:var(--muted)"></span>Tendência</span></div>'+
-      '<svg class="chart" id="scv2" viewBox="0 0 640 300"></svg></div>';
+    var hidden=window._curvaSHidden||{};
+    var toggles=SERV.map(function(s,si){
+      return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;margin:0 12px 6px 0;cursor:pointer"><input type="checkbox" data-cvtoggle="'+si+'"'+(hidden[si]?'':' checked')+'><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</label>';
+    }).join('');
+    toggles+='<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;margin:0 12px 6px 0;cursor:pointer;font-weight:700"><input type="checkbox" data-cvtoggle="total"'+(hidden.total?'':' checked')+'><span class="swatch" style="background:var(--ink)"></span>Total</label>';
+    return head('Curva S','Avanço acumulado previsto × realizado (%), por serviço e total.',impBtn())+
+    '<div class="card"><div style="margin-bottom:8px">'+(SERV.length?toggles:'')+'</div>'+
+    '<svg class="chart" id="scv2" viewBox="0 0 700 320"></svg>'+
+    '<div class="note" style="margin-top:6px">Linha cheia = previsto (do cronograma atual). Realizado (tracejado) viria dos apontamentos de produção — sem apontamento ainda.</div></div>';
   };
 
   VIEWS['ac-prod']=function(){
@@ -1430,7 +1435,17 @@
   /* ---------- charts after render ---------- */
   function afterRender(view){
     if(view==='torre'){setupTorre();}
-    if(view==='ac-curvas'){sCurve('scv2',600,270,true);}
+    if(view==='ac-curvas'){
+      sCurve('scv2');
+      document.querySelectorAll('[data-cvtoggle]').forEach(function(cb){
+        cb.addEventListener('change',function(){
+          var key=cb.getAttribute('data-cvtoggle'); key=(key==='total')?'total':+key;
+          window._curvaSHidden=window._curvaSHidden||{};
+          if(cb.checked)delete window._curvaSHidden[key]; else window._curvaSHidden[key]=true;
+          sCurve('scv2');
+        });
+      });
+    }
     if(view==='cr-matriz'){setupCrono();}
     if(view==='cr-cenarios'){cmpCurves();}
     if(view==='lp-medio'){renderMedio();}
@@ -1561,21 +1576,39 @@
     }
   }
 
-  function sCurve(id,W,H,withTrend){
+  function sCurve(id){
     var el=document.getElementById(id); if(!el)return;
-    var prev=[8,16,25,35,46,57,66,74,82,90,96,100], real=[7,14,22,30,38,45,47,null,null,null,null,null];
-    var trend=[null,null,null,null,null,null,47,52,58,64,70,76];
-    var n=prev.length,pl=34,pr=12,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb;
-    var xx=function(i){return pl+iw*i/(n-1);},yy=function(v){return pt+ih-ih*v/100;};
+    var W=700,H=320,pl=38,pr=12,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb;
+    var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
+    var weekly=[]; for(var w=0;w<=tw;w++){weekly[w]=SERV.map(function(){return 0;});}
+    segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ weekly[sg.start+i][sg.si]+=sg.wq[i]||0; } });
+    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
+    var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+    var series={}; SERV.forEach(function(s,si){series[si]=[0];});
+    var totalSeries=[0], accum=SERV.map(function(){return 0;}), grandAccum=0;
+    for(var w2=1;w2<=tw;w2++){
+      SERV.forEach(function(s,si){
+        accum[si]+=weekly[w2][si]||0;
+        series[si].push(totalByServ[si]>0?(accum[si]/totalByServ[si]*100):0);
+      });
+      grandAccum+=weekly[w2].reduce(function(a,b){return a+b;},0);
+      totalSeries.push(grandTotal>0?(grandAccum/grandTotal*100):0);
+    }
+    var n=tw+1;
+    var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
     var s='';
     for(var g=0;g<=100;g+=25){s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(g)+3)+'" text-anchor="end">'+g+'</text>';}
-    function path(a){var d='',st=false;for(var i=0;i<a.length;i++){if(a[i]==null)continue;d+=(st?'L':'M')+xx(i).toFixed(1)+' '+yy(a[i]).toFixed(1)+' ';st=true;}return d;}
-    s+='<path d="'+path(prev)+'" fill="none" stroke="var(--c1)" stroke-width="2.5"/>';
-    if(withTrend)s+='<path d="'+path(trend)+'" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="3 4"/>';
-    s+='<path d="'+path(real)+'" fill="none" stroke="var(--accent)" stroke-width="3"/>';
-    s+='<circle cx="'+xx(6)+'" cy="'+yy(47)+'" r="4" fill="var(--accent)"/>';
-    for(var i=0;i<n;i++){if(i%2===0)s+='<text class="axm" x="'+xx(i)+'" y="'+(H-8)+'" text-anchor="middle">S'+(28+i)+'</text>';}
-    el.setAttribute('viewBox','0 0 '+W+' '+H);el.innerHTML=s;
+    var stepLbl=Math.max(1,Math.ceil(n/14));
+    for(var i=0;i<n;i+=stepLbl){s+='<text class="axm" x="'+xx(i)+'" y="'+(H-8)+'" text-anchor="middle">'+(i===0?'S0':'S'+i)+'</text>';}
+    function path(a){var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
+    var hidden=window._curvaSHidden||{};
+    SERV.forEach(function(sv,si){
+      if(hidden[si])return;
+      s+='<path d="'+path(series[si])+'" fill="none" stroke="'+svcColor(sv)+'" stroke-width="2"/>';
+    });
+    if(!hidden.total)s+='<path d="'+path(totalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.5"/>';
+    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
 
   function ppcBars(id){
@@ -2113,9 +2146,27 @@
       kpi('accent','Término previsto',fmtDate(mondayOf(tw)),'semana S'+isoWeek(mondayOf(tw)))+
       kpi('good','Pico de frentes',pico,'atividades simultâneas')+
       kpi('warn','Serviços',SERV.length,LOTS.length+' lotes')+'</div>';
-    var rows=SERV.map(function(s,si){var tot=0;LOTS.forEach(function(l,li){tot+=QTY[li][si];});
-      return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td><td class="mono">'+s.u+'</td><td class="r num">'+fmtBR(tot)+'</td><td class="r num">'+s.eq+'</td></tr>';}).join('');
-    return kpis+'<div class="card" style="box-shadow:none"><div class="eyebrow">Totais por serviço</div><div class="tbl-wrap"><table><thead><tr><th>Serviço</th><th>Unidade</th><th class="r">Quantidade total</th><th class="r">Equipes</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    if(!SERV.length||!tw)return kpis+'<div class="note">Cadastre serviços e quantidades pra ver o quantitativo semanal.</div>';
+    var weekly=[]; for(var w=0;w<=tw;w++){weekly[w]=SERV.map(function(){return 0;});}
+    segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ weekly[sg.start+i][sg.si]+=sg.wq[i]||0; } });
+    var accum=SERV.map(function(){return 0;}), totalAccum=0, rows='';
+    for(var w2=1;w2<=tw;w2++){
+      var d=mondayOf(w2), rowTotal=0, cells='';
+      SERV.forEach(function(s,si){
+        var v=weekly[w2][si]||0; accum[si]+=v; rowTotal+=v;
+        cells+='<td class="r mono">'+(v>0?fmtBR(v):'—')+'</td><td class="r mono" style="color:var(--muted)">'+fmtBR(accum[si])+'</td>';
+      });
+      totalAccum+=rowTotal;
+      rows+='<tr><td class="mono">'+fmtDate(d)+'</td><td class="mono">S'+isoWeek(d)+'</td>'+cells+
+        '<td class="r mono" style="font-weight:600">'+(rowTotal>0?fmtBR(rowTotal):'—')+'</td><td class="r mono" style="font-weight:600">'+fmtBR(totalAccum)+'</td></tr>';
+    }
+    var th1=SERV.map(function(s){var hex=svcColor(s);return '<th colspan="2" class="r" style="background:'+hex+';color:'+pickFont(hex)+'">'+s.n+' ('+s.u+')</th>';}).join('');
+    var th2=SERV.map(function(){return '<th class="r">Semana</th><th class="r">Acumulado</th>';}).join('');
+    var table='<div class="card" style="box-shadow:none"><div class="eyebrow">Quantitativo por serviço, por semana</div><div class="tbl-wrap"><table class="edtbl"><thead>'+
+      '<tr><th></th><th></th>'+th1+'<th colspan="2" class="r">Total geral</th></tr>'+
+      '<tr><th>Segunda-feira</th><th>Semana</th>'+th2+'<th class="r">Semana</th><th class="r">Acumulado</th></tr>'+
+      '</thead><tbody>'+rows+'</tbody></table></div></div>';
+    return kpis+table;
   }
 
   function cronoContent(){
