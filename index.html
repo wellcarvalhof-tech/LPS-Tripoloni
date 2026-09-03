@@ -2529,13 +2529,28 @@
         var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(0);
         queue.forEach(function(item){
           var li=item.li, qty=QTY[li][si], o=ovrGet(li,si);
-          var bestT=0;
-          for(var t1=1;t1<teams;t1++){ if(teamPos[t1]<teamPos[bestT])bestT=t1; }
-          var teamProd=teamProds[bestT]>0?teamProds[bestT]:prod;
-          var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
-          var startPos=Math.max(item.ready,teamPos[bestT]);
           var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-          var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
+          var bestT=0, bestPacked=null;
+          if(noInt&&teams>1){
+            // As duas opções juntas: em vez de só pegar a equipe livre mais cedo, simula
+            // cada equipe (considerando a produtividade dela) e escolhe a que termina este
+            // lote primeiro — otimiza produtividade respeitando a ordem de predecessoras.
+            var bestEnd=Infinity;
+            for(var tc=0;tc<teams;tc++){
+              var teamProdC=teamProds[tc]>0?teamProds[tc]:prod;
+              var effProdC=(o&&o.productivity>0)?o.productivity:teamProdC;
+              var startPosC=Math.max(item.ready,teamPos[tc]);
+              var packedC=packSegment(startPosC,qty/effProdC,effProdC,qty,periods,wfCache,fixedDur);
+              if(packedC.endPos<bestEnd-1e-9){ bestEnd=packedC.endPos; bestT=tc; bestPacked=packedC; }
+            }
+          } else {
+            for(var t1=1;t1<teams;t1++){ if(teamPos[t1]<teamPos[bestT])bestT=t1; }
+            var teamProd=teamProds[bestT]>0?teamProds[bestT]:prod;
+            var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
+            var startPos=Math.max(item.ready,teamPos[bestT]);
+            bestPacked=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
+          }
+          var packed=bestPacked;
           segs.push({li:li,si:si,team:bestT+1,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
             color:teamColor(hex,bestT+1,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
           startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
