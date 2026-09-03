@@ -2531,7 +2531,7 @@
           var effProd=(o&&o.productivity>0)?o.productivity:teamProdVal;
           var startPos=Math.max(c.ready,teamPos);
           var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-          var qty=QTY[c.li][si];
+          var qty=c.qtyOverride!=null?c.qtyOverride:QTY[c.li][si];
           var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
           var dist=lastLi==null?0:Math.abs(c.li-lastLi);
           if(!best||packed.endPos<best.endPos-1e-9||(Math.abs(packed.endPos-best.endPos)<1e-9&&(dist<best.dist-1e-9||(Math.abs(dist-best.dist)<1e-9&&c.seq<best.seq)))){
@@ -2574,13 +2574,19 @@
         // cada equipe, escolhe dinamicamente o próximo lote (mais pronto e mais perto do
         // último que a equipe fez) em vez da sequência manual fixa — evita ociosidade. A chuva
         // continua reduzindo a produção normalmente (weekFactor não é ignorado).
+        // Um lote pode ter mais de uma equipe (o.teams=[1,3,...]) — divide a quantidade em
+        // partes iguais entre elas, cada uma trabalhando em paralelo com sua própria produtividade.
         var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
         LOTS.forEach(function(l,li){
           if(QTY[li][si]<=0)return;
           var o=ovrGet(li,si);
-          var team=(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1);
+          var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
+          if(!teamsArr||!teamsArr.length)teamsArr=[(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1)];
           var seq=(o&&o.seq!=null)?o.seq:li;
-          teamLots[team-1].push({li:li,seq:seq,ready:readyPosFor(li)});
+          var qtyEach=QTY[li][si]/teamsArr.length;
+          teamsArr.forEach(function(t2){
+            teamLots[t2-1].push({li:li,seq:seq,ready:readyPosFor(li),qtyOverride:teamsArr.length>1?qtyEach:null});
+          });
         });
         if(!noInt)teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
         teamLots.forEach(function(lotIdxs,tIdx){
@@ -2593,25 +2599,32 @@
               var packedP=pick.packed, liP=pick.li, qtyP=pick.qty;
               segs.push({li:liP,si:si,team:team,teams:teams,start:packedP.start,dur:packedP.duration,qty:qtyP,wq:packedP.wq,
                 color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(liP,si)&&ADJ_PENDING[ovrKey(liP,si)])});
-              startByKey[liP+'::'+si]=packedP.start; endByKey[liP+'::'+si]=packedP.start+packedP.duration-1;
               tPos=packedP.endPos; lastLi=liP;
               remainingT.splice(pick.idx,1);
             }
           } else {
             lotIdxs.forEach(function(item){
-              var li=item.li, qty=QTY[li][si], o=ovrGet(li,si);
+              var li=item.li, qty=item.qtyOverride!=null?item.qtyOverride:QTY[li][si], o=ovrGet(li,si);
               var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
               var startPos=Math.max(item.ready,tPos);
               var fixedDur=(o&&o.duration>0)?o.duration:undefined;
               var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
               segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
                 color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
-              startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
               tPos=packed.endPos;
             });
           }
         });
       }
+      // Reconcilia início/fim do lote (pra predecessoras) considerando TODAS as equipes que
+      // trabalharam nele, no caso de lote dividido entre mais de uma equipe.
+      LOTS.forEach(function(l,li){
+        var svcSegsForLot=segs.filter(function(sg){return sg.si===si&&sg.li===li;});
+        if(!svcSegsForLot.length)return;
+        var minStart=Infinity, maxEnd=-Infinity;
+        svcSegsForLot.forEach(function(sg){ minStart=Math.min(minStart,sg.start); maxEnd=Math.max(maxEnd,sg.start+sg.dur-1); });
+        startByKey[li+'::'+si]=minStart; endByKey[li+'::'+si]=maxEnd;
+      });
       var target=(s.cfg&&s.cfg.targetEndWeek>0)?s.cfg.targetEndWeek:null;
       if(target){
         var svcSegs=segs.filter(function(sg){return sg.si===si;});
@@ -3410,24 +3423,30 @@
     var si=window._tcAssignSvc||0, s=SERV[si]; if(!s){si=0;s=SERV[0];}
     var team=window._tcAssignTeam||1; if(team>s.eq)team=1;
     var teamOpts='';for(var t=1;t<=s.eq;t++)teamOpts+='<option value="'+t+'"'+(t===team?' selected':'')+'>Equipe '+t+'</option>';
+    function lotTeams(li){
+      var o=ovrGet(li,si);
+      if(o&&Array.isArray(o.teams)&&o.teams.length)return o.teams.filter(function(t){return t>0&&t<=s.eq;});
+      if(o&&o.team>0&&o.team<=s.eq)return [o.team];
+      return [(li%s.eq)+1];
+    }
     var chips=LOTS.map(function(l,li){
       if(QTY[li][si]<=0)return '';
-      var o=ovrGet(li,si);
-      var curTeam=(o&&o.team>0&&o.team<=s.eq)?o.team:((li%s.eq)+1);
-      var mine=curTeam===team;
-      return '<label class="lotchip'+(mine?' on':' other')+'"><input type="checkbox" data-li="'+li+'"'+(mine?' checked':'')+'>'+l+(mine?'':' <span style="font-size:10px">(eq.'+curTeam+')</span>')+'</label>';
+      var curTeams=lotTeams(li);
+      var mine=curTeams.indexOf(team)>=0;
+      var others=curTeams.filter(function(t){return t!==team;});
+      return '<label class="lotchip'+(mine?' on':' other')+'"><input type="checkbox" data-li="'+li+'"'+(mine?' checked':'')+'>'+l+(others.length?' <span style="font-size:10px">(+eq.'+others.join(', ')+')</span>':'')+'</label>';
     }).join('');
     var seqItems=[];
     LOTS.forEach(function(l,li){
       if(QTY[li][si]<=0)return;
+      if(lotTeams(li).indexOf(team)<0)return;
       var o=ovrGet(li,si);
-      var curTeam=(o&&o.team>0&&o.team<=s.eq)?o.team:((li%s.eq)+1);
-      if(curTeam!==team)return;
       seqItems.push({li:li,seq:(o&&o.seq!=null)?o.seq:li});
     });
     seqItems.sort(function(a,b){return a.seq-b.seq;});
     var seqRows=seqItems.map(function(item,idx){
-      return '<div class="seqrow" draggable="true" data-seqli="'+item.li+'" style="cursor:grab" title="Arraste pra reordenar"><span style="opacity:.4;font-weight:700">⋮</span><span class="seqnum">'+(idx+1)+'</span><span class="seqname">'+LOTS[item.li]+'</span>'+
+      var others=lotTeams(item.li).filter(function(t){return t!==team;});
+      return '<div class="seqrow" draggable="true" data-seqli="'+item.li+'" style="cursor:grab" title="Arraste pra reordenar"><span style="opacity:.4;font-weight:700">⋮</span><span class="seqnum">'+(idx+1)+'</span><span class="seqname">'+LOTS[item.li]+(others.length?' <span style="font-size:10px;color:var(--muted)">(dividido c/ eq.'+others.join(', ')+')</span>':'')+'</span>'+
         '<span class="seqbtns"><button class="iconbtn" data-squp="'+item.li+'" title="Executar antes"'+(idx===0?' disabled':'')+'>↑</button>'+
         '<button class="iconbtn" data-sqdn="'+item.li+'" title="Executar depois"'+(idx===seqItems.length-1?' disabled':'')+'>↓</button></span></div>';
     }).join('');
@@ -3435,7 +3454,7 @@
       '<span class="lab">Lotes e sequência de execução por equipe</span>'+
       '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Serviço: <select id="assignSvc">'+svcOpts+'</select></label>'+
       '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Equipe: <select id="assignTeam">'+teamOpts+'</select></label></div>'+
-      '<div class="note" style="margin:8px 0 4px">Lotes desta equipe (marque/desmarque pra reatribuir):</div>'+
+      '<div class="note" style="margin:8px 0 4px">Lotes desta equipe (marque/desmarque pra reatribuir — marque o mesmo lote em mais de uma equipe pra dividir ele entre elas):</div>'+
       '<div class="lotchips">'+chips+'</div>'+
       '<div class="note" style="margin:10px 0 4px">Sequência de execução da Equipe '+team+' — do primeiro ao último lote (arraste ⋮ ou use as setas):</div>'+
       (seqItems.length?'<div class="seqlist">'+seqRows+'</div>':'<div class="note">Nenhum lote atribuído a esta equipe ainda.</div>');
@@ -3443,13 +3462,23 @@
     if(sel){sel.value=si;sel.addEventListener('change',function(){window._tcAssignSvc=+sel.value;window._tcAssignTeam=1;renderAssignPanel();});}
     var selT=document.getElementById('assignTeam');
     if(selT)selT.addEventListener('change',function(){window._tcAssignTeam=+selT.value;renderAssignPanel();});
+    function setLotTeams(li,teamsArr){
+      var k=ovrKey(li,si); if(!k)return;
+      if(teamsArr.length===0){
+        if(OVR[k]){ delete OVR[k].team; delete OVR[k].teams; delete OVR[k].seq; if(Object.keys(OVR[k]).length===0)delete OVR[k]; }
+      } else if(teamsArr.length===1){
+        OVR[k]=Object.assign({},OVR[k],{team:teamsArr[0]}); delete OVR[k].teams;
+      } else {
+        OVR[k]=Object.assign({},OVR[k],{teams:teamsArr}); delete OVR[k].team;
+      }
+      ADJ_PENDING[k]=true;
+    }
     p.querySelectorAll('[data-li]').forEach(function(cb){
       cb.addEventListener('change',function(){
         var li=+cb.getAttribute('data-li');
-        var k=ovrKey(li,si); if(!k)return;
-        if(cb.checked){ OVR[k]=Object.assign({},OVR[k],{team:team}); }
-        else if(OVR[k]){ delete OVR[k].team; delete OVR[k].seq; if(Object.keys(OVR[k]).length===0)delete OVR[k]; }
-        ADJ_PENDING[k]=true;
+        var cur=lotTeams(li);
+        var next=cb.checked?(cur.indexOf(team)>=0?cur:cur.concat([team])):cur.filter(function(t){return t!==team;});
+        setLotTeams(li,next);
         ADJ_DIRTY=true;
         renderCrono();
       });
@@ -3461,7 +3490,7 @@
       var tmp=seqItems[idx]; seqItems[idx]=seqItems[swapIdx]; seqItems[swapIdx]=tmp;
       seqItems.forEach(function(it,i){
         var k=ovrKey(it.li,si); if(!k)return;
-        OVR[k]=Object.assign({},OVR[k],{team:team,seq:i});
+        OVR[k]=Object.assign({},OVR[k],{seq:i});
         ADJ_PENDING[k]=true;
       });
       ADJ_DIRTY=true;
@@ -3476,7 +3505,7 @@
       seqItems.splice(toIdx,0,moved);
       seqItems.forEach(function(it,i){
         var k=ovrKey(it.li,si); if(!k)return;
-        OVR[k]=Object.assign({},OVR[k],{team:team,seq:i});
+        OVR[k]=Object.assign({},OVR[k],{seq:i});
         ADJ_PENDING[k]=true;
       });
       ADJ_DIRTY=true;
