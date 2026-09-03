@@ -473,21 +473,48 @@
     var r=await SB.from('lote_servico').upsert({obra_id:obraId,lote_id:loteId,servico_id:servicoId,quantidade:quantidade,unidade:unidade||null},{onConflict:'lote_id,servico_id'});
     if(r.error)throw r.error;
   }
+  async function sbCreateRecurso(obraId,patch){
+    await sbRequireSession();
+    var id=newUuid();
+    var r=await SB.from('recursos').insert(Object.assign({id:id,obra_id:obraId},patch));
+    if(r.error)throw r.error;
+    return id;
+  }
+  async function sbUpdateRecurso(id,patch){
+    await sbRequireSession();
+    var r=await SB.from('recursos').update(patch).eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbDeleteRecurso(id){
+    await sbRequireSession();
+    var r=await SB.from('recursos').delete().eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbUpsertApontamentoRecurso(obraId,recursoId,dataSemana,quantidade){
+    await sbRequireSession();
+    var r=await SB.from('apontamento_recursos').upsert({obra_id:obraId,recurso_id:recursoId,data_semana:dataSemana,quantidade:quantidade},{onConflict:'recurso_id,data_semana'});
+    if(r.error)throw r.error;
+  }
   async function sbLoadCadastro(obraId){
     var res=await Promise.all([
       SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
-      SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId)
+      SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId),
+      SB.from('recursos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
+      SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId)
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
-    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[];
+    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[], rec=res[4].data||[], apr=res[5].data||[];
     SERV=svc.map(function(r,i){return {id:r.id,n:r.nome,u:r.unidade||'un',c:PALVARS[i%6],hex:r.cor||'#64748b',eq:r.teams||1,p:String(r.produtividade||0),lag:r.lag_semanas||0,cfg:r.config||{}};});
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
+    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un'};});
+    REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
+    REC_DIRTY={}; REALIZADO_DIRTY={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
@@ -526,7 +553,7 @@
       ['cad-obra','Obra']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
-      ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-cenarios','Cenários']]},
+      ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
@@ -535,7 +562,7 @@
   var CRUMB={torre:['Torre de Controle'],
     'cad-obra':['Cadastro','Obra'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
-    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-cenarios':['Tempo Caminho','Cenários'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
     'lp-medio':['Last Planner','Médio Prazo'],'lp-semana':['Last Planner','Programação Semanal'],'lp-ppc':['Last Planner','PPC & Causas']};
 
@@ -591,7 +618,8 @@
   }
   function hasAnyDirty(){
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
-      Object.keys(QTY_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY;
+      Object.keys(QTY_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY ||
+      Object.keys(REC_DIRTY||{}).length>0 || Object.keys(REALIZADO_DIRTY||{}).length>0;
   }
   function refreshTopSaveBtn(){
     var b=document.getElementById('topSaveBtn'); if(!b)return;
@@ -605,6 +633,8 @@
       if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length)await saveLotesAll();
       if(CAL_DIRTY)await saveCalendarAll();
       if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; if(current==='cr-matriz')go(current); }
+      if(Object.keys(REC_DIRTY).length)await saveRecursosAll();
+      if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
       toast('Tudo salvo.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
     if(b){b.disabled=false;b.textContent='💾 Salvar alterações';}
@@ -628,6 +658,10 @@
     {n:'Sinalização',u:'m',c:'--c5',eq:1,p:'400'}
   ];
   var LOTS=['Lote 01','Lote 02','Lote 03','Lote 04','Lote 05','Lote 06'];
+  var RECURSOS=[]; // catálogo de recursos (funções/equipamentos) da obra: {id,n,tipo,u}
+  var REALIZADO_REC={}; // {"recursoId::data_semana(ISO)": quantidade}
+  var REC_DIRTY={}; // {ri: true} — recursos com edição pendente
+  var REALIZADO_DIRTY={}; // {"recursoId::data_semana": true} — apontamentos pendentes
   var OVR={}; // ajustes manuais: {"loteId::servicoId": {startWeek, team, duration, productivity}}
   var ADJ_DIRTY=false; // true quando há ajustes ainda não salvos no Supabase
   var ADJ_PENDING={}; // {"loteId::servicoId": true} — ajustes feitos nesta sessão, ainda não salvos
@@ -791,6 +825,95 @@
     '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="eyebrow" style="margin:0">☔ Períodos de baixa praticabilidade (clima)</div><button class="btn" id="addRain" style="padding:5px 10px">+ Adicionar período</button></div>'+
       '<div id="rainList">'+rrows+'</div>'+(rains.length?'':'<div class="note">Nenhum período cadastrado.</div>')+
       '<div class="note" style="margin-top:6px">Reduz a capacidade de produção nas semanas do período, sem tirá-las da contagem — aparece como aviso na Matriz Tempo-Caminho.</div></div>';
+  };
+
+  var HIST_FILTER='todos', HIST_SVC=null;
+  function realizadoHTML(hist){
+    var tw=hist.tw;
+    if(!RECURSOS.length||!tw)return '<div class="card" style="margin-top:14px"><div class="eyebrow">Realizado (apontamento semanal)</div><div class="note">Cadastre recursos e o cronograma pra apontar o realizado.</div></div>';
+    var realDirty=Object.keys(REALIZADO_DIRTY).length;
+    var th='<th>Recurso</th>', w;
+    for(w=1;w<=tw;w++)th+='<th class="r">S'+isoWeek(mondayOf(w))+'</th>';
+    var rows=RECURSOS.map(function(r){
+      var cells='';
+      for(var w2=1;w2<=tw;w2++){
+        var d=mondayOf(w2).toISOString().slice(0,10);
+        var v=REALIZADO_REC[r.id+'::'+d]||0;
+        cells+='<td><input class="einp" type="number" data-realres="'+r.id+'" data-realdate="'+d+'" value="'+(v||0)+'" style="width:64px"></td>';
+      }
+      return '<tr><td>'+r.n+'</td>'+cells+'</tr>';
+    }).join('');
+    return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">'+
+      '<div><div class="eyebrow" style="margin:0">Realizado (apontamento semanal)</div><div class="note">Preencha manualmente ou importe uma planilha exportada por este app.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':'')+'</div></div>'+
+      '<div style="display:flex;gap:8px"><button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button></div>'+
+    '</div><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  }
+  VIEWS['cr-hist']=function(){
+    var hist=computeHistogram();
+    var recDirty=Object.keys(REC_DIRTY).length;
+    var recRows=RECURSOS.map(function(r,ri){
+      var peak=hist.peakByResource[r.id]||0;
+      return '<tr data-ri="'+ri+'">'+
+        '<td>'+sinp('nome',r.n,'170px')+'</td>'+
+        '<td><select class="esel" data-field="tipo"><option value="funcao"'+(r.tipo==='funcao'?' selected':'')+'>Função</option><option value="equipamento"'+(r.tipo==='equipamento'?' selected':'')+'>Equipamento</option></select></td>'+
+        '<td>'+sinp('unidade',r.u,'70px')+'</td>'+
+        '<td class="r mono">'+fmtBR(peak)+'</td>'+
+        '<td><button class="iconbtn" data-delrec="'+ri+'">✕</button></td></tr>';
+    }).join('');
+    var catalogo='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:10px">'+
+      '<div><div class="eyebrow" style="margin:0">Funções e equipamentos</div><div class="note">Cadastre ou importe a lista (Nome, Tipo, Unidade).</div></div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn" id="histModelo">Modelo</button>'+
+        '<button class="btn" id="histImportar">↥ Importar lista</button>'+
+        '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
+        '<button class="btn primary" id="addRecurso">+ Adicionar</button>'+
+        '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>'+
+      '</div></div>'+
+      (RECURSOS.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Nome</th><th>Tipo</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+recRows+'</tbody></table></div>':'<div class="note">Nenhum recurso cadastrado ainda.</div>')+
+    '</div>';
+
+    var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+    var svc=svcSel!=null?SERV[svcSel]:null;
+    var crewRows='';
+    if(svc){
+      var crew=(svc.cfg&&svc.cfg.crew)||[];
+      crewRows=RECURSOS.map(function(r){
+        var item=crew.filter(function(c){return c.resourceId===r.id;})[0];
+        var qty=item?item.qtyPerTeam:0;
+        return '<tr><td>'+r.n+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
+          '<td><input class="einp" type="number" step="0.5" data-crewres="'+r.id+'" value="'+(qty||0)+'" style="width:80px"></td>'+
+          '<td class="r mono">'+fmtBR(qty*(svc.eq||0))+'</td></tr>';
+      }).join('');
+    }
+    var equipeSel='<select class="esel" id="histSvcSel">'+SERV.map(function(s,si){return '<option value="'+si+'"'+(si===svcSel?' selected':'')+'>'+s.n+'</option>';}).join('')+'</select>';
+    var equipe='<div class="card" style="margin-top:14px"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<div class="eyebrow" style="margin:0">Equipe típica do serviço</div>'+(SERV.length?equipeSel:'')+
+      (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+
+    '</div>'+
+    (!svc||!RECURSOS.length?'<div class="note">Cadastre serviços e recursos pra montar a equipe típica.</div>':
+      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')+
+    '</div>';
+
+    var totRows=SERV.map(function(s,si){
+      var comp=((s.cfg&&s.cfg.crew)||[]).map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ')||'—';
+      return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td><td class="mono">'+s.eq+'</td><td class="note">'+comp+'</td><td class="r mono">'+fmtBR(hist.totalByService[si]||0)+'</td></tr>';
+    }).join('');
+    var totais='<div class="card" style="margin-top:14px"><div class="eyebrow">Quantidades totais</div>'+
+      (SERV.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipes</th><th>Composição da equipe típica</th><th class="r">Total do serviço</th></tr></thead><tbody>'+totRows+
+        '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>')+
+    '</div>';
+
+    var filtroBtns=['todos','funcao','equipamento'].map(function(f){
+      var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
+      return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
+    }).join('');
+    var grafico='<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
+      '<div class="eyebrow" style="margin:0">Histograma de recursos no tempo</div><div style="display:flex;gap:4px">'+filtroBtns+'</div></div>'+
+      (RECURSOS.length?'<div class="note" style="margin-bottom:8px">Demanda por semana = equipes ativas do serviço × quantidade por equipe.</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>')+
+    '</div>';
+
+    return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
+      catalogo+equipe+totais+grafico+realizadoHTML(hist);
   };
 
   VIEWS['cr-cenarios']=function(){
@@ -1576,6 +1699,46 @@
       if(saveC)saveC.addEventListener('click',saveCalendarAll);
     }
     if(view==='cad-equipes'){var g=document.getElementById('gotoServ');if(g)g.addEventListener('click',function(){go('cad-serv');});}
+    if(view==='cr-hist'){
+      renderHistChart();
+      document.querySelectorAll('table.edtbl tbody tr[data-ri]').forEach(function(tr){
+        var ri=+tr.getAttribute('data-ri');
+        tr.querySelectorAll('[data-field]').forEach(function(inp){
+          inp.addEventListener('change',function(){saveRecursoField(ri,inp);});
+        });
+        var del=tr.querySelector('[data-delrec]');
+        if(del)del.addEventListener('click',function(){deleteRecursoRow(ri);});
+      });
+      var addRec=document.getElementById('addRecurso');
+      if(addRec)addRec.addEventListener('click',addRecursoRow);
+      var saveRec=document.getElementById('saveRecursos');
+      if(saveRec)saveRec.addEventListener('click',saveRecursosAll);
+      var modelo=document.getElementById('histModelo');
+      if(modelo)modelo.addEventListener('click',downloadResourcesTemplate);
+      var imp=document.getElementById('histImportar');
+      if(imp)imp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importResourcesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
+      var exp=document.getElementById('histExportar');
+      if(exp)exp.addEventListener('click',exportHistogramWorkbook);
+      var svcSelEl=document.getElementById('histSvcSel');
+      if(svcSelEl)svcSelEl.addEventListener('change',function(){HIST_SVC=+svcSelEl.value; go('cr-hist');});
+      document.querySelectorAll('[data-crewres]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+          if(svcSel==null)return;
+          saveCrewQty(svcSel,inp.getAttribute('data-crewres'),Math.max(0,parseFloat(inp.value)||0));
+        });
+      });
+      document.querySelectorAll('[data-histfilter]').forEach(function(b){
+        b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-realres]').forEach(function(inp){
+        inp.addEventListener('change',function(){saveRealizadoField(inp.getAttribute('data-realres'),inp.getAttribute('data-realdate'),inp.value);});
+      });
+      var saveReal=document.getElementById('saveRealizado');
+      if(saveReal)saveReal.addEventListener('click',saveRealizadoAll);
+      var realImp=document.getElementById('histRealImp');
+      if(realImp)realImp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importRealizadoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
+    }
     if(view==='cad-obra'){
       var sb=document.getElementById('saveObraBtn');
       if(sb)sb.addEventListener('click',async function(){
@@ -1695,6 +1858,38 @@
       cardsEl.innerHTML=html||'<div class="note">Marque ao menos um serviço acima pra ver o percentual.</div>';
     }
     sCurve('scv2',data);
+  }
+
+  var HIST_PALETTE=['#1e3a8a','#0ea5e9','#65a30d','#f97316','#7c3aed','#dc2626','#14b8a6','#a855f7','#facc15','#84cc16','#e11d48','#0f766e'];
+  function renderHistChart(){
+    var el=document.getElementById('histSvg'); if(!el)return;
+    var hist=computeHistogram(), tw=hist.tw;
+    var visRes=RECURSOS.filter(function(r){return HIST_FILTER==='todos'||r.tipo===HIST_FILTER;});
+    var legEl=document.getElementById('histLeg');
+    if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
+    var W=700,H=320,pl=40,pr=12,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb;
+    var maxVal=1;
+    for(var w=0;w<tw;w++){
+      var stack=0; visRes.forEach(function(r){stack+=(hist.byResource[r.id]||[])[w]||0;});
+      maxVal=Math.max(maxVal,stack);
+    }
+    var xx=function(w){return pl+iw*w/tw;}, bw=iw/tw*0.82;
+    var yy=function(v){return pt+ih-ih*v/maxVal;};
+    var s='', steps=4;
+    for(var g=0;g<=steps;g++){var val=Math.round(maxVal*g/steps);s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+val+'</text>';}
+    var stepLbl=Math.max(1,Math.ceil(tw/14));
+    for(var wi=0;wi<tw;wi+=stepLbl){s+='<text class="axm" x="'+(xx(wi)+bw/2)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(wi+1))+'</text>';}
+    for(var w2=0;w2<tw;w2++){
+      var yCursor=0;
+      visRes.forEach(function(r,ri){
+        var v=(hist.byResource[r.id]||[])[w2]||0; if(v<=0)return;
+        var y1=yy(yCursor+v), y2=yy(yCursor);
+        s+='<rect x="'+xx(w2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+Math.max(0,bw).toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+HIST_PALETTE[ri%HIST_PALETTE.length]+'"><title>'+r.n+' — S'+isoWeek(mondayOf(w2+1))+': '+fmtBR(v)+'</title></rect>';
+        yCursor+=v;
+      });
+    }
+    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+    if(legEl)legEl.innerHTML=visRes.map(function(r,ri){return '<span><span class="swatch" style="background:'+HIST_PALETTE[ri%HIST_PALETTE.length]+'"></span>'+r.n+'</span>';}).join('');
   }
 
   function ppcBars(id){
@@ -1906,6 +2101,110 @@
     await sbUpdateObra(selectedObra.id,{ajustes_manuais:OVR});
   }
 
+  /* ================= HISTOGRAMA DE RECURSOS ================= */
+  /** Equipes ativas por serviço em cada semana (índice 0 = semana 1). */
+  function activeTeamsByWeek(){
+    var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<tw;w++)out[si].push(0);});
+    var seen={};
+    segs.forEach(function(sg){
+      for(var i=0;i<sg.dur;i++){
+        var w=sg.start+i, qty=sg.wq[i]||0; if(qty<=0)continue;
+        var key=sg.si+'::'+w; seen[key]=seen[key]||{};
+        if(seen[key][sg.team])continue;
+        seen[key][sg.team]=true;
+        if(out[sg.si]&&w>=1&&w<=tw)out[sg.si][w-1]+=1;
+      }
+    });
+    return {teamsByService:out,tw:tw};
+  }
+  /** Demanda de recursos por semana = equipes ativas do serviço × qtd/equipe cadastrada. */
+  function computeHistogram(){
+    var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
+    var byResource={}; RECURSOS.forEach(function(r){byResource[r.id]=[];for(var w=0;w<tw;w++)byResource[r.id].push(0);});
+    var totalByService={}, totalByServiceResource={}, grandTotal=0;
+    SERV.forEach(function(s,si){
+      var crew=(s.cfg&&s.cfg.crew)||[], svcTotal=0, perRes={};
+      crew.forEach(function(item){
+        if(!byResource[item.resourceId])return;
+        var mobilized=(item.qtyPerTeam||0)*(s.eq||0);
+        perRes[item.resourceId]=(perRes[item.resourceId]||0)+mobilized;
+        svcTotal+=mobilized;
+        var arr=byResource[item.resourceId], teams=teamsByService[si]||[];
+        for(var i=0;i<arr.length;i++)arr[i]+=(teams[i]||0)*(item.qtyPerTeam||0);
+      });
+      totalByServiceResource[si]=perRes; totalByService[si]=svcTotal; grandTotal+=svcTotal;
+    });
+    var peakByResource={};
+    RECURSOS.forEach(function(r){ var arr=byResource[r.id]||[]; peakByResource[r.id]=arr.reduce(function(m,v){return Math.max(m,v);},0); });
+    return {byResource:byResource,totalByService:totalByService,totalByServiceResource:totalByServiceResource,peakByResource:peakByResource,grandTotal:grandTotal,tw:tw};
+  }
+  function saveRecursoField(ri,inp){
+    var r=RECURSOS[ri]; if(!r)return;
+    var field=inp.getAttribute('data-field'), val=inp.value;
+    if(field==='nome'){ val=val.trim(); if(!val){inp.value=r.n;return;} r.n=val; }
+    else if(field==='unidade'){ r.u=val.trim()||'un'; }
+    else if(field==='tipo'){ r.tipo=(val==='equipamento')?'equipamento':'funcao'; }
+    else return;
+    REC_DIRTY[ri]=true;
+    go('cr-hist');
+  }
+  async function saveRecursosAll(){
+    var idxs=Object.keys(REC_DIRTY).map(Number); if(!idxs.length)return;
+    try{
+      for(var i=0;i<idxs.length;i++){
+        var r=RECURSOS[idxs[i]]; if(!r)continue;
+        await sbUpdateRecurso(r.id,{nome:r.n,tipo:r.tipo,unidade:r.u});
+      }
+      REC_DIRTY={};
+      go('cr-hist'); toast('Recursos salvos.');
+    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  }
+  async function addRecursoRow(){
+    if(!selectedObra)return;
+    var idx=RECURSOS.length;
+    var patch={nome:'Novo recurso',tipo:'funcao',unidade:'un',ordem:idx};
+    try{
+      var id=await sbCreateRecurso(selectedObra.id,patch);
+      RECURSOS.push({id:id,n:patch.nome,tipo:patch.tipo,u:patch.unidade});
+      go('cr-hist'); toast('Recurso adicionado.');
+    }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
+  }
+  async function deleteRecursoRow(ri){
+    var r=RECURSOS[ri]; if(!r)return;
+    if(!confirm('Excluir este recurso? Ele também some das equipes típicas que o usam.'))return;
+    try{
+      await sbDeleteRecurso(r.id);
+      RECURSOS.splice(ri,1); delete REC_DIRTY[ri];
+      go('cr-hist'); toast('Recurso excluído.');
+    }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+  }
+  function saveCrewQty(si,resourceId,qty){
+    var s=SERV[si]; if(!s)return;
+    var crew=((s.cfg&&s.cfg.crew)||[]).filter(function(c){return c.resourceId!==resourceId;});
+    if(qty>0)crew.push({resourceId:resourceId,qtyPerTeam:qty});
+    s.cfg=Object.assign({},s.cfg,{crew:crew});
+    SVC_DIRTY[si]=true;
+    go('cr-hist');
+  }
+  function saveRealizadoField(recursoId,dataSemana,val){
+    var v=Math.max(0,parseFloat(val)||0);
+    REALIZADO_REC[recursoId+'::'+dataSemana]=v;
+    REALIZADO_DIRTY[recursoId+'::'+dataSemana]=v;
+    go('cr-hist');
+  }
+  async function saveRealizadoAll(){
+    var keys=Object.keys(REALIZADO_DIRTY); if(!keys.length||!selectedObra)return;
+    try{
+      for(var i=0;i<keys.length;i++){
+        var parts=keys[i].split('::'), recursoId=parts[0], dataSemana=parts[1];
+        await sbUpsertApontamentoRecurso(selectedObra.id,recursoId,dataSemana,REALIZADO_DIRTY[keys[i]]);
+      }
+      REALIZADO_DIRTY={};
+      go('cr-hist'); toast('Apontamentos salvos.');
+    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  }
+
   /* ================= IMPORTAÇÃO / EXPORTAÇÃO (Excel + PDF) ================= */
   function pickExcelFile(cb){
     var inp=document.getElementById('xlsFileInput');
@@ -1990,6 +2289,83 @@
         '<li>A última semana de uma atividade mostra o saldo (qtd. &lt; produção semanal cheia).</li></ul>';
     }
     window.print();
+  }
+
+  function downloadResourcesTemplate(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var wb=XLSX.utils.book_new();
+    var ws=XLSX.utils.aoa_to_sheet([['Nome','Tipo','Unidade'],
+      ['Encarregado','funcao','un'],['Servente','funcao','un'],['Operador de máquinas','funcao','un'],
+      ['Escavadeira hidráulica','equipamento','un'],['Caminhão basculante','equipamento','un']]);
+    XLSX.utils.book_append_sheet(wb,ws,'Recursos');
+    XLSX.writeFile(wb,'modelo-recursos.xlsx');
+  }
+  async function importResourcesWorkbook(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var sheetName=wb.SheetNames.filter(function(n){return ['recursos','funcoes','funções','equipamentos','resources'].indexOf(n.trim().toLowerCase())>=0;})[0]||wb.SheetNames[0];
+    if(!sheetName){alert('Planilha vazia.');return;}
+    var rows=sheetRows(wb.Sheets[sheetName]).slice(1);
+    var existing={}; RECURSOS.forEach(function(r){existing[(r.n.trim().toLowerCase())+'::'+r.tipo]=true;});
+    var created=0;
+    for(var i=0;i<rows.length;i++){
+      var r=rows[i]; if(!r||!r[0])continue;
+      var nome=String(r[0]).trim(); if(!nome)continue;
+      var tipoRaw=String(r[1]||'').trim().toLowerCase();
+      var tipo=(tipoRaw.indexOf('eq')===0||tipoRaw.indexOf('máquina')>=0||tipoRaw.indexOf('maquina')>=0)?'equipamento':'funcao';
+      var unidade=String(r[2]||'').trim()||'un';
+      var key=nome.toLowerCase()+'::'+tipo; if(existing[key])continue;
+      var id=await sbCreateRecurso(selectedObra.id,{nome:nome,tipo:tipo,unidade:unidade,ordem:RECURSOS.length});
+      RECURSOS.push({id:id,n:nome,tipo:tipo,u:unidade});
+      existing[key]=true; created++;
+    }
+    go('cr-hist'); toast(created+' recurso(s) importado(s).');
+  }
+  function exportHistogramWorkbook(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var hist=computeHistogram(), tw=hist.tw;
+    var wb=XLSX.utils.book_new();
+    var header=['Recurso','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push('S'+isoWeek(mondayOf(w)));
+    var rows=[header];
+    RECURSOS.forEach(function(r){
+      var row=[r.n,r.tipo==='funcao'?'Função':'Equipamento',r.u,hist.peakByResource[r.id]||0];
+      (hist.byResource[r.id]||[]).forEach(function(v){row.push(v);});
+      rows.push(row);
+    });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Histograma');
+    var summary=[['Serviço','Equipes','Recurso','Qtd/equipe','Total']];
+    SERV.forEach(function(s,si){
+      ((s.cfg&&s.cfg.crew)||[]).forEach(function(item){
+        var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return;
+        summary.push([s.n,s.eq,r.n,item.qtyPerTeam,item.qtyPerTeam*s.eq]);
+      });
+      summary.push([s.n,s.eq,'TOTAL DO SERVIÇO','',hist.totalByService[si]||0]);
+    });
+    summary.push(['TOTAL GERAL DA OBRA','','','',hist.grandTotal]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(summary),'Equipes tipicas');
+    XLSX.writeFile(wb,'histograma-recursos.xlsx');
+    toast('Histograma exportado.');
+  }
+  async function importRealizadoWorkbook(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var ws=wb.Sheets['Histograma']||wb.Sheets[wb.SheetNames[0]];
+    if(!ws){alert('Planilha não reconhecida.');return;}
+    var aoa=sheetRows(ws); if(aoa.length<2){alert('Planilha vazia.');return;}
+    var header=aoa[0];
+    var weekCols=[]; for(var c=4;c<header.length;c++){weekCols.push(c);} // pula Recurso/Tipo/Unidade/Pico
+    var byName={}; RECURSOS.forEach(function(r){byName[r.n.trim().toLowerCase()]=r;});
+    var applied=0;
+    for(var i=1;i<aoa.length;i++){
+      var row=aoa[i]; if(!row||!row[0])continue;
+      var r=byName[String(row[0]).trim().toLowerCase()]; if(!r)continue;
+      for(var wi=0;wi<weekCols.length;wi++){
+        var w=wi+1, val=Number(row[weekCols[wi]]); if(!isFinite(val))continue;
+        var d=mondayOf(w).toISOString().slice(0,10);
+        REALIZADO_REC[r.id+'::'+d]=val;
+        REALIZADO_DIRTY[r.id+'::'+d]=val;
+        applied++;
+      }
+    }
+    go('cr-hist'); toast(applied+' apontamento(s) importado(s). Clique "Salvar apontamentos" pra confirmar.');
   }
 
   async function applyImportWorkbook(wb){
