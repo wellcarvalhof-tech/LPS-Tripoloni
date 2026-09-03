@@ -669,7 +669,7 @@
       var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="8">'+svcDetail(s)+'</td></tr>';
       return main+det;
     }).join('');
-    return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.',impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>')+
+    return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.'+(Object.keys(SVC_DIRTY).length?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>'+'<button class="btn primary" id="saveServicos"'+(Object.keys(SVC_DIRTY).length?'':' disabled')+'>💾 Salvar alterações</button>')+
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th>Cor</th><th>Nome</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '<div class="note" style="margin-top:10px">Clique em <b>▸</b> para configurar por equipe: lote inicial, produtividade, aumentos e regras (paralelo, fila dinâmica, sem paralisação, semana-alvo). '+(SERV.length?'':'Nenhum serviço cadastrado ainda.')+'</div></div>';
   };
@@ -695,7 +695,8 @@
         '<button class="iconbtn" data-up="'+li+'" title="subir"'+(li===0?' disabled':'')+'>↑</button><button class="iconbtn" data-down="'+li+'" title="descer"'+(li===LOTS.length-1?' disabled':'')+'>↓</button></div></td>'+
         '<td><input class="einp" data-lotenome style="width:150px" value="'+escAttr(l)+'"></td>'+qcells+'<td><button class="iconbtn" data-dellote>✕</button></td></tr>';
     }).join('');
-    return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.',impBtn()+'<button class="btn primary" id="addLote">+ Adicionar</button>')+
+    var lotesDirty=Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length;
+    return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.'+(lotesDirty?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addLote">+ Adicionar</button>'+'<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar alterações</button>')+
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> para reordenar a sequência executiva dos lotes.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
   };
@@ -726,7 +727,7 @@
     var holidays=calHolidays(), rains=calRainPeriods();
     var hrows=holidays.map(function(h,hi){return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input class="einp" data-holi="'+hi+'" type="date" value="'+escAttr(h)+'" style="width:170px"><button class="iconbtn" data-delholi="'+hi+'">✕</button></div>';}).join('');
     var rrows=rains.map(rainRowHTML).join('');
-    return head('Calendário','Nome e início do projeto, semanas de paralisação total e períodos de baixa praticabilidade (clima).',impBtn())+
+    return head('Calendário','Nome e início do projeto, semanas de paralisação total e períodos de baixa praticabilidade (clima).'+(CAL_DIRTY?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="saveCal"'+(CAL_DIRTY?'':' disabled')+'>💾 Salvar alterações</button>')+
     '<div class="grid g2">'+
       '<div class="card"><div class="eyebrow">Início do projeto</div>'+
         '<div class="field"><label>Nome do projeto</label><input class="inp" id="calNome" value="'+escAttr(o.nome)+'"></div>'+
@@ -805,21 +806,30 @@
   function sinp(field,v,w,type){return '<input class="einp" data-field="'+field+'" type="'+(type||'text')+'" value="'+(v===''||v==null?'':escAttr(v))+'"'+(w?' style="width:'+w+'"':'')+'>';}
   var HEXPAL=['#3E7CB1','#5F9E6E','#C98A2B','#9A6DB0','#C0653F','#4FA3A8'];
   var SVCFIELD2KEY={nome:'n',unidade:'u',teams:'eq',produtividade:'p',lag_semanas:'lag',cor:'hex'};
-  async function saveServicoField(si,inp){
+  var SVC_DIRTY={}; // {si: true} — serviços com edição pendente de salvar
+  function saveServicoField(si,inp){
     var s=SERV[si]; if(!s||!s.id)return;
-    var field=inp.getAttribute('data-field'), val=inp.value, patch={};
-    if(field==='nome'){ val=val.trim(); if(!val){inp.value=s.n;return;} patch.nome=val; }
-    else if(field==='unidade'){ val=val.trim()||'un'; patch.unidade=val; }
-    else if(field==='teams'){ val=Math.max(1,parseInt(val,10)||1); patch.teams=val; }
-    else if(field==='produtividade'){ val=pnum(val); patch.produtividade=val; }
-    else if(field==='lag_semanas'){ val=parseInt(val,10)||0; patch.lag_semanas=val; }
-    else if(field==='cor'){ patch.cor=val; }
-    else return;
+    var field=inp.getAttribute('data-field'), val=inp.value;
+    if(field==='nome'){ val=val.trim(); if(!val){inp.value=s.n;return;} }
+    else if(field==='unidade'){ val=val.trim()||'un'; }
+    else if(field==='teams'){ val=Math.max(1,parseInt(val,10)||1); }
+    else if(field==='produtividade'){ val=pnum(val); }
+    else if(field==='lag_semanas'){ val=parseInt(val,10)||0; }
+    else if(field!=='cor'){ return; }
+    s[SVCFIELD2KEY[field]]=(field==='produtividade')?String(val):val;
+    SVC_DIRTY[si]=true;
+    go('cad-serv');
+  }
+  async function saveServicosAll(){
+    var idxs=Object.keys(SVC_DIRTY).map(Number); if(!idxs.length)return;
     try{
-      await sbUpdateServico(s.id,patch);
-      s[SVCFIELD2KEY[field]]=(field==='produtividade')?String(val):val;
-      go('cad-serv'); toast('Salvo.');
-    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-serv'); }
+      for(var i=0;i<idxs.length;i++){
+        var s=SERV[idxs[i]]; if(!s)continue;
+        await sbUpdateServico(s.id,{nome:s.n,unidade:s.u,cor:s.hex,teams:s.eq,produtividade:pnum(s.p),lag_semanas:s.lag,config:s.cfg||{}});
+      }
+      SVC_DIRTY={};
+      go('cad-serv'); toast('Serviços salvos.');
+    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
   }
   async function deleteServicoRow(si){
     var s=SERV[si]; if(!s)return;
@@ -844,19 +854,40 @@
       go('cad-serv'); toast('Serviço adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
-  async function saveLoteNome(li,inp){
+  var LOT_NAME_DIRTY={}, QTY_DIRTY={}; // lotes/quantidades com edição pendente de salvar
+  function saveLoteNome(li,inp){
     var id=(window._LOTIDS||[])[li]; if(!id)return;
     var val=inp.value.trim(); if(!val){inp.value=LOTS[li];return;}
-    try{ await sbUpdateLote(id,{nome:val}); LOTS[li]=val; toast('Salvo.'); }
-    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-lotes'); }
+    LOTS[li]=val;
+    LOT_NAME_DIRTY[li]=true;
+    go('cad-lotes');
   }
-  async function saveQuantidade(li,si,inp){
+  function saveQuantidade(li,si,inp){
     var loteId=(window._LOTIDS||[])[li], sv=SERV[si];
     if(!loteId||!sv||!sv.id||!selectedObra)return;
     var val=Math.max(0,parseFloat(inp.value)||0);
     inp.value=val;
-    try{ await sbUpsertQuantidade(selectedObra.id,loteId,sv.id,val,sv.u); QTY[li][si]=val; toast('Salvo.'); }
-    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-lotes'); }
+    QTY[li][si]=val;
+    QTY_DIRTY[li+'::'+si]=true;
+    go('cad-lotes');
+  }
+  async function saveLotesAll(){
+    var nameKeys=Object.keys(LOT_NAME_DIRTY).map(Number), qtyKeys=Object.keys(QTY_DIRTY);
+    if(!nameKeys.length&&!qtyKeys.length)return;
+    try{
+      for(var i=0;i<nameKeys.length;i++){
+        var li=nameKeys[i], id=(window._LOTIDS||[])[li]; if(!id)continue;
+        await sbUpdateLote(id,{nome:LOTS[li]});
+      }
+      for(var j=0;j<qtyKeys.length;j++){
+        var parts=qtyKeys[j].split('::'), li2=+parts[0], si2=+parts[1];
+        var loteId=(window._LOTIDS||[])[li2], sv=SERV[si2];
+        if(!loteId||!sv)continue;
+        await sbUpsertQuantidade(selectedObra.id,loteId,sv.id,QTY[li2][si2],sv.u);
+      }
+      LOT_NAME_DIRTY={}; QTY_DIRTY={};
+      go('cad-lotes'); toast('Lotes e quantidades salvos.');
+    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-lotes'); }
   }
   async function deleteLoteRow(li){
     var id=(window._LOTIDS||[])[li]; if(!id)return;
@@ -893,26 +924,36 @@
       go('cad-lotes'); toast('Lote reordenado.');
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
   }
-  async function saveObraSimpleField(field,val){
+  var CAL_DIRTY=false; // true quando obra/calendário tem edição pendente de salvar
+  function saveObraSimpleField(field,val){
     if(!selectedObra)return;
     var patch={}; patch[field]=val;
-    try{
-      await sbUpdateObra(selectedObra.id,patch);
-      window._OBRA=Object.assign({},window._OBRA,patch);
-      if(field==='nome'){ selectedObra.nome=val; CUR.nome=val; document.getElementById('obraSelName').textContent=val; }
-      toast('Salvo.');
-    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-cal'); }
+    window._OBRA=Object.assign({},window._OBRA,patch);
+    CAL_DIRTY=true;
+    go('cad-cal');
   }
   async function saveCalendarObj(holidays,rains){
     var obj={holidayWeeks:holidays,rainPeriods:rains};
     await sbUpdateObra(selectedObra.id,{feriados:obj});
     window._OBRA=Object.assign({},window._OBRA,{feriados:obj});
   }
-  async function saveHoliday(hi,val){
+  async function saveCalendarAll(){
+    if(!selectedObra||!CAL_DIRTY)return;
+    try{
+      var patch={nome:window._OBRA.nome,data_inicio:window._OBRA.data_inicio,feriados:{holidayWeeks:calHolidays(),rainPeriods:calRainPeriods()}};
+      await sbUpdateObra(selectedObra.id,patch);
+      selectedObra.nome=patch.nome; CUR.nome=patch.nome;
+      var nameEl=document.getElementById('obraSelName'); if(nameEl)nameEl.textContent=patch.nome;
+      CAL_DIRTY=false;
+      go('cad-cal'); toast('Calendário salvo.');
+    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  }
+  function saveHoliday(hi,val){
     if(!selectedObra||!window._OBRA)return;
     var arr=calHolidays().slice(); arr[hi]=val;
-    try{ await saveCalendarObj(arr,calRainPeriods()); toast('Salvo.'); }
-    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-cal'); }
+    window._OBRA=Object.assign({},window._OBRA,{feriados:{holidayWeeks:arr,rainPeriods:calRainPeriods()}});
+    CAL_DIRTY=true;
+    go('cad-cal');
   }
   async function deleteHoliday(hi){
     if(!selectedObra||!window._OBRA)return;
@@ -926,13 +967,14 @@
     try{ await saveCalendarObj(arr,calRainPeriods()); go('cad-cal'); toast('Adicionado.'); }
     catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
-  async function saveRainField(idx,field,val){
+  function saveRainField(idx,field,val){
     if(!selectedObra||!window._OBRA)return;
     var arr=calRainPeriods().map(function(r){return Object.assign({},r);});
     if(!arr[idx])return;
     arr[idx][field]=val;
-    try{ await saveCalendarObj(calHolidays(),arr); go('cad-cal'); }
-    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-cal'); }
+    window._OBRA=Object.assign({},window._OBRA,{feriados:{holidayWeeks:calHolidays(),rainPeriods:arr}});
+    CAL_DIRTY=true;
+    go('cad-cal');
   }
   async function deleteRain(idx){
     if(!selectedObra||!window._OBRA)return;
@@ -954,23 +996,23 @@
       return '<span class="predchip'+(on?' on':'')+'" data-predsi="'+si+'" data-predid="'+p.id+'" title="Clique para marcar/desmarcar como predecessor" style="cursor:pointer">'+p.n.split(' — ')[0]+'</span>';
     }).join('')+'</div>';
   }
-  async function saveTeamProd(si,team,val){
+  function saveTeamProd(si,team,val){
     var s=SERV[si]; if(!s)return;
     var arr=((s.cfg&&s.cfg.teamProductivities)||[]).slice();
     while(arr.length<s.eq)arr.push(0);
     arr[team-1]=Math.max(0,pnum(val));
-    var cfg=Object.assign({},s.cfg,{teamProductivities:arr});
-    try{ await sbUpdateServico(s.id,{config:cfg}); s.cfg=cfg; go('cad-serv'); toast('Salvo.'); }
-    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+    s.cfg=Object.assign({},s.cfg,{teamProductivities:arr});
+    SVC_DIRTY[si]=true;
+    go('cad-serv');
   }
-  async function togglePredecessor(si,predId){
+  function togglePredecessor(si,predId){
     var s=SERV[si]; if(!s)return;
     s.cfg=s.cfg||{}; var preds=(s.cfg.predecessors||[]).slice();
     var idx=preds.indexOf(predId);
     if(idx>=0)preds.splice(idx,1); else preds.push(predId);
     s.cfg=Object.assign({},s.cfg,{predecessors:preds});
-    try{ await sbUpdateServico(s.id,{config:s.cfg}); go('cad-serv'); toast('Salvo.'); }
-    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+    SVC_DIRTY[si]=true;
+    go('cad-serv');
   }
   function svcDetail(s){
     var teams=[];for(var i=1;i<=s.eq;i++)teams.push(i);
@@ -1358,6 +1400,8 @@
       });
       var addB=document.getElementById('addServico');
       if(addB)addB.addEventListener('click',addServicoRow);
+      var saveS=document.getElementById('saveServicos');
+      if(saveS)saveS.addEventListener('click',saveServicosAll);
     }
     if(view==='cad-lotes'){
       document.querySelectorAll('table.edtbl tbody tr[data-li]').forEach(function(tr){
@@ -1376,6 +1420,8 @@
       });
       var addL=document.getElementById('addLote');
       if(addL)addL.addEventListener('click',addLoteRow);
+      var saveL=document.getElementById('saveLotes');
+      if(saveL)saveL.addEventListener('click',saveLotesAll);
     }
     if(view==='cad-cal'){
       var cn=document.getElementById('calNome');
@@ -1401,6 +1447,8 @@
       });
       var addR=document.getElementById('addRain');
       if(addR)addR.addEventListener('click',addRain);
+      var saveC=document.getElementById('saveCal');
+      if(saveC)saveC.addEventListener('click',saveCalendarAll);
     }
     if(view==='cad-equipes'){var g=document.getElementById('gotoServ');if(g)g.addEventListener('click',function(){go('cad-serv');});}
     if(view==='cad-obra'){
@@ -1926,8 +1974,8 @@
       var f=weekFactor(w,periods,wfCache2);
       var rainBadge=f<0.999?' <span class="tcm-rain" title="Capacidade reduzida por período de baixa praticabilidade">🌧 '+Math.round(f*100)+'%</span>':'';
       for(var li=0;li<LOTS.length;li++){
-        var subs=cell[w+'::'+li];
-        if(!subs){tds+='<td class="cell" data-lot="'+li+'"></td>';continue;}
+        var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0;});
+        if(!subs.length){tds+='<td class="cell" data-lot="'+li+'"></td>';continue;}
         var inner=subs.map(function(sc,i){
           var rk=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, r=RESTR[rk];
           var badge=r?'<span class="tcm-badge" style="background:'+r.cat+'" title="'+r.lab+'">▲'+r.n+'</span>':'';
