@@ -489,7 +489,7 @@
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false;
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
-    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:Array.isArray(obra.feriados)?obra.feriados:[]};
+    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[]};
   }
 
   function showAuth(){var g=document.getElementById('authGate');if(g)g.hidden=false;}
