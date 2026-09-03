@@ -311,11 +311,11 @@
   .print-only{display:none}
   @media print{
     @page{size:landscape;margin:10mm}
-    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign{display:none!important}
+    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign,.tc-svctoggle{display:none!important}
     .app{display:block}
     .content{max-width:none!important;padding:0!important}
     .card{box-shadow:none;border:1px solid #ccc}
-    .tc-wrap{max-height:none!important;overflow:visible!important;zoom:1!important}
+    .tc-wrap{max-height:none!important;overflow:visible!important}
     .print-only{display:block}
     .print-head{margin-bottom:8px}
     .print-head h2{font-family:"Archivo",sans-serif;font-size:16px;margin:0}
@@ -2816,9 +2816,44 @@
     return out;
   }
 
+  /** Linhas da matriz visual (semana × lote), na mesma ordem/formato mostrado na tela e no PDF. */
+  function matrixSheetRows(){
+    var segs=buildSchedule();
+    var totalWeeks=1; segs.forEach(function(sg){totalWeeks=Math.max(totalWeeks,sg.start+sg.dur-1);});
+    var cell={};
+    segs.forEach(function(sg){
+      for(var i=0;i<sg.dur;i++){var w=sg.start+i;var k=w+'::'+sg.li;
+        (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i]});}
+    });
+    var calRows=buildCalendarRows(totalWeeks);
+    var rows=[['Segunda-feira','Semana'].concat(LOTS)];
+    for(var idx=calRows.length-1;idx>=0;idx--){
+      var entry=calRows[idx], d=entry.date;
+      if(entry.isHoliday){
+        rows.push([fmtDate(d),'S'+isoWeek(d)+' (paralisada)'].concat(LOTS.map(function(){return '';})));
+        continue;
+      }
+      var w=entry.working, row=[fmtDate(d),'S'+isoWeek(d)];
+      for(var li=0;li<LOTS.length;li++){
+        var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0;});
+        row.push(subs.map(function(sc){
+          return fmtBR(sc.qty)+(sc.sg.teams>1?' ('+teamLabel(sc.sg.name,sc.sg.team)+')':'');
+        }).join(' + '));
+      }
+      rows.push(row);
+    }
+    SERV.forEach(function(s,si){
+      var row=[s.n+' ('+s.u+')',''];
+      LOTS.forEach(function(l,li){ row.push(QTY[li][si]>0?QTY[li][si]:''); });
+      rows.push(row);
+    });
+    return rows;
+  }
   function exportExcel(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
     var wb=XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(matrixSheetRows()),'Matriz Tempo-Caminho');
 
     var servRows=[['Nome','Unidade','Cor','Equipes','Produtividade','Lag','Predecessores']];
     SERV.forEach(function(s){
@@ -2847,6 +2882,8 @@
   }
   function exportPdf(){
     window._cronoTab='tc'; // relatório sempre a partir da visão limpa (com totais por lote)
+    var prevZoom=window._matrixZoom||1;
+    window._matrixZoom=1;
     renderCrono();
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
     var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
@@ -2864,6 +2901,21 @@
         '<li>Sub-células lado a lado numa mesma semana = atividades em paralelo no mesmo lote.</li>'+
         '<li>A última semana de uma atividade mostra o saldo (qtd. &lt; produção semanal cheia).</li></ul>';
     }
+    // Encolhe a matriz (zoom) pra caber título + matriz + legenda numa única folha paisagem.
+    var wrap=document.getElementById('tcWrap');
+    var table=wrap?wrap.querySelector('table'):null;
+    if(table){
+      var naturalW=table.scrollWidth, naturalH=table.scrollHeight;
+      var pxPerMm=96/25.4;
+      var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
+      var reserved=(foot?foot.scrollHeight:0)+80;
+      if(naturalW>0&&naturalH>0){
+        var fitScale=Math.min(1,(pageW-4)/naturalW,(pageH-reserved)/naturalH);
+        window._matrixZoom=Math.max(0.15,+fitScale.toFixed(3));
+        renderCrono();
+      }
+    }
+    window.onafterprint=function(){ window._matrixZoom=prevZoom; renderCrono(); window.onafterprint=null; };
     window.print();
   }
 
