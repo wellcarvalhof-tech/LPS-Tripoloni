@@ -203,6 +203,7 @@
   .lotchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12px;cursor:pointer}
   .lotchip.on{border-color:var(--accent);background:var(--accent-soft);font-weight:600}
   .lotchip.other{border-style:dashed;color:var(--muted)}
+  .tc-svctoggle{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
   .seqlist{display:flex;flex-direction:column;gap:4px;margin-top:6px;max-width:420px}
   .seqrow{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:5px 9px}
   .seqnum{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:700}
@@ -2973,6 +2974,7 @@
     }
     return rows;
   }
+  var TC_HIDDEN_SVC={}; // {si:true} — serviços ocultos na matriz Tempo-Caminho (só visual, não muda o cronograma)
   function matrixTableHTML(withSummary){
     var segs=buildSchedule();
     var totalWeeks=1; segs.forEach(function(sg){totalWeeks=Math.max(totalWeeks,sg.start+sg.dur-1);});
@@ -2996,7 +2998,7 @@
       var f=weekFactor(w,periods,wfCache2);
       var rainBadge=f<0.999?' <span class="tcm-rain" title="Capacidade reduzida por período de baixa praticabilidade">🌧 '+Math.round(f*100)+'%</span>':'';
       for(var li=0;li<LOTS.length;li++){
-        var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0;});
+        var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0&&!TC_HIDDEN_SVC[sc.sg.si];});
         if(!subs.length){tds+='<td class="cell" data-lot="'+li+'"></td>';continue;}
         var inner=subs.map(function(sc,i){
           var rk=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, r=RESTR[rk];
@@ -3014,16 +3016,25 @@
     }
     if(withSummary){
       body+=SERV.map(function(s,si){
+        if(TC_HIDDEN_SVC[si])return '';
         var hex=svcColor(s);
         var cells=LOTS.map(function(l,li){return '<td class="sumq">'+(QTY[li][si]>0?fmtBR(QTY[li][si]):'—')+'</td>';}).join('');
         return '<tr class="sumrow"><td class="sumname" colspan="2" style="background:'+hex+';color:'+pickFont(hex)+'">'+s.n+' ('+s.u+')</td>'+cells+'</tr>';
       }).join('');
     }
+    var anyHidden=SERV.some(function(s,si){return !!TC_HIDDEN_SVC[si];});
+    var svcToggles=SERV.length?('<div class="tc-svctoggle">'+
+      SERV.map(function(sv,si){
+        var hidden=!!TC_HIDDEN_SVC[si];
+        return '<label class="lotchip'+(hidden?' other':' on')+'"><input type="checkbox" data-svcvis="'+si+'"'+(hidden?'':' checked')+'><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</label>';
+      }).join('')+
+      (anyHidden?'<button class="btn" id="svcShowAll" style="padding:4px 10px;font-size:11.5px">Mostrar todos</button>':'')+
+    '</div>'):'';
     var z=window._matrixZoom||1;
     var zoomBar='<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
       '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
       (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+'</div>';
-    return zoomBar+'<div class="tc-wrap" id="tcWrap" style="zoom:'+z+'"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap" style="zoom:'+z+'"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
   }
   function wireMatrixZoom(){
     document.querySelectorAll('[data-zoom]').forEach(function(b){
@@ -3045,6 +3056,15 @@
         go(current);
       });
     });
+    document.querySelectorAll('[data-svcvis]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var si=+cb.getAttribute('data-svcvis');
+        if(cb.checked)delete TC_HIDDEN_SVC[si]; else TC_HIDDEN_SVC[si]=true;
+        go(current);
+      });
+    });
+    var showAll=document.getElementById('svcShowAll');
+    if(showAll)showAll.addEventListener('click',function(){ TC_HIDDEN_SVC={}; go(current); });
   }
 
   function editarPorEquipeHTML(){
