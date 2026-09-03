@@ -871,14 +871,22 @@
   function servicoPRHTML(spr){
     var tw=spr.tw;
     if(!SERV.length||!tw)return sectionCard('servicopr','Previsto × Realizado por serviço','',null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra ver essa visão.</div>');
+    var visible=[];
+    SERV.forEach(function(s,si){
+      var p=spr.previsto[si]||[], r=spr.realizado[si]||[], has=false;
+      for(var w=0;w<tw;w++){ if(p[w]>0||r[w]>0){has=true;break;} }
+      if(has)visible.push(si);
+    });
     var w, th='<th style="min-width:150px">Serviço</th>';
     for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
-    var rows=SERV.map(function(s,si){
-      var cells='';
+    var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
+    var rows=visible.map(function(si){
+      var s=SERV[si], cells='';
       for(var w2=1;w2<=tw;w2++){
         var p=(spr.previsto[si]||[])[w2-1]||0, rv=(spr.realizado[si]||[])[w2-1]||0;
+        totP[w2-1]+=p; totR[w2-1]+=rv;
         var has=p>0||rv>0;
         var bg=has?(rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)')):'transparent';
         var fg=has?(rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)')):'var(--muted)';
@@ -887,17 +895,37 @@
       }
       return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td>'+cells+'</tr>';
     }).join('');
+    if(visible.length){
+      var totCells='';
+      for(var w3=1;w3<=tw;w3++){
+        var p3=totP[w3-1], r3=totR[w3-1];
+        var bg3=r3>p3?'var(--crit-bg)':(r3<p3?'var(--warn-bg)':'var(--good-bg)');
+        var fg3=r3>p3?'var(--crit)':(r3<p3?'var(--warn)':'var(--good)');
+        totCells+='<td class="r mono" style="font-weight:700">'+(p3>0?fmtBR(p3):'—')+'</td>'+
+          '<td class="r mono" style="background:'+bg3+';color:'+fg3+';font-weight:700">'+(r3>0?fmtBR(r3):'—')+'</td>';
+      }
+      rows+='<tr style="background:var(--elev)"><td style="font-weight:700">Total geral</td>'+totCells+'</tr>';
+    }
     return sectionCard('servicopr','Previsto × Realizado por serviço',
-      'Total de recursos mobilizados por serviço, por semana. O realizado apontado por recurso é rateado entre os serviços que o utilizam naquela semana, proporcional ao previsto.',
+      'Mostra só serviços com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre os serviços que o utilizam naquela semana, proporcional ao previsto.',
       null,
-      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+      visible.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço com previsto ou realizado apontado ainda.</div>'
     );
   }
   function realizadoHTML(hist){
     var tw=hist.tw;
     if(!RECURSOS.length||!tw)return sectionCard('realizado','Realizado (previsto × realizado)','',null,'<div class="note">Cadastre recursos e o cronograma pra apontar o realizado.</div>');
     var realDirty=Object.keys(REALIZADO_DIRTY).length;
-    var list=RECURSOS.filter(function(r){return REAL_FILTER==='todos'||r.tipo===REAL_FILTER;});
+    var list=RECURSOS.filter(function(r){
+      if(REAL_FILTER!=='todos'&&r.tipo!==REAL_FILTER)return false;
+      var arr=hist.byResource[r.id]||[];
+      for(var w=0;w<arr.length;w++){ if(arr[w]>0)return true; }
+      for(var w2=1;w2<=tw;w2++){
+        var d=mondayOf(w2).toISOString().slice(0,10);
+        if((REALIZADO_REC[r.id+'::'+d]||0)>0)return true;
+      }
+      return false;
+    });
     var groups={}, order=[];
     list.forEach(function(r){
       var cat=r.cat||'Sem categoria';
@@ -908,6 +936,7 @@
     for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
+    var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
     var rows='';
     order.forEach(function(cat){
       rows+='<tr><td colspan="'+(1+tw*2)+'" style="background:var(--elev);font-weight:700;padding:6px 8px">'+cat+'</td></tr>';
@@ -917,6 +946,7 @@
           var d=mondayOf(w2).toISOString().slice(0,10);
           var p=(hist.byResource[r.id]||[])[w2-1]||0;
           var rv=REALIZADO_REC[r.id+'::'+d]||0;
+          totP[w2-1]+=p; totR[w2-1]+=rv;
           var bg=rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)');
           var fg=rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)');
           cells+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(p>0?fmtBR(p):'—')+'</td>'+
@@ -925,14 +955,25 @@
         rows+='<tr><td>'+r.n+'</td>'+cells+'</tr>';
       });
     });
+    if(list.length){
+      var totCells='';
+      for(var w3=1;w3<=tw;w3++){
+        var p3=totP[w3-1], r3=totR[w3-1];
+        var bg3=r3>p3?'var(--crit-bg)':(r3<p3?'var(--warn-bg)':'var(--good-bg)');
+        var fg3=r3>p3?'var(--crit)':(r3<p3?'var(--warn)':'var(--good)');
+        totCells+='<td class="r mono" style="font-weight:700">'+(p3>0?fmtBR(p3):'—')+'</td>'+
+          '<td class="r mono" style="background:'+bg3+';color:'+fg3+';font-weight:700">'+(r3>0?fmtBR(r3):'—')+'</td>';
+      }
+      rows+='<tr style="background:var(--elev)"><td style="font-weight:700">Total geral</td>'+totCells+'</tr>';
+    }
     var filtBtns=['todos','funcao','equipamento'].map(function(f){
       var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
       return '<button class="subtab'+(REAL_FILTER===f?' active':'')+'" data-realfilter="'+f+'">'+lbl+'</button>';
     }).join('');
     return sectionCard('realizado','Realizado (previsto × realizado)',
-      'P = previsto (cronograma × equipe típica). R = realizado — acima do previsto fica vermelho, abaixo fica amarelo, igual fica verde.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
+      'Mostra só recursos com previsto ou realizado apontado. P = previsto (cronograma × equipe típica). R = realizado — acima do previsto fica vermelho, abaixo fica amarelo, igual fica verde.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
       filtBtns+'<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
-      list.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum recurso deste tipo.</div>'
+      list.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum recurso com previsto ou realizado apontado ainda.</div>'
     );
   }
   VIEWS['cr-hist']=function(){
@@ -1014,7 +1055,7 @@
       return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
     }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,filtroBtns,
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Demanda por semana = equipes ativas do serviço × quantidade por equipe.</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação).</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
@@ -1997,36 +2038,48 @@
     sCurve('scv2',data);
   }
 
-  var HIST_PALETTE=['#1e3a8a','#0ea5e9','#65a30d','#f97316','#7c3aed','#dc2626','#14b8a6','#a855f7','#facc15','#84cc16','#e11d48','#0f766e'];
   function renderHistChart(){
     var el=document.getElementById('histSvg'); if(!el)return;
     var hist=computeHistogram(), tw=hist.tw;
     var visRes=RECURSOS.filter(function(r){return HIST_FILTER==='todos'||r.tipo===HIST_FILTER;});
     var legEl=document.getElementById('histLeg');
     if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
+    var prevWeek=[], realWeek=[];
+    for(var w=0;w<tw;w++){
+      var d=mondayOf(w+1).toISOString().slice(0,10), p=0, r=0;
+      visRes.forEach(function(res){
+        p+=(hist.byResource[res.id]||[])[w]||0;
+        r+=REALIZADO_REC[res.id+'::'+d]||0;
+      });
+      prevWeek.push(p); realWeek.push(r);
+    }
     var W=700,H=320,pl=40,pr=12,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb;
     var maxVal=1;
-    for(var w=0;w<tw;w++){
-      var stack=0; visRes.forEach(function(r){stack+=(hist.byResource[r.id]||[])[w]||0;});
-      maxVal=Math.max(maxVal,stack);
-    }
-    var xx=function(w){return pl+iw*w/tw;}, bw=iw/tw*0.82;
+    for(var w2=0;w2<tw;w2++)maxVal=Math.max(maxVal,prevWeek[w2],realWeek[w2]);
+    var xx=function(w3){return pl+iw*w3/tw;}, grpW=iw/tw*0.82, barW=grpW*0.42;
     var yy=function(v){return pt+ih-ih*v/maxVal;};
     var s='', steps=4;
     for(var g=0;g<=steps;g++){var val=Math.round(maxVal*g/steps);s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+val+'</text>';}
     var stepLbl=Math.max(1,Math.ceil(tw/14));
-    for(var wi=0;wi<tw;wi+=stepLbl){s+='<text class="axm" x="'+(xx(wi)+bw/2)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(wi+1))+'</text>';}
-    for(var w2=0;w2<tw;w2++){
-      var yCursor=0;
-      visRes.forEach(function(r,ri){
-        var v=(hist.byResource[r.id]||[])[w2]||0; if(v<=0)return;
-        var y1=yy(yCursor+v), y2=yy(yCursor);
-        s+='<rect x="'+xx(w2).toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+Math.max(0,bw).toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+HIST_PALETTE[ri%HIST_PALETTE.length]+'"><title>'+r.n+' — S'+isoWeek(mondayOf(w2+1))+': '+fmtBR(v)+'</title></rect>';
-        yCursor+=v;
-      });
+    for(var wi=0;wi<tw;wi+=stepLbl){s+='<text class="axm" x="'+(xx(wi)+grpW/2)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(wi+1))+'</text>';}
+    for(var w4=0;w4<tw;w4++){
+      var pv=prevWeek[w4], rv=realWeek[w4]; if(pv<=0&&rv<=0)continue;
+      var x0=xx(w4), wkLbl='S'+isoWeek(mondayOf(w4+1));
+      if(pv>0){
+        var yP1=yy(pv), yP2=yy(0);
+        s+='<rect x="'+x0.toFixed(1)+'" y="'+yP1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yP2-yP1).toFixed(1)+'" fill="var(--line-2)" stroke="var(--muted)"><title>Previsto — '+wkLbl+': '+fmtBR(pv)+'</title></rect>';
+      }
+      if(rv>0){
+        var col=rv>pv?'var(--crit)':(rv<pv?'var(--warn)':'var(--good)');
+        var yR1=yy(rv), yR2=yy(0);
+        s+='<rect x="'+(x0+barW*1.15).toFixed(1)+'" y="'+yR1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yR2-yR1).toFixed(1)+'" fill="'+col+'"><title>Realizado — '+wkLbl+': '+fmtBR(rv)+'</title></rect>';
+      }
     }
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
-    if(legEl)legEl.innerHTML=visRes.map(function(r,ri){return '<span><span class="swatch" style="background:'+HIST_PALETTE[ri%HIST_PALETTE.length]+'"></span>'+r.n+'</span>';}).join('');
+    if(legEl)legEl.innerHTML='<span><span class="swatch" style="background:var(--line-2);border:1px solid var(--muted)"></span>Previsto</span>'+
+      '<span><span class="swatch" style="background:var(--good)"></span>Realizado = previsto</span>'+
+      '<span><span class="swatch" style="background:var(--warn)"></span>Realizado abaixo</span>'+
+      '<span><span class="swatch" style="background:var(--crit)"></span>Realizado acima</span>';
   }
 
   function ppcBars(id){
