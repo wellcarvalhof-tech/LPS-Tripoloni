@@ -487,7 +487,7 @@
     window._LOTIDS=lot.map(function(r){return r.id;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
-    ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false;
+    ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[]};
   }
@@ -712,18 +712,23 @@
     return head('Obra','Identificação e parâmetros gerais da obra','<button class="btn primary" id="saveObraBtn">Salvar</button>')+f;
   };
 
+  var LOT_SELECTED={}; // {li: true} — lotes marcados pra exclusão em lote
   VIEWS['cad-lotes']=function(){
-    var th='<th>#</th><th>Nome</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
+    var th='<th style="width:26px"><input type="checkbox" id="selAllLotes"'+(LOTS.length&&Object.keys(LOT_SELECTED).length===LOTS.length?' checked':'')+'></th><th>#</th><th>Nome</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
     var rows=LOTS.map(function(l,li){
       var qcells=SERV.map(function(s,si){return '<td><input class="einp" data-qty-si="'+si+'" type="number" style="width:96px" value="'+(QTY[li][si]||0)+'"></td>';}).join('');
-      return '<tr data-li="'+li+'"><td><div style="display:flex;align-items:center;gap:4px"><span style="width:18px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
+      return '<tr data-li="'+li+'" draggable="true"><td><input type="checkbox" data-selrow="'+li+'"'+(LOT_SELECTED[li]?' checked':'')+'></td>'+
+        '<td><div style="display:flex;align-items:center;gap:4px;cursor:grab" title="Arraste pra reordenar"><span style="opacity:.4">⠿</span><span style="width:18px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
         '<button class="iconbtn" data-up="'+li+'" title="subir"'+(li===0?' disabled':'')+'>↑</button><button class="iconbtn" data-down="'+li+'" title="descer"'+(li===LOTS.length-1?' disabled':'')+'>↓</button></div></td>'+
         '<td><input class="einp" data-lotenome style="width:150px" value="'+escAttr(l)+'"></td>'+qcells+'<td><button class="iconbtn" data-dellote>✕</button></td></tr>';
     }).join('');
     var lotesDirty=Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length;
-    return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.'+(lotesDirty?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addLote">+ Adicionar</button>'+'<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar alterações</button>')+
+    var selCount=Object.keys(LOT_SELECTED).length;
+    return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.'+(lotesDirty?' Há alterações não salvas.':''),impBtn()+
+      (selCount?'<button class="btn" id="delSelLotes" style="color:var(--crit);border-color:var(--crit)">✕ Excluir selecionados ('+selCount+')</button>':'')+
+      '<button class="btn primary" id="addLote">+ Adicionar</button>'+'<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar alterações</button>')+
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> para reordenar a sequência executiva dos lotes.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
+    '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
   };
 
   VIEWS['cad-equipes']=function(){
@@ -926,7 +931,7 @@
     if(!confirm('Excluir este lote e suas quantidades?'))return;
     try{
       await sbDeleteLote(id);
-      LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1);
+      LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1); LOT_SELECTED={};
       go('cad-lotes'); toast('Lote excluído.');
     }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
   }
@@ -955,6 +960,33 @@
       var tmpQty=QTY[li]; QTY[li]=QTY[target]; QTY[target]=tmpQty;
       go('cad-lotes'); toast('Lote reordenado.');
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
+  }
+  async function reorderLote(fromLi,toLi){
+    if(fromLi==null||toLi==null||fromLi===toLi)return;
+    var origIds=(window._LOTIDS||[]).slice();
+    var names=LOTS.slice(), lotIds=origIds.slice(), qtyRows=QTY.slice();
+    var movedName=names.splice(fromLi,1)[0], movedId=lotIds.splice(fromLi,1)[0], movedQty=qtyRows.splice(fromLi,1)[0];
+    if(movedId==null)return;
+    names.splice(toLi,0,movedName); lotIds.splice(toLi,0,movedId); qtyRows.splice(toLi,0,movedQty);
+    try{
+      for(var i=0;i<lotIds.length;i++){ if(lotIds[i]!==origIds[i])await sbUpdateLote(lotIds[i],{ordem:i+1}); }
+      LOTS=names; window._LOTIDS=lotIds; QTY=qtyRows; LOT_SELECTED={};
+      go('cad-lotes'); toast('Lote reordenado.');
+    }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
+  }
+  async function deleteSelectedLotes(){
+    var idxs=Object.keys(LOT_SELECTED).map(Number).sort(function(a,b){return b-a;});
+    if(!idxs.length)return;
+    if(!confirm('Excluir '+idxs.length+' lote(s) selecionado(s) e suas quantidades? Não dá pra desfazer.'))return;
+    try{
+      for(var i=0;i<idxs.length;i++){
+        var li=idxs[i], id=(window._LOTIDS||[])[li]; if(!id)continue;
+        await sbDeleteLote(id);
+        LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1);
+      }
+      LOT_SELECTED={};
+      go('cad-lotes'); toast('Lotes excluídos.');
+    }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
   }
   var CAL_DIRTY=false; // true quando obra/calendário tem edição pendente de salvar
   function saveObraSimpleField(field,val){
@@ -1452,7 +1484,25 @@
         if(up)up.addEventListener('click',function(){moveLote(li,-1);});
         var down=tr.querySelector('[data-down]');
         if(down)down.addEventListener('click',function(){moveLote(li,1);});
+        var sel=tr.querySelector('[data-selrow]');
+        if(sel)sel.addEventListener('change',function(){ if(sel.checked)LOT_SELECTED[li]=true; else delete LOT_SELECTED[li]; go('cad-lotes'); });
+        tr.addEventListener('dragstart',function(e){ window._lotDragSrc=li; tr.style.opacity='.5'; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(li));}catch(err){} });
+        tr.addEventListener('dragend',function(){ tr.style.opacity=''; });
+        tr.addEventListener('dragover',function(e){ e.preventDefault(); tr.style.background='var(--elev)'; });
+        tr.addEventListener('dragleave',function(){ tr.style.background=''; });
+        tr.addEventListener('drop',function(e){
+          e.preventDefault(); tr.style.background='';
+          var src=window._lotDragSrc; window._lotDragSrc=null;
+          if(src!=null)reorderLote(src,li);
+        });
       });
+      var selAll=document.getElementById('selAllLotes');
+      if(selAll)selAll.addEventListener('change',function(){
+        if(selAll.checked)LOTS.forEach(function(l,li){LOT_SELECTED[li]=true;}); else LOT_SELECTED={};
+        go('cad-lotes');
+      });
+      var delSel=document.getElementById('delSelLotes');
+      if(delSel)delSel.addEventListener('click',deleteSelectedLotes);
       var addL=document.getElementById('addLote');
       if(addL)addL.addEventListener('click',addLoteRow);
       var saveL=document.getElementById('saveLotes');
