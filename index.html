@@ -7,8 +7,8 @@
   :root{
     --bg:#EEF1F4; --surface:#FFFFFF; --elev:#F5F7F9; --line:#DDE3E9; --line-2:#E9EDF1;
     --ink:#1A2127; --ink-2:#54636F; --muted:#8593A0;
-    --nav-bg:#141A20; --nav-ink:#C7D2DC; --nav-ink-2:#8695A2; --nav-active:#F2B01E; --nav-hover:#1E262E;
-    --accent:#B5760A; --accent-soft:#F3E4C4;
+    --nav-bg:#141A20; --nav-ink:#C7D2DC; --nav-ink-2:#8695A2; --nav-active:#5FA0D6; --nav-hover:#1E262E;
+    --accent:#2D6FA6; --accent-soft:#D9E8F5;
     --c1:#3E7CB1; --c2:#5F9E6E; --c3:#C98A2B; --c4:#9A6DB0; --c5:#C0653F; --c6:#4FA3A8;
     --good:#2E9E6B; --warn:#C98A2B; --crit:#D33A3F; --info:#3E7CB1;
     --good-bg:#E4F3EC; --warn-bg:#F7EBD6; --crit-bg:#F8E2E3;
@@ -18,8 +18,8 @@
   :root:not([data-theme="light"]){ @media (prefers-color-scheme: dark){
     --bg:#0D1115; --surface:#161B21; --elev:#1D242B; --line:#28313A; --line-2:#212932;
     --ink:#EAEEF2; --ink-2:#A6B3BE; --muted:#71808C;
-    --nav-bg:#0A0E12; --nav-ink:#C7D2DC; --nav-ink-2:#7A8894; --nav-active:#F2B01E; --nav-hover:#161D24;
-    --accent:#F2B01E; --accent-soft:#3A3016;
+    --nav-bg:#0A0E12; --nav-ink:#C7D2DC; --nav-ink-2:#7A8894; --nav-active:#5FA0D6; --nav-hover:#161D24;
+    --accent:#5FA0D6; --accent-soft:#16283A;
     --c1:#5FA0D6; --c2:#5FB98A; --c3:#E0A93F; --c4:#B98BD4; --c5:#DB855C; --c6:#5FC2C8;
     --good:#41C089; --warn:#E0A93F; --crit:#E5565B; --info:#5FA0D6;
     --good-bg:#12281F; --warn-bg:#2C2413; --crit-bg:#301719;
@@ -28,8 +28,8 @@
   :root[data-theme="dark"]{
     --bg:#0D1115; --surface:#161B21; --elev:#1D242B; --line:#28313A; --line-2:#212932;
     --ink:#EAEEF2; --ink-2:#A6B3BE; --muted:#71808C;
-    --nav-bg:#0A0E12; --nav-ink:#C7D2DC; --nav-ink-2:#7A8894; --nav-active:#F2B01E; --nav-hover:#161D24;
-    --accent:#F2B01E; --accent-soft:#3A3016;
+    --nav-bg:#0A0E12; --nav-ink:#C7D2DC; --nav-ink-2:#7A8894; --nav-active:#5FA0D6; --nav-hover:#161D24;
+    --accent:#5FA0D6; --accent-soft:#16283A;
     --c1:#5FA0D6; --c2:#5FB98A; --c3:#E0A93F; --c4:#B98BD4; --c5:#DB855C; --c6:#5FC2C8;
     --good:#41C089; --warn:#E0A93F; --crit:#E5565B; --info:#5FA0D6;
     --good-bg:#12281F; --warn-bg:#2C2413; --crit-bg:#301719;
@@ -45,7 +45,7 @@
   /* ---------- Sidebar ---------- */
   .side{background:var(--nav-bg);color:var(--nav-ink);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
   .side-brand{display:flex;align-items:center;gap:11px;padding:18px 18px 16px}
-  .side-brand .g{width:34px;height:34px;border-radius:9px;flex:0 0 auto;background:linear-gradient(150deg,var(--nav-active),#9c6f10);display:grid;place-items:center}
+  .side-brand .g{width:34px;height:34px;border-radius:9px;flex:0 0 auto;background:linear-gradient(150deg,var(--nav-active),#164a73);display:grid;place-items:center}
   .side-brand .g svg{width:19px;height:19px}
   .side-brand h1{font-family:"Archivo",sans-serif;font-weight:800;font-size:15.5px;margin:0;color:#fff;letter-spacing:-.01em;line-height:1.1}
   .side-brand .sub{font-size:10.5px;color:var(--nav-ink-2);letter-spacing:.06em;text-transform:uppercase}
@@ -88,7 +88,7 @@
   .page-actions{margin-left:auto;display:flex;gap:8px}
   .btn{font-family:inherit;font-size:13px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
   .btn:hover{border-color:var(--accent)}
-  .btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1200}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .btn.primary:hover{filter:brightness(1.05)}
 
   .subtabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:0}
@@ -161,7 +161,7 @@
   .landing{position:fixed;inset:0;overflow-y:auto;background:var(--bg);z-index:80;display:none}
   .landing.show{display:block}
   .land-top{display:flex;align-items:center;gap:12px;padding:16px 26px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0}
-  .land-top .g{width:34px;height:34px;border-radius:9px;background:linear-gradient(150deg,var(--accent),#9c6f10);display:grid;place-items:center}
+  .land-top .g{width:34px;height:34px;border-radius:9px;background:linear-gradient(150deg,var(--accent),#164a73);display:grid;place-items:center}
   .land-top .g svg{width:19px;height:19px}
   .land-top h1{font-family:"Archivo",sans-serif;font-weight:800;font-size:16px;margin:0;letter-spacing:-.01em}
   .land-top .sub{font-size:10.5px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
@@ -219,6 +219,7 @@
   .tcm-team{position:absolute;bottom:0;left:2px;font-size:8px;font-weight:700;line-height:1;opacity:.75}
   .tcm-rain{font-size:9px;font-weight:600;color:var(--info);white-space:nowrap}
   tr.tcm-holrow td{background:var(--elev);color:var(--muted)}
+  tr.tcm-rainrow td.dt,tr.tcm-rainrow td.wk,tr.tcm-rainrow td.cell{background:var(--accent-soft)}
   td.tcm-holcell{text-align:center;font-size:11px;font-weight:600;letter-spacing:.03em}
   table.tcm tr.sumrow td{padding:6px 8px;font-weight:600;border-color:var(--line)}
   table.tcm td.sumname{text-align:center;font-weight:700;font-size:11.5px}
@@ -265,7 +266,7 @@
   .authgate[hidden]{display:none}
   .authbox{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:26px 26px 22px;width:100%;max-width:360px}
   .authbrand{display:flex;align-items:center;gap:11px;margin-bottom:18px}
-  .authbrand .g{width:36px;height:36px;border-radius:9px;background:linear-gradient(150deg,var(--accent),#9c6f10);display:grid;place-items:center}
+  .authbrand .g{width:36px;height:36px;border-radius:9px;background:linear-gradient(150deg,var(--accent),#164a73);display:grid;place-items:center}
   .authbrand .g svg{width:20px;height:20px}
   .authbrand b{font-family:"Archivo",sans-serif;font-weight:800;font-size:16px}
   .authbrand span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
@@ -1939,7 +1940,7 @@
         }).join('');
         tds+='<td class="cell" data-lot="'+li+'"><div class="tcm-row">'+inner+'</div></td>';
       }
-      body+='<tr data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+rainBadge+'</td>'+tds+'</tr>';
+      body+='<tr'+(f<0.999?' class="tcm-rainrow"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+rainBadge+'</td>'+tds+'</tr>';
     }
     if(withSummary){
       body+=SERV.map(function(s,si){
