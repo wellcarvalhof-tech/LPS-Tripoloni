@@ -2333,18 +2333,29 @@
   }
   async function importResourcesWorkbook(wb){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
-    var sheetName=wb.SheetNames.filter(function(n){return ['recursos','funcoes','funções','equipamentos','resources'].indexOf(n.trim().toLowerCase())>=0;})[0]||wb.SheetNames[0];
+    var sheetName=wb.SheetNames.filter(function(n){return ['recursos','funcoes','funções','funcaoobra','função obra','equipamentos','resources'].indexOf(n.trim().toLowerCase())>=0;})[0]||wb.SheetNames[0];
     if(!sheetName){alert('Planilha vazia.');return;}
-    var rows=sheetRows(wb.Sheets[sheetName]).slice(1);
+    var aoa=sheetRows(wb.Sheets[sheetName]);
+    if(!aoa.length){alert('Planilha vazia.');return;}
+    var header=(aoa[0]||[]).map(function(h){return String(h||'').trim().toLowerCase();});
+    // Formato "FuncaoObra" do ERP: só codNatureza + descricao — tudo função, sem categoria/unidade.
+    var isFuncaoObra=header.length<=2&&(header.indexOf('descricao')>=0||header.indexOf('descrição')>=0||header.indexOf('codnatureza')>=0);
+    var rows=aoa.slice(1);
     var existing={}; RECURSOS.forEach(function(r){existing[(r.n.trim().toLowerCase())+'::'+r.tipo]=true;});
     var created=0;
     for(var i=0;i<rows.length;i++){
-      var r=rows[i]; if(!r||!r[0])continue;
-      var nome=String(r[0]).trim(); if(!nome)continue;
-      var categoria=String(r[1]||'').trim();
-      var tipoRaw=String(r[2]||'').trim().toLowerCase();
-      var tipo=(tipoRaw.indexOf('eq')===0||tipoRaw.indexOf('máquina')>=0||tipoRaw.indexOf('maquina')>=0)?'equipamento':'funcao';
-      var unidade=String(r[3]||'').trim()||'un';
+      var r=rows[i]; if(!r)continue;
+      var nome,categoria,tipo,unidade;
+      if(isFuncaoObra){
+        nome=String(r[1]||'').trim(); if(!nome)continue;
+        categoria=''; tipo='funcao'; unidade='un';
+      }else{
+        nome=String(r[0]||'').trim(); if(!nome)continue;
+        categoria=String(r[1]||'').trim();
+        var tipoRaw=String(r[2]||'').trim().toLowerCase();
+        tipo=(tipoRaw.indexOf('eq')===0||tipoRaw.indexOf('máquina')>=0||tipoRaw.indexOf('maquina')>=0)?'equipamento':'funcao';
+        unidade=String(r[3]||'').trim()||'un';
+      }
       var key=nome.toLowerCase()+'::'+tipo; if(existing[key])continue;
       var id=await sbCreateRecurso(selectedObra.id,{nome:nome,tipo:tipo,unidade:unidade,categoria:categoria||null,ordem:RECURSOS.length});
       RECURSOS.push({id:id,n:nome,tipo:tipo,u:unidade,cat:categoria});
