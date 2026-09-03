@@ -829,6 +829,7 @@
 
   var HIST_FILTER='todos', HIST_SVC=null;
   var HIST_OPEN={};
+  var REAL_FILTER='todos';
   function sectionCard(key,title,note,actionsHtml,bodyHtml){
     var open=HIST_OPEN[key]!==false;
     return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;'+(open?'margin-bottom:10px':'')+'">'+
@@ -837,12 +838,68 @@
       (actionsHtml?'<div style="display:flex;gap:8px;flex-wrap:wrap">'+actionsHtml+'</div>':'')+
     '</div>'+(open?bodyHtml:'')+'</div>';
   }
+  /** Aloca o realizado de cada recurso, por semana, proporcionalmente ao previsto de cada serviço que o utiliza naquela semana. */
+  function computeServicePR(hist){
+    var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
+    var previsto={}, realizado={};
+    SERV.forEach(function(s,si){
+      var arr=[], arr2=[]; for(var w=0;w<tw;w++){arr.push(0);arr2.push(0);}
+      previsto[si]=arr; realizado[si]=arr2;
+      var crew=(s.cfg&&s.cfg.crew)||[], teams=teamsByService[si]||[];
+      crew.forEach(function(item){
+        for(var w2=0;w2<tw;w2++) arr[w2]+=(teams[w2]||0)*(item.qtyPerTeam||0);
+      });
+    });
+    for(var w=1;w<=tw;w++){
+      var d=mondayOf(w).toISOString().slice(0,10);
+      RECURSOS.forEach(function(r){
+        var rv=REALIZADO_REC[r.id+'::'+d]||0; if(!rv)return;
+        var totalPrev=0, shares=[];
+        SERV.forEach(function(s,si){
+          var crew=(s.cfg&&s.cfg.crew)||[];
+          var item=crew.filter(function(c){return c.resourceId===r.id;})[0];
+          if(!item)return;
+          var teams=(teamsByService[si]||[])[w-1]||0, p=teams*item.qtyPerTeam;
+          if(p>0){shares.push({si:si,p:p}); totalPrev+=p;}
+        });
+        if(totalPrev<=0)return;
+        shares.forEach(function(x){ realizado[x.si][w-1]+=rv*(x.p/totalPrev); });
+      });
+    }
+    return {previsto:previsto,realizado:realizado,tw:tw};
+  }
+  function servicoPRHTML(spr){
+    var tw=spr.tw;
+    if(!SERV.length||!tw)return sectionCard('servicopr','Previsto × Realizado por serviço','',null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra ver essa visão.</div>');
+    var w, th='<th style="min-width:150px">Serviço</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
+    var th2='<th></th>';
+    for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
+    var rows=SERV.map(function(s,si){
+      var cells='';
+      for(var w2=1;w2<=tw;w2++){
+        var p=(spr.previsto[si]||[])[w2-1]||0, rv=(spr.realizado[si]||[])[w2-1]||0;
+        var has=p>0||rv>0;
+        var bg=has?(rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)')):'transparent';
+        var fg=has?(rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)')):'var(--muted)';
+        cells+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(p>0?fmtBR(p):'—')+'</td>'+
+          '<td class="r mono" style="background:'+bg+';color:'+fg+';font-size:10.5px">'+(rv>0?fmtBR(rv):'—')+'</td>';
+      }
+      return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td>'+cells+'</tr>';
+    }).join('');
+    return sectionCard('servicopr','Previsto × Realizado por serviço',
+      'Total de recursos mobilizados por serviço, por semana. O realizado apontado por recurso é rateado entre os serviços que o utilizam naquela semana, proporcional ao previsto.',
+      null,
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    );
+  }
   function realizadoHTML(hist){
     var tw=hist.tw;
     if(!RECURSOS.length||!tw)return sectionCard('realizado','Realizado (previsto × realizado)','',null,'<div class="note">Cadastre recursos e o cronograma pra apontar o realizado.</div>');
     var realDirty=Object.keys(REALIZADO_DIRTY).length;
+    var list=RECURSOS.filter(function(r){return REAL_FILTER==='todos'||r.tipo===REAL_FILTER;});
     var groups={}, order=[];
-    RECURSOS.forEach(function(r){
+    list.forEach(function(r){
       var cat=r.cat||'Sem categoria';
       if(!groups[cat]){groups[cat]=[];order.push(cat);}
       groups[cat].push(r);
@@ -868,54 +925,77 @@
         rows+='<tr><td>'+r.n+'</td>'+cells+'</tr>';
       });
     });
+    var filtBtns=['todos','funcao','equipamento'].map(function(f){
+      var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
+      return '<button class="subtab'+(REAL_FILTER===f?' active':'')+'" data-realfilter="'+f+'">'+lbl+'</button>';
+    }).join('');
     return sectionCard('realizado','Realizado (previsto × realizado)',
       'P = previsto (cronograma × equipe típica). R = realizado — acima do previsto fica vermelho, abaixo fica amarelo, igual fica verde.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
-      '<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
-      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+      filtBtns+'<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
+      list.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum recurso deste tipo.</div>'
     );
   }
   VIEWS['cr-hist']=function(){
     var hist=computeHistogram();
     var recDirty=Object.keys(REC_DIRTY).length;
-    var recRows=RECURSOS.map(function(r,ri){
-      var peak=hist.peakByResource[r.id]||0;
-      return '<tr data-ri="'+ri+'">'+
-        '<td>'+sinp('nome',r.n,'150px')+'</td>'+
-        '<td>'+sinp('categoria',r.cat,'110px')+'</td>'+
-        '<td><select class="esel" data-field="tipo"><option value="funcao"'+(r.tipo==='funcao'?' selected':'')+'>Função</option><option value="equipamento"'+(r.tipo==='equipamento'?' selected':'')+'>Equipamento</option></select></td>'+
-        '<td>'+sinp('unidade',r.u,'70px')+'</td>'+
-        '<td class="r mono">'+fmtBR(peak)+'</td>'+
-        '<td><button class="iconbtn" data-delrec="'+ri+'">✕</button></td></tr>';
-    }).join('');
-    var catalogo=sectionCard('catalogo','Funções e equipamentos','Cadastre ou importe a lista (Nome, Categoria, Tipo, Unidade).',
+    function recRowsOfType(tipo){
+      return RECURSOS.map(function(r,ri){
+        if(r.tipo!==tipo)return '';
+        var peak=hist.peakByResource[r.id]||0;
+        return '<tr data-ri="'+ri+'">'+
+          '<td>'+sinp('nome',r.n,'260px')+'</td>'+
+          '<td>'+sinp('categoria',r.cat,'130px')+'</td>'+
+          '<td>'+sinp('unidade',r.u,'70px')+'</td>'+
+          '<td class="r mono">'+fmtBR(peak)+'</td>'+
+          '<td><button class="iconbtn" data-delrec="'+ri+'">✕</button></td></tr>';
+      }).join('');
+    }
+    var funcaoRows=recRowsOfType('funcao'), equipRows=recRowsOfType('equipamento');
+    var nFuncoes=RECURSOS.filter(function(r){return r.tipo==='funcao';}).length;
+    var nEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento';}).length;
+    var catHead='<th style="min-width:260px">Nome</th><th>Categoria</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
+    var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria e unidade.',
       '<button class="btn" id="histModelo">Modelo</button>'+
       '<button class="btn" id="histImportar">↥ Importar lista</button>'+
       '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
-      '<button class="btn primary" id="addRecurso">+ Adicionar</button>'+
+      '<button class="btn primary" id="addFuncao">+ Adicionar função</button>'+
       '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>',
-      RECURSOS.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Nome</th><th>Categoria</th><th>Tipo</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+recRows+'</tbody></table></div>':'<div class="note">Nenhum recurso cadastrado ainda.</div>'
+      nFuncoes?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+funcaoRows+'</tbody></table></div>':'<div class="note">Nenhuma função cadastrada ainda.</div>'
+    );
+    var catalogoEquip=sectionCard('catEquip','Equipamentos ('+nEquip+')','Equipamentos cadastrados — nome, categoria e unidade.',
+      '<button class="btn primary" id="addEquip">+ Adicionar equipamento</button>',
+      nEquip?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+equipRows+'</tbody></table></div>':'<div class="note">Nenhum equipamento cadastrado ainda.</div>'
     );
 
     var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
     var svc=svcSel!=null?SERV[svcSel]:null;
-    var crewRows='';
-    if(svc){
-      var crew=(svc.cfg&&svc.cfg.crew)||[];
-      crewRows=RECURSOS.map(function(r){
-        var item=crew.filter(function(c){return c.resourceId===r.id;})[0];
-        var qty=item?item.qtyPerTeam:0;
-        return '<tr><td>'+r.n+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
-          '<td><input class="einp" type="number" step="0.5" data-crewres="'+r.id+'" value="'+(qty||0)+'" style="width:80px"></td>'+
-          '<td class="r mono">'+fmtBR(qty*(svc.eq||0))+'</td></tr>';
-      }).join('');
-    }
+    var crew=svc?((svc.cfg&&svc.cfg.crew)||[]):[];
+    var crewRows=crew.map(function(item){
+      var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return '';
+      return '<tr><td>'+r.n+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
+        '<td><input class="einp" type="number" step="0.5" min="0" data-crewres="'+r.id+'" value="'+(item.qtyPerTeam||0)+'" style="width:80px"></td>'+
+        '<td class="r mono">'+fmtBR((item.qtyPerTeam||0)*(svc.eq||0))+'</td>'+
+        '<td><button class="iconbtn" data-crewdel="'+r.id+'">✕</button></td></tr>';
+    }).join('');
+    var crewOptions=RECURSOS.filter(function(r){return !crew.some(function(c){return c.resourceId===r.id;});})
+      .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
     var equipeSel='<select class="esel" id="histSvcSel">'+SERV.map(function(s,si){return '<option value="'+si+'"'+(si===svcSel?' selected':'')+'>'+s.n+'</option>';}).join('')+'</select>';
+    var addCrewCtl=(svc&&RECURSOS.length)?(
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
+      '<input class="einp" id="crewAddInput" list="crewDatalist" placeholder="Buscar função ou equipamento..." style="width:240px">'+
+      '<datalist id="crewDatalist">'+crewOptions+'</datalist>'+
+      '<input class="einp" id="crewAddQty" type="number" step="0.5" min="0.5" value="1" style="width:70px" title="Qtd. por equipe">'+
+      '<button class="btn primary" id="crewAddBtn">+ Adicionar à equipe</button>'+
+      '</div>'
+    ):'';
     var equipe=sectionCard('equipe','Equipe típica do serviço',null,
       null,
       (SERV.length?'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+equipeSel+
         (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+'</div>':'')+
-      (!svc||!RECURSOS.length?'<div class="note">Cadastre serviços e recursos pra montar a equipe típica.</div>':
-        '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')
+      (!svc?'<div class="note">Cadastre um serviço pra montar a equipe típica.</div>':
+        (!crew.length?'<div class="note">Nenhum recurso na equipe deste serviço ainda. Busque abaixo pra adicionar.</div>':
+        '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th><th></th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')
+        +addCrewCtl)
     );
 
     var totRows=SERV.map(function(s,si){
@@ -927,6 +1007,8 @@
         '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>'
     );
 
+    var servicoPR=servicoPRHTML(computeServicePR(hist));
+
     var filtroBtns=['todos','funcao','equipamento'].map(function(f){
       var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
       return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
@@ -936,7 +1018,7 @@
     );
 
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
-      catalogo+equipe+totais+grafico+realizadoHTML(hist);
+      catalogoFuncoes+catalogoEquip+equipe+totais+servicoPR+grafico+realizadoHTML(hist);
   };
 
   VIEWS['cr-cenarios']=function(){
@@ -1739,8 +1821,10 @@
         var del=tr.querySelector('[data-delrec]');
         if(del)del.addEventListener('click',function(){deleteRecursoRow(ri);});
       });
-      var addRec=document.getElementById('addRecurso');
-      if(addRec)addRec.addEventListener('click',addRecursoRow);
+      var addFuncao=document.getElementById('addFuncao');
+      if(addFuncao)addFuncao.addEventListener('click',function(){addRecursoRow('funcao');});
+      var addEquip=document.getElementById('addEquip');
+      if(addEquip)addEquip.addEventListener('click',function(){addRecursoRow('equipamento');});
       var saveRec=document.getElementById('saveRecursos');
       if(saveRec)saveRec.addEventListener('click',saveRecursosAll);
       var modelo=document.getElementById('histModelo');
@@ -1758,8 +1842,31 @@
           saveCrewQty(svcSel,inp.getAttribute('data-crewres'),Math.max(0,parseFloat(inp.value)||0));
         });
       });
+      document.querySelectorAll('[data-crewdel]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+          if(svcSel==null)return;
+          saveCrewQty(svcSel,b.getAttribute('data-crewdel'),0);
+        });
+      });
+      var crewAddBtn=document.getElementById('crewAddBtn');
+      if(crewAddBtn)crewAddBtn.addEventListener('click',function(){
+        var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+        if(svcSel==null)return;
+        var inp=document.getElementById('crewAddInput'), qtyInp=document.getElementById('crewAddQty');
+        var name=(inp.value||'').trim(); if(!name)return;
+        var r=RECURSOS.filter(function(x){return x.n.trim().toLowerCase()===name.toLowerCase();})[0];
+        if(!r){alert('Recurso não encontrado. Selecione um item da lista de sugestões.');return;}
+        var qty=Math.max(0.01,parseFloat(qtyInp.value)||1);
+        saveCrewQty(svcSel,r.id,qty);
+      });
+      var crewAddInput=document.getElementById('crewAddInput');
+      if(crewAddInput)crewAddInput.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();var b=document.getElementById('crewAddBtn');if(b)b.click();}});
       document.querySelectorAll('[data-histfilter]').forEach(function(b){
         b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-realfilter]').forEach(function(b){
+        b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
       });
       document.querySelectorAll('[data-realres]').forEach(function(inp){
         inp.addEventListener('change',function(){saveRealizadoField(inp.getAttribute('data-realres'),inp.getAttribute('data-realdate'),inp.value);});
@@ -2191,10 +2298,11 @@
       go('cr-hist'); toast('Recursos salvos.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
   }
-  async function addRecursoRow(){
+  async function addRecursoRow(tipo){
     if(!selectedObra)return;
+    tipo=(tipo==='equipamento')?'equipamento':'funcao';
     var idx=RECURSOS.length;
-    var patch={nome:'Novo recurso',tipo:'funcao',unidade:'un',ordem:idx};
+    var patch={nome:tipo==='equipamento'?'Novo equipamento':'Nova função',tipo:tipo,unidade:'un',ordem:idx};
     try{
       var id=await sbCreateRecurso(selectedObra.id,patch);
       RECURSOS.push({id:id,n:patch.nome,tipo:patch.tipo,u:patch.unidade,cat:''});
