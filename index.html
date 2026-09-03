@@ -779,7 +779,7 @@
         '<td>'+predChips(si)+'</td>'+
         '<td>'+sinp('lag_semanas',s.lag||0,'54px','number')+'</td>'+
         '<td><button class="iconbtn" data-del="'+si+'">✕</button></td></tr>';
-      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="9">'+svcDetail(s)+'</td></tr>';
+      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="9">'+svcDetail(s,si)+'</td></tr>';
       return main+det;
     }).join('');
     return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.'+(Object.keys(SVC_DIRTY).length?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>'+'<button class="btn primary" id="saveServicos"'+(Object.keys(SVC_DIRTY).length?'':' disabled')+'>💾 Salvar alterações</button>')+
@@ -1443,6 +1443,13 @@
     SVC_DIRTY[si]=true;
     go('cad-serv');
   }
+  function saveSvcCfgField(si,field,val){
+    var s=SERV[si]; if(!s)return;
+    var patch={}; patch[field]=val;
+    s.cfg=Object.assign({},s.cfg,patch);
+    SVC_DIRTY[si]=true;
+    go('cad-serv');
+  }
   function togglePredecessor(si,predId){
     var s=SERV[si]; if(!s)return;
     s.cfg=s.cfg||{}; var preds=(s.cfg.predecessors||[]).slice();
@@ -1452,7 +1459,7 @@
     SVC_DIRTY[si]=true;
     go('cad-serv');
   }
-  function svcDetail(s){
+  function svcDetail(s,si){
     var teams=[];for(var i=1;i<=s.eq;i++)teams.push(i);
     var lotOpts='<option>Auto</option>'+LOTS.map(function(l){return '<option>'+l+'</option>';}).join('');
     var startLots=teams.map(function(t){return '<span class="ed-team"><em>Equipe '+t+':</em><select class="esel">'+lotOpts+'</select></span>';}).join('');
@@ -1461,15 +1468,29 @@
     var teamSel='<select class="esel">'+teams.map(function(t){return '<option>Equipe '+t+'</option>';}).join('')+'</select>';
     var lotSel='<select class="esel">'+LOTS.map(function(l){return '<option>'+l+'</option>';}).join('')+'</select>';
     var boost='<span class="ed-team"><em>Equipe:</em>'+teamSel+'<em>A partir do lote:</em>'+lotSel+'<em>Nova prod.:</em>'+tinp(pnum(s.p),'82px','number')+'<em>'+s.u+'/sem</em><button class="iconbtn">✕</button></span>';
+    var cfg=s.cfg||{};
+    var queueOn=!!cfg.pullFromQueue;
+    var targetVal=cfg.targetEndWeek>0?cfg.targetEndWeek:'';
+    var targetInfo='';
+    if(cfg.targetEndWeek>0){
+      var svcSegs=buildSchedule().filter(function(sg){return sg.si===si;});
+      var maxEnd=0; svcSegs.forEach(function(sg){maxEnd=Math.max(maxEnd,sg.start+sg.dur-1);});
+      if(maxEnd>0){
+        var over=maxEnd>cfg.targetEndWeek;
+        targetInfo='<div class="note" style="margin-top:6px;'+(over?'color:var(--crit)':'color:var(--good)')+'">'+(over?'⚠ ':'✓ ')+'Previsão de término atual: S'+isoWeek(mondayOf(maxEnd))+(over?(' — '+(maxEnd-cfg.targetEndWeek)+' semana(s) depois da meta'):' — dentro da meta')+'</div>';
+      }
+    }
     return '<div class="ed-sec"><span class="lab">Lote inicial de cada equipe</span>'+startLots+'</div>'+
       '<div class="ed-sec"><span class="lab">Produtividade base por equipe ('+s.u+'/sem)</span>'+prods+'</div>'+
       '<div class="ed-sec"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="lab" style="margin:0">Aumentos de produtividade (a partir de um lote)</span><button class="btn" style="padding:4px 9px">+ Adicionar</button></div>'+boost+'</div>'+
       '<div class="ed-checks">'+
-        '<label><input type="checkbox">Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
-        '<label><input type="checkbox">Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
-        '<label><input type="checkbox">Sem paralisações (execução contínua)</label>'+
-        '<label>Semana alvo de término: '+tinp('','70px','number')+' <span style="color:var(--muted)">(usa backward-schedule)</span></label>'+
-      '</div>';
+        '<label><input type="checkbox" data-cfgbool="parallelWithPredecessor" data-si="'+si+'"'+(cfg.parallelWithPredecessor?' checked':'')+'>Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
+        '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
+        '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua, ignora chuva)</label>'+
+        '<label>Semana alvo de término: <input class="einp" type="number" data-cfgnum="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:70px"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
+      '</div>'+
+      (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
+      targetInfo;
   }
   function miniTable(hs,rows){
     return '<table><thead><tr>'+hs.map(function(h,i){return '<th'+(i?' class="r"':'')+'>'+h+'</th>';}).join('')+'</tr></thead><tbody>'+
@@ -1929,6 +1950,15 @@
         var si=tr?+tr.id.replace('det',''):null;
         if(si==null||isNaN(si))return;
         inp.addEventListener('change',function(){saveTeamProd(si,+inp.getAttribute('data-teamprod'),inp.value);});
+      });
+      document.querySelectorAll('[data-cfgbool]').forEach(function(cb){
+        cb.addEventListener('change',function(){saveSvcCfgField(+cb.getAttribute('data-si'),cb.getAttribute('data-cfgbool'),cb.checked);});
+      });
+      document.querySelectorAll('[data-cfgnum]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var v=inp.value===''?null:Math.max(1,parseInt(inp.value,10)||0);
+          saveSvcCfgField(+inp.getAttribute('data-si'),inp.getAttribute('data-cfgnum'),v);
+        });
       });
       var addB=document.getElementById('addServico');
       if(addB)addB.addEventListener('click',addServicoRow);
@@ -2459,7 +2489,7 @@
   function buildSchedule(){
     var segs=[], startByKey={}, endByKey={};
     var order=topoSortServices();
-    var periods=calRainPeriods(), wfCache={};
+    var periods=calRainPeriods(), wfCache={}, wfCacheNoint={};
     function predReadyWeek(s,li){
       var earliest=1;
       var preds=(s.cfg&&s.cfg.predecessors)||[];
@@ -2477,33 +2507,70 @@
     order.forEach(function(si){
       var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s);
       if(teams<=0||prod<=0)return;
-      var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
-      LOTS.forEach(function(l,li){
-        if(QTY[li][si]<=0)return;
-        var o=ovrGet(li,si);
-        var team=(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1);
-        var seq=(o&&o.seq!=null)?o.seq:li;
-        teamLots[team-1].push({li:li,seq:seq});
-      });
-      teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
-      teamLots.forEach(function(lotIdxs,tIdx){
-        var team=tIdx+1, teamPos=0;
-        var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
-        var teamProd=teamProds[tIdx]>0?teamProds[tIdx]:prod;
-        lotIdxs.forEach(function(item){
+      var noInt=!!(s.cfg&&s.cfg.noInterruption);
+      var svcPeriods=noInt?[]:periods, svcCache=noInt?wfCacheNoint:wfCache;
+      var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
+      if(s.cfg&&s.cfg.pullFromQueue){
+        // Fila dinâmica: os lotes entram numa fila única (na ordem de sequência) e cada um
+        // é entregue à equipe que estiver livre mais cedo, em vez de times fixos por lote.
+        var queue=[];
+        LOTS.forEach(function(l,li){
+          if(QTY[li][si]<=0)return;
+          var o=ovrGet(li,si);
+          queue.push({li:li,seq:(o&&o.seq!=null)?o.seq:li});
+        });
+        queue.sort(function(a,b){return a.seq-b.seq;});
+        var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(0);
+        queue.forEach(function(item){
           var li=item.li, qty=QTY[li][si], o=ovrGet(li,si);
+          var bestT=0;
+          for(var t1=1;t1<teams;t1++){ if(teamPos[t1]<teamPos[bestT])bestT=t1; }
+          var teamProd=teamProds[bestT]>0?teamProds[bestT]:prod;
           var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
           var earliestPos=predReadyWeek(s,li)-1;
           var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
-          var startPos=Math.max(earliestPos,teamPos,pinPos);
+          var startPos=Math.max(earliestPos,teamPos[bestT],pinPos);
           var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-          var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
-          segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
-            color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
+          var packed=packSegment(startPos,qty/effProd,effProd,qty,svcPeriods,svcCache,fixedDur);
+          segs.push({li:li,si:si,team:bestT+1,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
+            color:teamColor(hex,bestT+1,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
           startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
-          teamPos=packed.endPos;
+          teamPos[bestT]=packed.endPos;
         });
-      });
+      } else {
+        var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
+        LOTS.forEach(function(l,li){
+          if(QTY[li][si]<=0)return;
+          var o=ovrGet(li,si);
+          var team=(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1);
+          var seq=(o&&o.seq!=null)?o.seq:li;
+          teamLots[team-1].push({li:li,seq:seq});
+        });
+        teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
+        teamLots.forEach(function(lotIdxs,tIdx){
+          var team=tIdx+1, tPos=0;
+          var teamProd=teamProds[tIdx]>0?teamProds[tIdx]:prod;
+          lotIdxs.forEach(function(item){
+            var li=item.li, qty=QTY[li][si], o=ovrGet(li,si);
+            var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
+            var earliestPos=predReadyWeek(s,li)-1;
+            var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
+            var startPos=Math.max(earliestPos,tPos,pinPos);
+            var fixedDur=(o&&o.duration>0)?o.duration:undefined;
+            var packed=packSegment(startPos,qty/effProd,effProd,qty,svcPeriods,svcCache,fixedDur);
+            segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
+              color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
+            startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
+            tPos=packed.endPos;
+          });
+        });
+      }
+      var target=(s.cfg&&s.cfg.targetEndWeek>0)?s.cfg.targetEndWeek:null;
+      if(target){
+        var svcSegs=segs.filter(function(sg){return sg.si===si;});
+        var maxEnd=0; svcSegs.forEach(function(sg){maxEnd=Math.max(maxEnd,sg.start+sg.dur-1);});
+        if(maxEnd>target)svcSegs.forEach(function(sg){sg.overTarget=true;});
+      }
     });
     return segs;
   }
@@ -3003,12 +3070,13 @@
         var inner=subs.map(function(sc,i){
           var rk=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, r=RESTR[rk];
           var badge=r?'<span class="tcm-badge" style="background:'+r.cat+'" title="'+r.lab+'">▲'+r.n+'</span>':'';
+          var overBadge=(sc.isEnd&&sc.sg.overTarget)?'<span class="tcm-badge" style="background:var(--crit)" title="Previsão de término depois da semana alvo">⚠</span>':'';
           var grip=sc.isStart?'<span class="tcm-grip">⋮</span>':'';
           var teamTag=sc.isStart?'<span class="tcm-team">'+teamLabel(sc.sg.name,sc.sg.team)+'</span>':'';
           var adj=sc.sg.adjusted?';outline:2px solid #fff;outline-offset:-2px':'';
           return '<div class="tcm-seg" data-li="'+sc.sg.li+'" data-si="'+sc.sg.si+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
-            (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+adj+'" title="'+sc.sg.name+' — Equipe '+sc.sg.team+(sc.isEnd?' (saldo)':'')+(sc.sg.adjusted?' (ajustado)':'')+'">'+
-            grip+fmtBR(sc.qty)+badge+teamTag+'</div>';
+            (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+adj+'" title="'+sc.sg.name+' — Equipe '+sc.sg.team+(sc.isEnd?' (saldo)':'')+(sc.sg.adjusted?' (ajustado)':'')+(sc.sg.overTarget?' — previsão de término depois da semana alvo':'')+'">'+
+            grip+fmtBR(sc.qty)+badge+overBadge+teamTag+'</div>';
         }).join('');
         tds+='<td class="cell" data-lot="'+li+'"><div class="tcm-row">'+inner+'</div></td>';
       }
