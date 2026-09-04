@@ -559,7 +559,7 @@
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||''};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
-    CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,ovr:(r.ajustes_manuais&&typeof r.ajustes_manuais==='object')?r.ajustes_manuais:{},ordem:r.ordem||0,congeladoEm:r.congelado_em};});
+    CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
@@ -698,10 +698,17 @@
     var b=document.getElementById('topSaveBtn');
     if(b){b.disabled=true;b.textContent='Salvando…';}
     try{
-      if(Object.keys(SVC_DIRTY).length)await saveServicosAll();
+      if(ACTIVE_CENARIO){
+        if(Object.keys(SVC_DIRTY).length||CAL_DIRTY||ADJ_DIRTY){
+          await saveIntoActiveCenario();
+          SVC_DIRTY={}; CAL_DIRTY=false;
+        }
+      }else{
+        if(Object.keys(SVC_DIRTY).length)await saveServicosAll();
+        if(CAL_DIRTY)await saveCalendarAll();
+        if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; if(current==='cr-matriz')go(current); }
+      }
       if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length)await saveLotesAll();
-      if(CAL_DIRTY)await saveCalendarAll();
-      if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; if(current==='cr-matriz')go(current); }
       if(Object.keys(REC_DIRTY).length)await saveRecursosAll();
       if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
       toast('Tudo salvo.');
@@ -1139,8 +1146,8 @@
       catalogoFuncoes+catalogoEquip+equipe+totais+servicoPR+grafico+realizadoHTML(hist);
   };
 
-  function scenarioStats(ovr){
-    var segs=scheduleWithOverrides(ovr), tw=0, peak=0;
+  function scenarioStats(snap){
+    var segs=scheduleWithSnapshot(snap), tw=0, peak=0;
     segs.forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); });
     for(var w=1;w<=tw;w++){
       var teams=0;
@@ -1150,22 +1157,22 @@
     return {tw:tw,peak:peak};
   }
   VIEWS['cr-cenarios']=function(){
-    var liveStats=scenarioStats(OVR);
+    var liveStats=scenarioStats(null);
     var editingLive=!ACTIVE_CENARIO;
     var liveRow='<tr style="background:var(--elev)'+(editingLive?';outline:2px solid var(--accent);outline-offset:-2px':'')+'"><td><b>Cronograma atual (ao vivo)</b></td><td><span class="pill '+(editingLive?'warn':'mut')+'">'+(editingLive?'✏ editando agora':'salvo')+'</span></td>'+
       '<td class="r mono">'+liveStats.tw+' sem</td><td class="r mono">'+liveStats.peak+' equipes</td>'+
       '<td style="display:flex;gap:6px;flex-wrap:wrap">'+(ACTIVE_CENARIO?'<button class="btn" id="cnBackLive">↩ Voltar a editar aqui</button>':'<button class="btn primary" id="cnLiveBase">❄ Gerar linha de base</button>')+'</td></tr>';
     var rows=CENARIOS.slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0);}).map(function(c){
-      var st=scenarioStats(c.ovr);
+      var st=scenarioStats(c.snap);
       var isActive=ACTIVE_CENARIO&&ACTIVE_CENARIO.id===c.id;
       var estado=c.tipo==='baseline'?('<span class="pill '+(c.ativo?'good':'mut')+'">'+c.revisao+(c.ativo?' · ativa':'')+'</span>'):'<span class="pill '+(isActive?'warn':'mut')+'">'+(isActive?'✏ editando agora':'rascunho')+'</span>';
       var acoes='<button class="btn" data-cnload="'+c.id+'">Carregar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
         (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button><button class="iconbtn" data-cndel="'+c.id+'">✕</button>':'');
       return '<tr'+(isActive?' style="outline:2px solid var(--accent);outline-offset:-2px"':'')+'><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
     }).join('');
-    return head('Cenários','Salve alternativas de sequenciamento/equipes, compare prazo e pico de recursos, e gere linhas de base (REV00, REV01...) ao longo da obra.',impBtn()+'<button class="btn primary" id="cnNovo">+ Cenário</button>')+
-    (ACTIVE_CENARIO?'<div class="banner" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">Você está editando o cenário <b>"'+ACTIVE_CENARIO.nome+'"</b> — vá em <b>Matriz Tempo-Caminho ▸ Ajuste manual</b> pra mexer nele, e volte aqui pra salvar ou trocar de cenário.</div>':'')+
-    '<div class="card" style="margin-bottom:14px"><div class="note" style="margin-bottom:8px">"Carregar" abre o cenário pra edição em Ajuste Manual. "Duplicar" cria uma cópia independente. A linha destacada mostra o que está aberto no editor agora.</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
+    return head('Cenários','Salve alternativas completas (calendário, chuvas, produtividade, número de equipes e ajustes manuais), compare prazo e pico de recursos, e gere linhas de base (REV00, REV01...) ao longo da obra.',impBtn()+'<button class="btn primary" id="cnNovo">+ Cenário</button>')+
+    (ACTIVE_CENARIO?'<div class="banner" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">Você está editando o cenário <b>"'+ACTIVE_CENARIO.nome+'"</b> — mexa no Calendário, Serviços ou Ajuste Manual à vontade, e volte aqui pra salvar ou trocar de cenário.</div>':'')+
+    '<div class="card" style="margin-bottom:14px"><div class="note" style="margin-bottom:8px">Um cenário guarda uma cópia completa: calendário/chuvas, produtividade e nº de equipes de cada serviço, e os ajustes manuais do Tempo-Caminho. "Carregar" abre o cenário pra edição (Calendário, Serviços, Ajuste Manual). "Duplicar" cria uma cópia independente. A linha destacada mostra o que está aberto no editor agora.</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
       liveRow+rows+'</tbody></table></div>'+
       (CENARIOS.length?'':'<div class="note" style="margin-top:8px">Nenhum cenário salvo ainda. Clique em "+ Cenário" pra guardar um snapshot do cronograma atual, ou em "❄ Gerar linha de base" na linha acima pra criar a primeira revisão (REV00).</div>')+
     '</div>'+
@@ -1268,6 +1275,7 @@
     go('cad-serv');
   }
   async function saveServicosAll(){
+    if(ACTIVE_CENARIO){ await saveIntoActiveCenario(); return; }
     var idxs=Object.keys(SVC_DIRTY).map(Number); if(!idxs.length)return;
     try{
       for(var i=0;i<idxs.length;i++){
@@ -1422,18 +1430,23 @@
   }
   async function saveCalendarObj(holidays,rains){
     var obj={holidayWeeks:holidays,rainPeriods:rains};
-    await sbUpdateObra(selectedObra.id,{feriados:obj});
     window._OBRA=Object.assign({},window._OBRA,{feriados:obj});
+    if(ACTIVE_CENARIO){ await saveIntoActiveCenario(); }
+    else{ await sbUpdateObra(selectedObra.id,{feriados:obj}); }
   }
   async function saveCalendarAll(){
     if(!selectedObra||!CAL_DIRTY)return;
     try{
-      var patch={nome:window._OBRA.nome,data_inicio:window._OBRA.data_inicio,feriados:{holidayWeeks:calHolidays(),rainPeriods:calRainPeriods()}};
+      // nome/data de início são da obra em si, sempre salvos ali; feriados/chuva são parte do
+      // cenário quando um está ativo (vão junto no snapshot, não sobrescrevem a obra ao vivo).
+      var patch={nome:window._OBRA.nome,data_inicio:window._OBRA.data_inicio};
+      if(!ACTIVE_CENARIO)patch.feriados={holidayWeeks:calHolidays(),rainPeriods:calRainPeriods()};
       await sbUpdateObra(selectedObra.id,patch);
       selectedObra.nome=patch.nome; CUR.nome=patch.nome;
       var nameEl=document.getElementById('obraSelName'); if(nameEl)nameEl.textContent=patch.nome;
       CAL_DIRTY=false;
-      go('cad-cal'); toast('Calendário salvo.');
+      if(ACTIVE_CENARIO)await saveIntoActiveCenario();
+      else{ go('cad-cal'); toast('Calendário salvo.'); }
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
   }
   function saveHoliday(hi,val){
@@ -1951,25 +1964,34 @@
         if(nome==null)return;
         novoCn.disabled=true;
         try{
-          var snap=JSON.parse(JSON.stringify(OVR));
+          var snap=captureLiveSnapshot();
           var id=await sbCreateCenario(selectedObra.id,{nome:nome||'Cenário',tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
-          CENARIOS.push({id:id,nome:nome||'Cenário',tipo:'rascunho',revisao:null,ativo:false,ovr:snap,ordem:CENARIOS.length,congeladoEm:null});
+          CENARIOS.push({id:id,nome:nome||'Cenário',tipo:'rascunho',revisao:null,ativo:false,snap:snap,ordem:CENARIOS.length,congeladoEm:null});
           go('cr-cenarios'); toast('Cenário salvo.');
         }catch(e){ alert('Falha ao salvar cenário: '+((e&&e.message)||e)); }
         novoCn.disabled=false;
       });
       var liveBase=document.getElementById('cnLiveBase');
-      if(liveBase)liveBase.addEventListener('click',function(){ gerarLinhaDeBase(OVR,null); });
+      if(liveBase)liveBase.addEventListener('click',function(){ gerarLinhaDeBase(captureLiveSnapshot(),null); });
       var backLive=document.getElementById('cnBackLive');
       if(backLive)backLive.addEventListener('click',exitCenarioEdit);
       document.querySelectorAll('[data-cnload]').forEach(function(b){
         b.addEventListener('click',function(){
           var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnload');})[0]; if(!c)return;
           if(hasAnyDirty()&&!confirm('Há alterações não salvas no cronograma atual. Carregar este cenário substitui o que está em edição agora (o que já foi salvo no banco não é perdido). Continuar?'))return;
-          OVR=JSON.parse(JSON.stringify(c.ovr||{})); ADJ_DIRTY=true; ADJ_PENDING={};
+          var snap=c.snap||{ovr:{},feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
+          OVR=JSON.parse(JSON.stringify(snap.ovr||{}));
+          if(snap.servicos&&snap.servicos.length){
+            SERV=snap.servicos.map(function(sc){
+              var orig=SERV.filter(function(x){return x.id===sc.id;})[0]||{};
+              return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:JSON.parse(JSON.stringify(sc.config||{}))};
+            });
+          }
+          window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
+          ADJ_DIRTY=true; ADJ_PENDING={};
           ACTIVE_CENARIO={id:c.id,nome:c.nome};
           window._cronoTab='ajuste';
-          toast('Cenário "'+c.nome+'" carregado — você está editando ele agora.');
+          toast('Cenário "'+c.nome+'" carregado — você está editando ele agora (calendário, serviços e ajustes).');
           go('cr-matriz');
         });
       });
@@ -1978,9 +2000,9 @@
           var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cndup');})[0]; if(!c||!selectedObra)return;
           var nome=prompt('Nome da cópia:',c.nome+' (cópia)'); if(nome==null)return;
           try{
-            var snap=JSON.parse(JSON.stringify(c.ovr||{}));
+            var snap=JSON.parse(JSON.stringify(c.snap||{}));
             var id=await sbCreateCenario(selectedObra.id,{nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
-            CENARIOS.push({id:id,nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',revisao:null,ativo:false,ovr:snap,ordem:CENARIOS.length,congeladoEm:null});
+            CENARIOS.push({id:id,nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',revisao:null,ativo:false,snap:snap,ordem:CENARIOS.length,congeladoEm:null});
             go('cr-cenarios'); toast('Cenário duplicado.');
           }catch(e){ alert('Falha ao duplicar: '+((e&&e.message)||e)); }
         });
@@ -1988,7 +2010,7 @@
       document.querySelectorAll('[data-cnbase]').forEach(function(b){
         b.addEventListener('click',function(){
           var id=b.getAttribute('data-cnbase'), c=CENARIOS.filter(function(x){return x.id===id;})[0]; if(!c)return;
-          gerarLinhaDeBase(c.ovr,id);
+          gerarLinhaDeBase(c.snap,id);
         });
       });
       document.querySelectorAll('[data-cndel]').forEach(function(b){
@@ -2268,7 +2290,7 @@
   function curvaSData(){
     var baseline=activeBaseline();
     var segsExec=buildSchedule();
-    var segsCliente=baseline?scheduleWithOverrides(baseline.ovr):null;
+    var segsCliente=baseline?scheduleWithSnapshot(baseline.snap):null;
     var twExec=1; segsExec.forEach(function(sg){twExec=Math.max(twExec,sg.start+sg.dur-1);});
     var twCliente=0; if(segsCliente)segsCliente.forEach(function(sg){twCliente=Math.max(twCliente,sg.start+sg.dur-1);});
     var tw=Math.max(twExec,twCliente,1);
@@ -2520,8 +2542,8 @@
     var legEl=document.getElementById('cmpcLeg');
     var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
     var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
-    function totalSeriesFor(ovr){
-      var segs=scheduleWithOverrides(ovr), tw=1;
+    function totalSeriesFor(snap){
+      var segs=scheduleWithSnapshot(snap), tw=1;
       segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
       var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=0;
       segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++)weekly[sg.start+i]+=sg.wq[i]||0; });
@@ -2530,10 +2552,10 @@
       return {tw:tw,series:out};
     }
     var palette=['#1e3a8a','#0ea5e9','#65a30d','#f97316','#7c3aed','#dc2626','#14b8a6','#a855f7'];
-    var lines=[{nome:'Cronograma atual',ovr:OVR,color:'var(--muted)'}];
-    CENARIOS.forEach(function(c,ci){ lines.push({nome:c.nome+(c.tipo==='baseline'?(' — '+c.revisao):''),ovr:c.ovr,color:palette[ci%palette.length]}); });
+    var lines=[{nome:'Cronograma atual',snap:null,color:'var(--muted)'}];
+    CENARIOS.forEach(function(c,ci){ lines.push({nome:c.nome+(c.tipo==='baseline'?(' — '+c.revisao):''),snap:c.snap,color:palette[ci%palette.length]}); });
     if(!SERV.length||!lines.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
-    var computed=lines.map(function(l){return Object.assign({},l,totalSeriesFor(l.ovr));});
+    var computed=lines.map(function(l){return Object.assign({},l,totalSeriesFor(l.snap));});
     var maxTw=1; computed.forEach(function(c){maxTw=Math.max(maxTw,c.tw);});
     var realWeekly=[]; for(var w3=0;w3<=maxTw;w3++)realWeekly[w3]=0;
     (window.PROD_LIST||[]).forEach(function(r){
@@ -2920,12 +2942,49 @@
     if(!selectedObra)return;
     await sbUpdateObra(selectedObra.id,{ajustes_manuais:OVR});
   }
-  /** Roda buildSchedule() com um snapshot de ajustes manuais diferente do OVR ao vivo (cenários/linha de base), sem alterar o estado global. */
-  function scheduleWithOverrides(snapshot){
-    var saved=OVR;
-    OVR=snapshot||{};
+  /** Snapshot completo do estado ao vivo: ajustes manuais, calendário (feriados/chuvas) e os
+   *  parâmetros de cada serviço (produtividade, nº de equipes, predecessoras, etc). */
+  function captureLiveSnapshot(){
+    return {
+      ovr:JSON.parse(JSON.stringify(OVR)),
+      feriados:JSON.parse(JSON.stringify(calData())),
+      servicos:SERV.map(function(s){return {id:s.id,nome:s.n,unidade:s.u,cor:s.hex,eq:s.eq,produtividade:s.p,lag:s.lag,config:JSON.parse(JSON.stringify(s.cfg||{}))};})
+    };
+  }
+  /** Normaliza cenarios.ajustes_manuais: formato novo ({ovr,feriados,servicos}) ou o formato
+   *  antigo (o próprio objeto de ajustes manuais, sem calendário/serviços — cenários criados
+   *  antes dessa funcionalidade). */
+  function normalizeSnap(raw){
+    raw=(raw&&typeof raw==='object')?raw:{};
+    if(raw.ovr||raw.feriados||raw.servicos){
+      return {
+        ovr:(raw.ovr&&typeof raw.ovr==='object')?raw.ovr:{},
+        feriados:(raw.feriados&&typeof raw.feriados==='object')?raw.feriados:{holidayWeeks:[],rainPeriods:[]},
+        servicos:Array.isArray(raw.servicos)?raw.servicos:null
+      };
+    }
+    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
+  }
+  /** Roda buildSchedule() com um snapshot completo (ajustes + calendário + serviços) em vez do
+   *  estado ao vivo, sem alterar o estado global (restaura tudo no finally). snap=null usa o
+   *  cronograma ao vivo normalmente. */
+  function scheduleWithSnapshot(snap){
+    if(!snap)return buildSchedule();
+    var savedOVR=OVR, savedSERV=SERV, savedFeriados=window._OBRA?window._OBRA.feriados:null;
+    OVR=snap.ovr||{};
+    if(snap.servicos&&snap.servicos.length){
+      SERV=snap.servicos.map(function(sc){
+        var orig=savedSERV.filter(function(x){return x.id===sc.id;})[0]||{};
+        return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:sc.config||{}};
+      });
+    }
+    if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:snap.feriados||savedFeriados});
     var segs;
-    try{ segs=buildSchedule(); } finally { OVR=saved; }
+    try{ segs=buildSchedule(); }
+    finally{
+      OVR=savedOVR; SERV=savedSERV;
+      if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:savedFeriados});
+    }
     return segs;
   }
   function activeBaseline(){
@@ -2935,7 +2994,7 @@
     var n=CENARIOS.filter(function(c){return c.tipo==='baseline';}).length;
     return 'REV'+String(n).padStart(2,'0');
   }
-  async function gerarLinhaDeBase(ajustesSnapshot,cenarioIdExistente){
+  async function gerarLinhaDeBase(snapshot,cenarioIdExistente){
     if(!selectedObra)return;
     var rev=nextRevisionLabel();
     if(!confirm('Gerar a linha de base '+rev+' a partir deste cronograma?\n\nIsso fica registrado no histórico e passa a ser a referência (previsto) da Curva S até que uma nova revisão seja gerada.'))return;
@@ -2948,9 +3007,9 @@
         var c=CENARIOS.filter(function(x){return x.id===cenarioIdExistente;})[0];
         if(c)Object.assign(c,{tipo:'baseline',revisao:rev,ativo:true,congeladoEm:patch.congelado_em});
       }else{
-        var snap=JSON.parse(JSON.stringify(ajustesSnapshot||{}));
+        var snap=JSON.parse(JSON.stringify(snapshot||captureLiveSnapshot()));
         var id=await sbCreateCenario(selectedObra.id,{nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,ajustes_manuais:snap,ordem:CENARIOS.length,congelado_em:new Date().toISOString()});
-        CENARIOS.push({id:id,nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,ovr:snap,ordem:CENARIOS.length,congeladoEm:new Date().toISOString()});
+        CENARIOS.push({id:id,nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,snap:snap,ordem:CENARIOS.length,congeladoEm:new Date().toISOString()});
       }
       toast('Linha de base '+rev+' gerada.');
       go(current);
@@ -3803,7 +3862,7 @@
         if(a==='exp-pdf'){exportPdf();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
-        if(a==='rev00'){gerarLinhaDeBase(OVR,null);return;}
+        if(a==='rev00'){gerarLinhaDeBase(captureLiveSnapshot(),null);return;}
         if(a==='imp-mpp'||a==='imp-img'){toast(b.getAttribute('data-label')+' — ainda não implementado nesta etapa.');return;}
         toast(b.getAttribute('data-label')+' — função do app (mockup visual)');
       });
@@ -3826,29 +3885,28 @@
     renderCrono();
   }
   /** Salva o cronograma em edição de volta no cenário carregado (não mexe no ajustes_manuais da obra). */
+  /** Salva TUDO que está em edição (ajustes manuais, calendário, parâmetros de serviços) de
+   *  volta no cenário carregado, num snapshot só — não mexe em nada da obra ao vivo. */
   async function saveIntoActiveCenario(){
     if(!ACTIVE_CENARIO||!selectedObra)return;
     try{
-      var snap=JSON.parse(JSON.stringify(OVR));
+      var snap=captureLiveSnapshot();
       await sbUpdateCenario(ACTIVE_CENARIO.id,{ajustes_manuais:snap});
       var c=CENARIOS.filter(function(x){return x.id===ACTIVE_CENARIO.id;})[0];
-      if(c)c.ovr=snap;
-      ADJ_DIRTY=false; ADJ_PENDING={};
+      if(c)c.snap=snap;
+      ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; CAL_DIRTY=false;
       toast('Alterações salvas no cenário "'+ACTIVE_CENARIO.nome+'".');
       go(current);
     }catch(e){ alert('Falha ao salvar no cenário: '+((e&&e.message)||e)); }
   }
-  /** Sai do modo "editando cenário" e volta a mostrar o cronograma ao vivo (ajustes_manuais salvo na obra). */
+  /** Sai do modo "editando cenário" e recarrega o cronograma ao vivo real da obra (ajustes,
+   *  calendário e serviços), descartando o que veio do cenário. */
   async function exitCenarioEdit(){
     if(!selectedObra)return;
     if(hasAnyDirty()&&!confirm('Há alterações não salvas neste cenário. Sair sem salvar?'))return;
-    try{
-      var r=await SB.from('obras').select('ajustes_manuais').eq('id',selectedObra.id).single();
-      if(r.error)throw r.error;
-      OVR=(r.data.ajustes_manuais&&typeof r.data.ajustes_manuais==='object')?r.data.ajustes_manuais:{};
-    }catch(e){ OVR={}; }
-    ADJ_DIRTY=false; ADJ_PENDING={};
     ACTIVE_CENARIO=null;
+    try{ await sbLoadCadastro(selectedObra.id); }
+    catch(e){ alert('Falha ao recarregar a obra: '+((e&&e.message)||e)); }
     toast('Voltou pro cronograma ao vivo.');
     go(current);
   }
