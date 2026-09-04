@@ -583,7 +583,17 @@
     }catch(e){err.style.color='var(--crit)';err.textContent='Falha: '+((e&&e.message)||e);err.hidden=false;}
   }
   async function signOut(){ try{ if(SB)await SB.auth.signOut(); }catch(e){} location.reload(); }
-  async function enterApp(){ buildNav(); await renderLanding(); showLanding(); }
+  async function enterApp(){
+    buildNav();
+    await renderLanding();
+    var lastObra=null, lastView=null;
+    try{ lastObra=safeStore.getItem('lps-tripoloni-lastobra'); lastView=safeStore.getItem('lps-tripoloni-lastview'); }catch(e){}
+    if(lastObra&&(window._OBRAS||[]).some(function(o){return o.id===lastObra;})){
+      await selectObra(lastObra,lastView,true);
+      if(selectedObra&&selectedObra.id===lastObra)return;
+    }
+    showLanding();
+  }
 
 
   /* ---------- Obras (mock) ---------- */
@@ -673,6 +683,7 @@
     }
     document.getElementById('side').classList.remove('open');
     refreshTopSaveBtn();
+    if(selectedObra){ try{ safeStore.setItem('lps-tripoloni-lastview',view); }catch(e){} }
   }
   function hasAnyDirty(){
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
@@ -1178,12 +1189,12 @@
         '</div>'+
       '</div>'+
       '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
-      '<svg class="chart" id="scv2" viewBox="0 0 700 170" style="max-height:28vh"></svg>'+
+      '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
       '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
-      '<div class="card" style="padding:10px 14px"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 150" style="max-height:22vh"></svg></div>'+
-      '<div class="card" style="padding:10px 14px"><div class="eyebrow" style="margin-bottom:2px">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 150" style="max-height:22vh"></svg></div>'+
+      '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
+      '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
     '</div></div>';
   };
 
@@ -2275,8 +2286,8 @@
   }
   function sCurve(id,data,sel){
     var el=document.getElementById(id); if(!el)return;
-    var W=700,H=170,pl=28,pr=10,pt=10,pb=16,iw=W-pl-pr,ih=H-pt-pb;
-    var afs='style="font-size:7px"';
+    var W=700,H=210,pl=30,pr=10,pt=10,pb=18,iw=W-pl-pr,ih=H-pt-pb;
+    var afs='style="font-size:7.5px"';
     var tw=data.tw;
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
     var n=tw+1;
@@ -2348,7 +2359,7 @@
       if(w<1||w>data.tw)return {w:w,p:null,r:null,e:null};
       return {w:w,p:weeklyDelta(cCliente,w),r:weeklyDelta(cReal,w)||0,e:weeklyDelta(cExec,w)||0};
     });
-    var W=480,H=150,pl=26,pr=8,pt=14,pb=18,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
+    var W=480,H=180,pl=28,pr=8,pt=14,pb=20,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
     var maxV=1; vals.forEach(function(v){ [v.p,v.r,v.e].forEach(function(x){if(x!=null)maxV=Math.max(maxV,x);}); });
     var xx=function(i){return pl+iw*i/n;}, yy=function(v){return pt+ih-ih*v/maxV;};
     var grpW=iw/n*0.82, barW=grpW*0.28;
@@ -2382,7 +2393,7 @@
       var e=cExec&&cExec[w]!=null?cExec[w]:0;
       return {w:w,cli:(p!=null&&p>0)?(r/p):null,exe:e>0?(r/e):null};
     });
-    var W=480,H=150,pl=26,pr=8,pt=14,pb=18,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
+    var W=480,H=180,pl=28,pr=8,pt=14,pb=20,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
     var maxV=1.3; vals.forEach(function(v){ if(v.cli!=null)maxV=Math.max(maxV,v.cli*1.15); if(v.exe!=null)maxV=Math.max(maxV,v.exe*1.15); });
     var minV=0.5; vals.forEach(function(v){ if(v.cli!=null)minV=Math.min(minV,v.cli*0.9); if(v.exe!=null)minV=Math.min(minV,v.exe*0.9); });
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*(v-minV)/(maxV-minV);};
@@ -3823,15 +3834,20 @@
     g.querySelectorAll('[data-del]').forEach(function(b){b.addEventListener('click',async function(e){ e.stopPropagation(); if(!confirm('Excluir esta obra e todos os dados dela? Não dá pra desfazer.'))return; try{ await sbDeleteObra(b.getAttribute('data-del')); renderLanding(document.getElementById('obraSearch').value); }catch(err){ alert('Falha ao excluir: '+((err&&err.message)||err)); } });});
     var nb=document.getElementById('newObra'); if(nb)nb.addEventListener('click',enterNewObra);
   }
-  function showLanding(){selectedObra=null;document.getElementById('landing').classList.add('show');}
-  async function selectObra(id){
+  function showLanding(){
+    selectedObra=null;
+    try{ safeStore.removeItem('lps-tripoloni-lastobra'); safeStore.removeItem('lps-tripoloni-lastview'); }catch(e){}
+    document.getElementById('landing').classList.add('show');
+  }
+  async function selectObra(id,initialView,silent){
     var o=(window._OBRAS||[]).find(function(x){return x.id===id;})||{id:id,nome:'Obra'};
     document.getElementById('obraSelName').textContent=o.nome||'Obra';
     try{ await sbLoadCadastro(id); }
-    catch(e){ alert('Falha ao carregar a obra: '+((e&&e.message)||e)); return; }
+    catch(e){ if(!silent)alert('Falha ao carregar a obra: '+((e&&e.message)||e)); return; }
     selectedObra={id:id,nome:o.nome}; CUR={id:id,nome:o.nome};
     document.getElementById('landing').classList.remove('show');
-    go('torre');
+    try{ safeStore.setItem('lps-tripoloni-lastobra',id); }catch(e){}
+    go(initialView&&CRUMB[initialView]?initialView:'torre');
   }
   async function enterNewObra(){
     var nome=prompt('Nome da nova obra:','Nova obra'); if(nome===null)return;
