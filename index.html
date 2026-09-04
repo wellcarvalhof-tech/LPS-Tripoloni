@@ -1192,12 +1192,17 @@
         '<div class="cv-toolbar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
           '<select class="esel" id="cvCurveSel" style="height:28px">'+curveOpts+'</select>'+
           weekSel+
+          '<select class="esel" id="cvProjSel" style="height:28px" title="Cronograma dinâmico: reprojeta o restante a partir de hoje">'+
+            '<option value=""'+(!window._curvaSProjMode?' selected':'')+'>Sem projeção</option>'+
+            '<option value="previsto"'+(window._curvaSProjMode==='previsto'?' selected':'')+'>Projeção · ritmo previsto</option>'+
+            '<option value="historico"'+(window._curvaSProjMode==='historico'?' selected':'')+'>Projeção · ritmo histórico</option>'+
+          '</select>'+
           '<button class="btn" id="cvPrintBtn" style="padding:5px 10px;font-size:12px">🖨 Imprimir</button>'+
         '</div>'+
       '</div>'+
       '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
       '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
-      '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
+      '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--c5);font-weight:700">▬</span> Projeção (cronograma dinâmico) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
       '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
@@ -1903,6 +1908,11 @@
         window._curvaSSel=curveSelEl.value==='total'?'total':+curveSelEl.value;
         renderCurvaS();
       });
+      var projSelEl=document.getElementById('cvProjSel');
+      if(projSelEl)projSelEl.addEventListener('change',function(){
+        window._curvaSProjMode=projSelEl.value||null;
+        renderCurvaS();
+      });
       var weekSelEl=document.getElementById('cvWeekSel');
       if(weekSelEl){
         weekSelEl.value=window._curvaSWeek==null?'auto':window._curvaSWeek;
@@ -2286,9 +2296,20 @@
     });
     var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal);
 
-    var today=new Date(); today.setHours(0,0,0,0);
-    var hojeW=0; for(var i=1;i<=tw;i++){ if(mondayOf(i)<=today)hojeW=i; else break; }
-    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real};
+    var hojeW=hojeWeekNumber(tw);
+
+    // cronograma dinâmico: até hoje usa o realizado real; dali em diante, projeta o restante
+    // no ritmo previsto ou no ritmo histórico observado (conforme window._curvaSProjMode).
+    var projMode=window._curvaSProjMode||null;
+    var projetado=null;
+    if(projMode==='previsto'||projMode==='historico'){
+      var segsProj=buildProjectedSchedule(projMode);
+      var weeklyProj=[]; for(var wp=0;wp<=tw;wp++)weeklyProj[wp]=SERV.map(function(){return 0;});
+      for(var wp2=1;wp2<=Math.min(hojeW,tw);wp2++)weeklyProj[wp2]=realWeekly[wp2].slice();
+      segsProj.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ var w5=sg.start+i; if(w5>hojeW&&w5<=tw)weeklyProj[w5][sg.si]+=sg.wq[i]||0; } });
+      projetado=cumulativePct(weeklyProj,tw,totalByServ,grandTotal);
+    }
+    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode};
   }
   /** Extrai a série (array por semana) de uma "curva" (índice de serviço, ou 'total') de uma fonte cliente/executivo/real. */
   function curveSeries(src,sel){
@@ -2310,8 +2331,10 @@
     if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(tw)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(tw))+'</text>';
     function path(a){if(!a)return '';var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
     var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
+    var cProj=data.projetado?curveSeries(data.projetado,sel):null;
     if(cCliente)s+='<path d="'+path(cCliente)+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
     if(cExec)s+='<path d="'+path(cExec)+'" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3"/>';
+    if(cProj)s+='<path d="'+path(cProj)+'" fill="none" stroke="var(--c5)" stroke-width="1.5" stroke-dasharray="2 2"/>';
     if(cReal)s+='<path d="'+path(cReal)+'" fill="none" stroke="var(--good)" stroke-width="1.9"/>';
     if(data.hojeW>0&&data.hojeW<=tw){
       var hx=xx(data.hojeW);
@@ -2350,6 +2373,12 @@
       html+=kpiCardCv('warn','Previsto executivo',vExec.toFixed(1)+'%','curva executiva (cronograma atual)');
       html+=idpCliente!=null?kpiCardCv('crit','IDP cliente',idpCliente.toFixed(2),'realizado ÷ previsto cliente'):kpiCardCv('mut','IDP cliente','—','sem linha de base');
       html+=kpiCardCv('warn','IDP executivo',idpExec!=null?idpExec.toFixed(2):'—','realizado ÷ previsto executivo');
+      if(data.projetado){
+        var cProjArr=curveSeries(data.projetado,sel), doneWeek=null;
+        if(cProjArr)for(var wq=0;wq<cProjArr.length;wq++){ if(cProjArr[wq]>=99.95){doneWeek=wq;break;} }
+        var projTxt=doneWeek!=null?('S'+isoWeek(mondayOf(doneWeek))):'além do horizonte atual';
+        html+=kpiCardCv('mut','Previsão de término','🔮 '+projTxt,'ritmo '+(data.projMode==='historico'?'histórico':'previsto')+' a partir de hoje');
+      }
       cardsEl.innerHTML=html;
     }
     sCurve('scv2',data,sel);
@@ -2798,6 +2827,92 @@
         var maxEnd=0; svcSegs.forEach(function(sg){maxEnd=Math.max(maxEnd,sg.start+sg.dur-1);});
         if(maxEnd>target)svcSegs.forEach(function(sg){sg.overTarget=true;});
       }
+    });
+    return segs;
+  }
+  /** Soma do realizado (Produção Diária) apontado pra esse lote+serviço específico. */
+  function realizadoQtyForLoteServ(li,si){
+    var loteId=(window._LOTIDS||[])[li], servId=SERV[si]&&SERV[si].id;
+    if(!loteId||!servId)return 0;
+    var t=0;
+    (window.PROD_LIST||[]).forEach(function(r){ if(r.loteId===loteId&&r.servId===servId)t+=r.qtd||0; });
+    return t;
+  }
+  /** Semana de trabalho do primeiro apontamento de Produção Diária desse lote+serviço (ou null se nunca apontado). */
+  function firstRealWeekForLoteServ(li,si){
+    var loteId=(window._LOTIDS||[])[li], servId=SERV[si]&&SERV[si].id;
+    if(!loteId||!servId)return null;
+    var minDate=null;
+    (window.PROD_LIST||[]).forEach(function(r){ if(r.loteId===loteId&&r.servId===servId&&(!minDate||r.data<minDate))minDate=r.data; });
+    if(!minDate)return null;
+    var mon=mondayOfIso(minDate);
+    for(var w=1;w<=1000;w++){ if(mondayOf(w).toISOString().slice(0,10)===mon)return w; }
+    return null;
+  }
+  function hojeWeekNumber(tw){
+    var today=new Date(); today.setHours(0,0,0,0);
+    var hojeW=0; for(var i=1;i<=tw;i++){ if(mondayOf(i)<=today)hojeW=i; else break; }
+    return hojeW;
+  }
+  /** Cronograma dinâmico: pra cada lote+serviço já com produção apontada, desconta o que já foi
+   *  feito e reprojeta o restante a partir de hoje — no ritmo previsto (mode='previsto') ou no
+   *  ritmo real observado até agora (mode='historico'). Itens sem apontamento ficam como estão
+   *  (usam o cronograma ao vivo normalmente). Simplificação: usa a equipe já atribuída a cada
+   *  lote (manual/round-robin) — não recalcula fila dinâmica nem divisão entre várias equipes.
+   */
+  function buildProjectedSchedule(mode){
+    var segs=[], startByKey={}, endByKey={};
+    var order=topoSortServices();
+    var periods=calRainPeriods(), wfCache={};
+    var hojeW=hojeWeekNumber(1000);
+    function predReadyWeek(s,li){
+      var earliest=1;
+      var preds=(s.cfg&&s.cfg.predecessors)||[];
+      preds.forEach(function(pid){
+        var psi=null; SERV.forEach(function(x,i){if(x.id===pid)psi=i;});
+        if(psi==null)return;
+        var pk=li+'::'+psi, pe=endByKey[pk], ps=startByKey[pk];
+        if(pe!=null){
+          if(s.cfg&&s.cfg.parallelWithPredecessor&&ps!=null)earliest=Math.max(earliest,ps+(s.lag||0));
+          else earliest=Math.max(earliest,pe+1+(s.lag||0));
+        }
+      });
+      return earliest;
+    }
+    order.forEach(function(si){
+      var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s);
+      if(teams<=0||prod<=0)return;
+      var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
+      LOTS.forEach(function(l,li){
+        if(QTY[li][si]<=0)return;
+        var o=ovrGet(li,si);
+        var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
+        var team=(teamsArr&&teamsArr.length)?teamsArr[0]:((o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1));
+        var teamProd=teamProds[team-1]>0?teamProds[team-1]:prod;
+        var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
+        var real=realizadoQtyForLoteServ(li,si);
+        var remaining=Math.max(0,QTY[li][si]-real);
+        var earliestPos=predReadyWeek(s,li)-1;
+        var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
+        var svcMin=(s.cfg&&s.cfg.minStartWeek>0)?s.cfg.minStartWeek-1:0;
+        var startPos=Math.max(earliestPos,pinPos,svcMin);
+        if(real>0){
+          // já começou de verdade: retoma a projeção a partir de hoje (ou da posição prevista, se ainda for futura)
+          startPos=Math.max(startPos,hojeW);
+          if(mode==='historico'){
+            var fw=firstRealWeekForLoteServ(li,si);
+            var weeksElapsed=Math.max(1,hojeW-(fw!=null?fw-1:startPos));
+            var rate=real/weeksElapsed;
+            if(rate>0)effProd=rate;
+          }
+        }
+        var fixedDur=(o&&o.duration>0)?o.duration:undefined;
+        var packed=remaining>0?packSegment(startPos,remaining/effProd,effProd,remaining,periods,wfCache,fixedDur):null;
+        if(packed)segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:remaining,wq:packed.wq,
+          color:teamColor(hex,team,Math.max(1,teams)),name:s.n,real:real,total:QTY[li][si]});
+        startByKey[li+'::'+si]=packed?packed.start:startPos+1;
+        endByKey[li+'::'+si]=packed?(packed.start+packed.duration-1):Math.max(startPos,hojeW);
+      });
     });
     return segs;
   }
