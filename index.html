@@ -1155,32 +1155,35 @@
   };
 
   VIEWS['ac-curvas']=function(){
-    var hidden=window._curvaSHidden||{};
-    var cvd=curvaSData();
-    var toggles=SERV.map(function(s,si){
-      return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin:0 10px 4px 0;cursor:pointer"><input type="checkbox" data-cvtoggle="'+si+'"'+(hidden[si]?'':' checked')+'><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</label>';
-    }).join('');
-    toggles+='<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin:0 10px 4px 0;cursor:pointer;font-weight:700"><input type="checkbox" data-cvtoggle="total"'+(hidden.total?'':' checked')+'><span class="swatch" style="background:var(--ink)"></span>Total</label>';
+    var data=curvaSData();
+    var sel=window._curvaSSel==null?'total':window._curvaSSel;
+    var curveOpts='<option value="total"'+(sel==='total'?' selected':'')+'>Curva geral</option>'+
+      SERV.map(function(s,si){return '<option value="'+si+'"'+(sel===si?' selected':'')+'>'+s.n+'</option>';}).join('');
     var weekSel='';
-    if(cvd.tw>0){
-      var opts='<option value="auto">Hoje'+(cvd.hojeW>0?' (S'+isoWeek(mondayOf(cvd.hojeW))+')':'')+'</option>';
-      for(var w=1;w<=cvd.tw;w++)opts+='<option value="'+w+'">S'+isoWeek(mondayOf(w))+'</option>';
-      var curSel=window._curvaSWeek==null?'auto':window._curvaSWeek;
-      weekSel='<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin-left:auto"><span class="note" style="margin:0">Ver semana:</span><select class="esel" id="cvWeekSel" style="height:26px">'+opts+'</select></label>';
+    if(data.tw>0){
+      var opts='<option value="auto">Hoje'+(data.hojeW>0?' (S'+isoWeek(mondayOf(data.hojeW))+')':'')+'</option>';
+      for(var w=1;w<=data.tw;w++)opts+='<option value="'+w+'">S'+isoWeek(mondayOf(w))+'</option>';
+      weekSel='<select class="esel" id="cvWeekSel" style="height:28px">'+opts+'</select>';
     }
-    return '<div class="card cv-compact" style="padding:12px 15px">'+
-    '<div class="cv-toolbar" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:6px">'+(SERV.length?toggles:'')+
-      '<button class="btn" id="cvPrintBtn" style="padding:4px 10px;font-size:12px;margin-left:'+(SERV.length?'8px':'0')+'">🖨 Imprimir</button>'+
-      weekSel+
+    return '<div class="cv-compact">'+
+    '<div class="cv-cardgrid" id="cvCards" style="margin-bottom:12px"></div>'+
+    '<div class="card" style="padding:12px 15px;margin-bottom:14px">'+
+      '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:4px">'+
+        '<div><div class="eyebrow" style="margin:0">Curva S — avanço acumulado (%)</div>'+
+        '<div class="note" id="cvRef" style="font-size:11px;margin-top:2px"></div></div>'+
+        '<div class="cv-toolbar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+          '<select class="esel" id="cvCurveSel" style="height:28px">'+curveOpts+'</select>'+
+          weekSel+
+          '<button class="btn" id="cvPrintBtn" style="padding:5px 10px;font-size:12px">🖨 Imprimir</button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
+      '<svg class="chart" id="scv2" viewBox="0 0 700 230" style="max-height:42vh"></svg>'+
+      '<div class="note" style="margin-top:6px;font-size:10.5px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
     '</div>'+
-    '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
-    '<div class="note" id="cvRef" style="margin-bottom:8px;font-size:11.5px"></div>'+
-    '<div class="cv-cardgrid" id="cvCards" style="margin-bottom:10px"></div>'+
-    '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
-    '<div class="note" style="margin-top:6px;font-size:10.5px">Linha <b>tracejada</b> = previsto (linha de base ativa, ou o cronograma atual se nenhuma foi gerada). Linha <b>cheia</b> = realizado (apontamentos de Produção Diária). A linha vertical vermelha marca a semana de hoje.</div>'+
-    '<div class="grid g2" style="margin-top:14px;gap:14px">'+
-      '<div><div class="eyebrow" style="margin-bottom:4px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 190"></svg></div>'+
-      '<div><div class="eyebrow" style="margin-bottom:4px">IDP — Índice de Desempenho de Prazo (últimas 5 semanas + atual)</div><svg class="chart" id="cvIdp" viewBox="0 0 480 190"></svg></div>'+
+    '<div class="grid g2" style="gap:14px">'+
+      '<div class="card" style="padding:12px 15px"><div class="eyebrow" style="margin-bottom:4px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 190"></svg></div>'+
+      '<div class="card" style="padding:12px 15px"><div class="eyebrow" style="margin-bottom:4px">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 190"></svg></div>'+
     '</div></div>';
   };
 
@@ -1877,13 +1880,10 @@
     if(view==='torre'){setupTorre();}
     if(view==='ac-curvas'){
       renderCurvaS();
-      document.querySelectorAll('[data-cvtoggle]').forEach(function(cb){
-        cb.addEventListener('change',function(){
-          var key=cb.getAttribute('data-cvtoggle'); key=(key==='total')?'total':+key;
-          window._curvaSHidden=window._curvaSHidden||{};
-          if(cb.checked)delete window._curvaSHidden[key]; else window._curvaSHidden[key]=true;
-          renderCurvaS();
-        });
+      var curveSelEl=document.getElementById('cvCurveSel');
+      if(curveSelEl)curveSelEl.addEventListener('change',function(){
+        window._curvaSSel=curveSelEl.value==='total'?'total':+curveSelEl.value;
+        renderCurvaS();
       });
       var weekSelEl=document.getElementById('cvWeekSel');
       if(weekSelEl){
@@ -2199,24 +2199,42 @@
     }
   }
 
-  function curvaSData(){
-    var baseline=activeBaseline();
-    var segs=baseline?scheduleWithOverrides(baseline.ovr):buildSchedule();
-    var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
-    var weekly=[]; for(var w=0;w<=tw;w++){weekly[w]=SERV.map(function(){return 0;});}
-    segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ weekly[sg.start+i][sg.si]+=sg.wq[i]||0; } });
-    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
-    var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+  /** Soma semanal (qty) por serviço a partir de uma lista de segmentos, até tw semanas. */
+  function weeklyFromSegs(segs,tw){
+    var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=SERV.map(function(){return 0;});
+    (segs||[]).forEach(function(sg){ for(var i=0;i<sg.dur;i++){ var w=sg.start+i; if(w<=tw&&w>=0)weekly[w][sg.si]+=sg.wq[i]||0; } });
+    return weekly;
+  }
+  /** Converte quantidade semanal em % acumulado por serviço + total, dado o total de cada serviço. */
+  function cumulativePct(weekly,tw,totalByServ,grandTotal){
     var series={}; SERV.forEach(function(s,si){series[si]=[0];});
     var totalSeries=[0], accum=SERV.map(function(){return 0;}), grandAccum=0;
-    for(var w2=1;w2<=tw;w2++){
+    for(var w=1;w<=tw;w++){
       SERV.forEach(function(s,si){
-        accum[si]+=weekly[w2][si]||0;
+        accum[si]+=weekly[w][si]||0;
         series[si].push(totalByServ[si]>0?(accum[si]/totalByServ[si]*100):0);
       });
-      grandAccum+=weekly[w2].reduce(function(a,b){return a+b;},0);
+      grandAccum+=weekly[w].reduce(function(a,b){return a+b;},0);
       totalSeries.push(grandTotal>0?(grandAccum/grandTotal*100):0);
     }
+    return {series:series,totalSeries:totalSeries};
+  }
+  /** Dados da Curva S: previsto cliente (linha de base ativa, se houver), previsto executivo
+   *  (cronograma atual, ao vivo) e realizado (Produção Diária), por serviço e total. */
+  function curvaSData(){
+    var baseline=activeBaseline();
+    var segsExec=buildSchedule();
+    var segsCliente=baseline?scheduleWithOverrides(baseline.ovr):null;
+    var twExec=1; segsExec.forEach(function(sg){twExec=Math.max(twExec,sg.start+sg.dur-1);});
+    var twCliente=0; if(segsCliente)segsCliente.forEach(function(sg){twCliente=Math.max(twCliente,sg.start+sg.dur-1);});
+    var tw=Math.max(twExec,twCliente,1);
+
+    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
+    var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+
+    var executivo=cumulativePct(weeklyFromSegs(segsExec,tw),tw,totalByServ,grandTotal);
+    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalByServ,grandTotal):null;
+
     // realizado: apontamentos reais de Produção Diária, agregados na semana de trabalho correspondente à data
     var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
     var weekIdxCache={};
@@ -2232,23 +2250,20 @@
       if(si==null)return;
       realWeekly[w4][si]+=r.qtd||0;
     });
-    var realSeries={}; SERV.forEach(function(s,si){realSeries[si]=[0];});
-    var realTotalSeries=[0], raccum=SERV.map(function(){return 0;}), rgrandAccum=0;
-    for(var w5=1;w5<=tw;w5++){
-      SERV.forEach(function(s,si){
-        raccum[si]+=realWeekly[w5][si]||0;
-        realSeries[si].push(totalByServ[si]>0?(raccum[si]/totalByServ[si]*100):0);
-      });
-      rgrandAccum+=realWeekly[w5].reduce(function(a,b){return a+b;},0);
-      realTotalSeries.push(grandTotal>0?(rgrandAccum/grandTotal*100):0);
-    }
+    var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal);
+
     var today=new Date(); today.setHours(0,0,0,0);
     var hojeW=0; for(var i=1;i<=tw;i++){ if(mondayOf(i)<=today)hojeW=i; else break; }
-    return {tw:tw,series:series,totalSeries:totalSeries,realSeries:realSeries,realTotalSeries:realTotalSeries,hojeW:hojeW,baseline:baseline};
+    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real};
   }
-  function sCurve(id,data){
+  /** Extrai a série (array por semana) de uma "curva" (índice de serviço, ou 'total') de uma fonte cliente/executivo/real. */
+  function curveSeries(src,sel){
+    if(!src)return null;
+    return sel==='total'?src.totalSeries:src.series[sel];
+  }
+  function sCurve(id,data,sel){
     var el=document.getElementById(id); if(!el)return;
-    var W=700,H=210,pl=34,pr=12,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb;
+    var W=700,H=230,pl=34,pr=12,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb;
     var tw=data.tw;
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
     var n=tw+1;
@@ -2258,113 +2273,121 @@
     var stepLbl=Math.max(1,Math.ceil((n-1)/13));
     for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" x="'+xx(i)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(i))+'</text>';}
     if((n-1)%stepLbl!==0)s+='<text class="axm" x="'+xx(tw)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(tw))+'</text>';
-    function path(a){var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
-    var hidden=window._curvaSHidden||{};
-    SERV.forEach(function(sv,si){
-      if(hidden[si])return;
-      var col=svcColor(sv);
-      s+='<path d="'+path(data.series[si])+'" fill="none" stroke="'+col+'" stroke-width="1.1" stroke-dasharray="5 3"/>';
-      s+='<path d="'+path(data.realSeries[si])+'" fill="none" stroke="'+col+'" stroke-width="1.4"/>';
-    });
-    if(!hidden.total){
-      s+='<path d="'+path(data.totalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-dasharray="5 3"/>';
-      s+='<path d="'+path(data.realTotalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="1.75"/>';
-    }
+    function path(a){if(!a)return '';var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
+    var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
+    if(cCliente)s+='<path d="'+path(cCliente)+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
+    if(cExec)s+='<path d="'+path(cExec)+'" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3"/>';
+    if(cReal)s+='<path d="'+path(cReal)+'" fill="none" stroke="var(--good)" stroke-width="1.9"/>';
     if(data.hojeW>0&&data.hojeW<=tw){
       var hx=xx(data.hojeW);
-      s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--crit)" stroke-width="1.5" stroke-dasharray="4 3"/>'+
-        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" style="fill:var(--crit)">hoje</text>';
+      s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
+        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm">hoje</text>';
     }
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
+  function kpiCardCv(colorKey,lab,val,foot){
+    var colMap={good:'var(--good)',crit:'var(--crit)',warn:'var(--warn)',mut:'var(--muted)'};
+    return '<div class="kpi"><div class="stripe" style="background:'+colMap[colorKey]+'"></div><div class="lab">'+lab+'</div><div class="val num">'+val+'</div><div class="foot">'+foot+'</div></div>';
+  }
   function renderCurvaS(){
-    var data=curvaSData(), hidden=window._curvaSHidden||{};
+    var data=curvaSData();
+    var sel=window._curvaSSel==null?'total':window._curvaSSel;
     var wSel=(window._curvaSWeek!=null&&window._curvaSWeek<=data.tw)?window._curvaSWeek:data.hojeW;
     var refEl=document.getElementById('cvRef');
-    if(refEl)refEl.innerHTML=data.baseline?('Previsto: <b>linha de base '+data.baseline.revisao+'</b> — '+data.baseline.nome+(data.baseline.congeladoEm?(' (congelada em '+brDate(data.baseline.congeladoEm.slice(0,10))+')'):'')):
-      'Previsto: <b>cronograma atual</b> (nenhuma linha de base gerada ainda — congele uma em Cenários ou no Tempo-Caminho).';
+    if(refEl)refEl.innerHTML=data.baseline?('Previsto cliente: <b>linha de base '+data.baseline.revisao+'</b> — '+data.baseline.nome+(data.baseline.congeladoEm?(' (congelada em '+brDate(data.baseline.congeladoEm.slice(0,10))+')'):'')):
+      'Previsto cliente: <b>nenhuma linha de base gerada ainda</b> — congele uma em Cenários ou no Tempo-Caminho pra ativar essa curva.';
     var ptEl=document.getElementById('cvPrintTitle');
-    if(ptEl)ptEl.textContent='Curva S — '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra');
+    if(ptEl)ptEl.textContent='Curva S — '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra')+' — '+(sel==='total'?'Curva geral':(SERV[sel]?SERV[sel].n:''));
+
+    var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
+    var vCliente=(cCliente&&cCliente[wSel]!=null)?cCliente[wSel]:null;
+    var vExec=(cExec&&cExec[wSel]!=null)?cExec[wSel]:0;
+    var vReal=(cReal&&cReal[wSel]!=null)?cReal[wSel]:0;
+    var idpCliente=(vCliente!=null&&vCliente>0)?(vReal/vCliente):null;
+    var idpExec=vExec>0?(vReal/vExec):null;
+    var atWk=wSel>0?'S'+isoWeek(mondayOf(wSel)):'antes do início';
+
     var cardsEl=document.getElementById('cvCards');
     if(cardsEl){
-      var atWk=wSel>0?'S'+isoWeek(mondayOf(wSel)):'antes do início';
       var html='';
-      SERV.forEach(function(s,si){
-        if(hidden[si])return;
-        var p=(data.series[si]&&data.series[si][wSel])||0, r=(data.realSeries[si]&&data.realSeries[si][wSel])||0;
-        html+='<div class="kpi"><div class="stripe" style="background:'+svcColor(s)+'"></div><div class="lab">'+s.n+'</div><div class="val num">'+r.toFixed(1)+'%</div><div class="foot">realizado · previsto '+p.toFixed(1)+'% até '+atWk+'</div></div>';
-      });
-      if(!hidden.total){
-        var tp=(data.totalSeries&&data.totalSeries[wSel])||0, tr=(data.realTotalSeries&&data.realTotalSeries[wSel])||0;
-        html+='<div class="kpi"><div class="stripe" style="background:var(--ink)"></div><div class="lab">Total</div><div class="val num">'+tr.toFixed(1)+'%</div><div class="foot">realizado · previsto '+tp.toFixed(1)+'% até '+atWk+'</div></div>';
-      }
-      cardsEl.innerHTML=html||'<div class="note">Marque ao menos um serviço acima pra ver o percentual.</div>';
+      html+=kpiCardCv('good','Físico realizado',vReal.toFixed(1)+'%','acumulado · '+atWk);
+      html+=vCliente!=null?kpiCardCv('crit','Previsto cliente',vCliente.toFixed(1)+'%','curva contratual'):kpiCardCv('mut','Previsto cliente','—','sem linha de base');
+      html+=kpiCardCv('warn','Previsto executivo',vExec.toFixed(1)+'%','curva executiva (cronograma atual)');
+      html+=idpCliente!=null?kpiCardCv('crit','IDP cliente',idpCliente.toFixed(2),'realizado ÷ previsto cliente'):kpiCardCv('mut','IDP cliente','—','sem linha de base');
+      html+=kpiCardCv('warn','IDP executivo',idpExec!=null?idpExec.toFixed(2):'—','realizado ÷ previsto executivo');
+      cardsEl.innerHTML=html;
     }
-    sCurve('scv2',data);
-    renderCvBars(data);
-    renderCvIdp(data);
+    sCurve('scv2',data,sel);
+    renderCvBars(data,sel);
+    renderCvIdp(data,sel);
   }
   function weeklyDelta(series,w){
     if(!series||w<1||w>=series.length)return null;
     var prev=series[w-1]!=null?series[w-1]:0, cur=series[w]!=null?series[w]:prev;
     return cur-prev;
   }
-  function renderCvBars(data){
+  function renderCvBars(data,sel){
     var el=document.getElementById('cvBars'); if(!el)return;
     var hojeW=data.hojeW>0?data.hojeW:1;
+    var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
     var weeks=[]; for(var w=hojeW-3;w<=hojeW+3;w++)weeks.push(w);
     var vals=weeks.map(function(w){
-      if(w<1||w>data.tw)return {w:w,p:null,r:null};
-      return {w:w,p:weeklyDelta(data.totalSeries,w)||0,r:weeklyDelta(data.realTotalSeries,w)||0};
+      if(w<1||w>data.tw)return {w:w,p:null,r:null,e:null};
+      return {w:w,p:weeklyDelta(cCliente,w),r:weeklyDelta(cReal,w)||0,e:weeklyDelta(cExec,w)||0};
     });
     var W=480,H=190,pl=30,pr=10,pt=10,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
-    var maxV=1; vals.forEach(function(v){ if(v.p!=null)maxV=Math.max(maxV,v.p); if(v.r!=null)maxV=Math.max(maxV,v.r); });
+    var maxV=1; vals.forEach(function(v){ [v.p,v.r,v.e].forEach(function(x){if(x!=null)maxV=Math.max(maxV,x);}); });
     var xx=function(i){return pl+iw*i/n;}, yy=function(v){return pt+ih-ih*v/maxV;};
-    var grpW=iw/n*0.8, barW=grpW*0.42;
+    var grpW=iw/n*0.82, barW=grpW*0.28;
     var s='';
     for(var g=0;g<=3;g++){var val=maxV*g/3; s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(0)+'</text>';}
     vals.forEach(function(v,i){
       var x0=xx(i), wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
       s+='<text x="'+(x0+grpW/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
-      if(v.p==null)return;
-      if(v.p>0){
-        var yP1=yy(v.p),yP2=yy(0);
-        s+='<rect x="'+x0.toFixed(1)+'" y="'+yP1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yP2-yP1).toFixed(1)+'" fill="var(--line-2)" stroke="var(--muted)"><title>Previsto '+wLbl+': '+v.p.toFixed(1)+'%</title></rect>';
+      if(v.w<1||v.w>data.tw)return;
+      function bar(idx,val,color,label){
+        if(val==null||val<=0)return;
+        var bx=x0+idx*barW*1.08, y1=yy(val), y2=yy(0);
+        s+='<rect x="'+bx.toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+color+'"><title>'+label+' '+wLbl+': '+val.toFixed(1)+'%</title></rect>';
       }
-      if(v.r>0){
-        var col=v.r>v.p?'var(--crit)':(v.r<v.p?'var(--warn)':'var(--good)');
-        var yR1=yy(v.r),yR2=yy(0);
-        s+='<rect x="'+(x0+barW*1.15).toFixed(1)+'" y="'+yR1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yR2-yR1).toFixed(1)+'" fill="'+col+'"><title>Realizado '+wLbl+': '+v.r.toFixed(1)+'%</title></rect>';
-      }
+      bar(0,v.p,'var(--crit)','Previsto cliente');
+      bar(1,v.r,'var(--good)','Realizado');
+      bar(2,v.e,'var(--warn)','Previsto executivo');
     });
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
-  function renderCvIdp(data){
+  function renderCvIdp(data,sel){
     var el=document.getElementById('cvIdp'); if(!el)return;
     var hojeW=data.hojeW>0?data.hojeW:1;
+    var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
     var weeks=[]; for(var w=hojeW-5;w<=hojeW;w++)weeks.push(w);
     var vals=weeks.map(function(w){
-      if(w<1||w>data.tw)return {w:w,idp:null};
-      var p=data.totalSeries[w]||0, r=data.realTotalSeries[w]||0;
-      return {w:w,idp:p>0?(r/p):null};
+      if(w<1||w>data.tw)return {w:w,cli:null,exe:null};
+      var r=(cReal&&cReal[w]!=null)?cReal[w]:0;
+      var p=cCliente&&cCliente[w]!=null?cCliente[w]:null;
+      var e=cExec&&cExec[w]!=null?cExec[w]:0;
+      return {w:w,cli:(p!=null&&p>0)?(r/p):null,exe:e>0?(r/e):null};
     });
     var W=480,H=190,pl=30,pr=10,pt=14,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
-    var maxV=1.2; vals.forEach(function(v){ if(v.idp!=null)maxV=Math.max(maxV,v.idp*1.15); });
-    var xx=function(i){return pl+iw*i/n;}, yy=function(v){return pt+ih-ih*v/maxV;};
-    var barW=(iw/n)*0.5;
+    var maxV=1.3; vals.forEach(function(v){ if(v.cli!=null)maxV=Math.max(maxV,v.cli*1.15); if(v.exe!=null)maxV=Math.max(maxV,v.exe*1.15); });
+    var minV=0.5; vals.forEach(function(v){ if(v.cli!=null)minV=Math.min(minV,v.cli*0.9); if(v.exe!=null)minV=Math.min(minV,v.exe*0.9); });
+    var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*(v-minV)/(maxV-minV);};
+    // faixas de referência: verde (>=1), amarelo (0.85-1), vermelho (<0.85)
+    function band(y0,y1,col){ s+='<rect x="'+pl+'" y="'+Math.min(y0,y1)+'" width="'+iw+'" height="'+Math.abs(y1-y0)+'" fill="'+col+'" opacity=".12"/>'; }
     var s='';
-    [0,0.5,1].forEach(function(val){
-      if(val>maxV)return;
-      s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="'+(val===1?'var(--good)':'var(--line)')+'"'+(val===1?' stroke-dasharray="4 3"':'')+'/><text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(1)+'</text>';
-    });
+    band(yy(Math.max(minV,0)),yy(0.85),'var(--crit)');
+    band(yy(0.85),yy(1),'var(--warn)');
+    band(yy(1),yy(maxV),'var(--good)');
+    s+='<line x1="'+pl+'" y1="'+yy(1)+'" x2="'+(W-pr)+'" y2="'+yy(1)+'" stroke="var(--good)" stroke-width="1.2" stroke-dasharray="4 3"/><text x="'+(W-pr)+'" y="'+(yy(1)-3)+'" text-anchor="end" font-size="8" fill="var(--good)">Meta 1,0</text>';
+    [minV,1,maxV].forEach(function(val){ s+='<text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(2)+'</text>'; });
+    function path(key){var d='',started=false;for(var j=0;j<vals.length;j++){var v=vals[j][key];if(v==null){started=false;continue;}d+=(started?'L':'M')+xx(j).toFixed(1)+' '+yy(v).toFixed(1)+' ';started=true;}return d;}
+    s+='<path d="'+path('cli')+'" fill="none" stroke="var(--ink)" stroke-width="1.6"/>';
+    s+='<path d="'+path('exe')+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
     vals.forEach(function(v,i){
-      var x0=xx(i)+(iw/n-barW)/2, wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
-      s+='<text x="'+(xx(i)+iw/n/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
-      if(v.idp==null)return;
-      var col=v.idp>=1?'var(--good)':'var(--warn)';
-      var y1=yy(v.idp),y2=yy(0);
-      s+='<rect x="'+x0.toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+col+'"><title>IDP '+wLbl+': '+v.idp.toFixed(2)+'</title></rect>'+
-        '<text x="'+(x0+barW/2)+'" y="'+(y1-3)+'" text-anchor="middle" font-size="8" fill="var(--ink-2)">'+v.idp.toFixed(2)+'</text>';
+      var wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
+      s+='<text x="'+xx(i)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      if(v.cli!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.cli)+'" r="2.4" fill="var(--ink)"/>';
+      if(v.exe!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.exe)+'" r="2.4" fill="var(--crit)"/>';
     });
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
