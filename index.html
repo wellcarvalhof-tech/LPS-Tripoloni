@@ -3311,9 +3311,9 @@
     });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(servRows),'Servicos');
 
-    var lotHeader=['Lote','Ordem'].concat(SERV.map(function(s){return s.n;}));
+    var lotHeader=['Lote','Pacote','Ordem'].concat(SERV.map(function(s){return s.n;}));
     var lotRows=[lotHeader];
-    LOTS.forEach(function(l,li){ lotRows.push([l,li+1].concat(SERV.map(function(s,si){return QTY[li][si]||0;}))); });
+    LOTS.forEach(function(l,li){ lotRows.push([l,LOTE_PACOTE[li]||'',li+1].concat(SERV.map(function(s,si){return QTY[li][si]||0;}))); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(lotRows),'Lotes');
 
     var calRows=[['Início',(window._OBRA&&window._OBRA.data_inicio)||'']];
@@ -3507,19 +3507,24 @@
       }
     }
 
-    // 2) Lotes + quantidades — uma sheet só: Lote, Ordem, <serviço1>, <serviço2>...
+    // 2) Lotes + quantidades — uma sheet só: Lote, [Pacote,] Ordem, <serviço1>, <serviço2>...
+    // ("Pacote" é opcional — arquivos exportados antes dessa coluna existir continuam funcionando.)
     var createdLot=0, qtyCount=0;
     if(wsLot){
       var lotAoa=sheetRows(wsLot);
       if(lotAoa.length>1){
-        var header=lotAoa[0], svcCols=header.slice(2).map(function(n){return String(n||'').trim();});
+        var header=lotAoa[0];
+        var hasPacoteCol=String(header[1]||'').trim().toLowerCase()==='pacote';
+        var qtyOffset=hasPacoteCol?3:2;
+        var svcCols=header.slice(qtyOffset).map(function(n){return String(n||'').trim();});
         var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
         var rows=[];
         for(var j=1;j<lotAoa.length;j++){
           var row=lotAoa[j]; if(!row||row[0]==null||row[0]==='')continue;
           var lname=String(row[0]).trim(); if(!lname)continue;
+          var pacoteVal=hasPacoteCol&&row[1]!=null?String(row[1]).trim():null;
           if(!lotByName.hasOwnProperty(lname.toLowerCase())){
-            await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1});
+            await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1,pacote_contratual:pacoteVal||null});
             createdLot++;
           }
           rows.push(row);
@@ -3527,12 +3532,23 @@
         if(createdLot>0)await sbLoadCadastro(selectedObra.id);
         var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
         var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+        if(hasPacoteCol){
+          for(var pk=0;pk<rows.length;pk++){
+            var prow=rows[pk];
+            var pli=lotIdxByName[String(prow[0]).trim().toLowerCase()]; if(pli==null)continue;
+            var pval=prow[1]!=null?String(prow[1]).trim():'';
+            if((LOTE_PACOTE[pli]||'')!==pval){
+              await sbUpdateLote(window._LOTIDS[pli],{pacote_contratual:pval||null});
+              LOTE_PACOTE[pli]=pval;
+            }
+          }
+        }
         for(var k=0;k<rows.length;k++){
           var qrow=rows[k];
           var li2=lotIdxByName[String(qrow[0]).trim().toLowerCase()]; if(li2==null)continue;
           for(var c2=0;c2<svcCols.length;c2++){
             var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
-            var val=Number(qrow[c2+2]); if(!isFinite(val))continue;
+            var val=Number(qrow[c2+qtyOffset]); if(!isFinite(val))continue;
             await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
             qtyCount++;
           }
