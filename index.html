@@ -109,10 +109,11 @@
   .kpi .lab{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
   .kpi .val{font-family:"Archivo",sans-serif;font-weight:800;font-size:25px;line-height:1.05;margin-top:7px;letter-spacing:-.02em}
   .kpi .foot{font-size:11.5px;color:var(--ink-2);margin-top:4px}
-  .cv-compact .kpi{padding:7px 10px}
-  .cv-compact .kpi .lab{font-size:9px}
-  .cv-compact .kpi .val{font-size:16px;margin-top:2px}
-  .cv-compact .kpi .foot{font-size:9px;margin-top:1px}
+  .cv-cardgrid{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  .cv-compact .kpi{padding:8px 11px}
+  .cv-compact .kpi .lab{font-size:10px}
+  .cv-compact .kpi .val{font-size:19px;margin-top:3px}
+  .cv-compact .kpi .foot{font-size:10px;margin-top:2px}
   .up{color:var(--good)}.down{color:var(--crit)}.flat{color:var(--warn)}
 
   table{width:100%;border-collapse:collapse;font-size:13px}
@@ -1174,9 +1175,13 @@
     '</div>'+
     '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
     '<div class="note" id="cvRef" style="margin-bottom:8px;font-size:11.5px"></div>'+
-    '<div class="grid g4" id="cvCards" style="gap:8px;margin-bottom:10px"></div>'+
-    '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:44vh"></svg>'+
-    '<div class="note" style="margin-top:6px;font-size:10.5px">Linha <b>tracejada</b> = previsto (linha de base ativa, ou o cronograma atual se nenhuma foi gerada). Linha <b>cheia</b> = realizado (apontamentos de Produção Diária). A linha vertical vermelha marca a semana de hoje.</div></div>';
+    '<div class="cv-cardgrid" id="cvCards" style="margin-bottom:10px"></div>'+
+    '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
+    '<div class="note" style="margin-top:6px;font-size:10.5px">Linha <b>tracejada</b> = previsto (linha de base ativa, ou o cronograma atual se nenhuma foi gerada). Linha <b>cheia</b> = realizado (apontamentos de Produção Diária). A linha vertical vermelha marca a semana de hoje.</div>'+
+    '<div class="grid g2" style="margin-top:14px;gap:14px">'+
+      '<div><div class="eyebrow" style="margin-bottom:4px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 190"></svg></div>'+
+      '<div><div class="eyebrow" style="margin-bottom:4px">IDP — Índice de Desempenho de Prazo (últimas 5 semanas + atual)</div><svg class="chart" id="cvIdp" viewBox="0 0 480 190"></svg></div>'+
+    '</div></div>';
   };
 
   VIEWS['ac-prod']=function(){
@@ -2258,12 +2263,12 @@
     SERV.forEach(function(sv,si){
       if(hidden[si])return;
       var col=svcColor(sv);
-      s+='<path d="'+path(data.series[si])+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-dasharray="6 4"/>';
-      s+='<path d="'+path(data.realSeries[si])+'" fill="none" stroke="'+col+'" stroke-width="2.25"/>';
+      s+='<path d="'+path(data.series[si])+'" fill="none" stroke="'+col+'" stroke-width="1.1" stroke-dasharray="5 3"/>';
+      s+='<path d="'+path(data.realSeries[si])+'" fill="none" stroke="'+col+'" stroke-width="1.4"/>';
     });
     if(!hidden.total){
-      s+='<path d="'+path(data.totalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.5" stroke-dasharray="6 4"/>';
-      s+='<path d="'+path(data.realTotalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.75"/>';
+      s+='<path d="'+path(data.totalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-dasharray="5 3"/>';
+      s+='<path d="'+path(data.realTotalSeries)+'" fill="none" stroke="var(--ink)" stroke-width="1.75"/>';
     }
     if(data.hojeW>0&&data.hojeW<=tw){
       var hx=xx(data.hojeW);
@@ -2296,6 +2301,72 @@
       cardsEl.innerHTML=html||'<div class="note">Marque ao menos um serviço acima pra ver o percentual.</div>';
     }
     sCurve('scv2',data);
+    renderCvBars(data);
+    renderCvIdp(data);
+  }
+  function weeklyDelta(series,w){
+    if(!series||w<1||w>=series.length)return null;
+    var prev=series[w-1]!=null?series[w-1]:0, cur=series[w]!=null?series[w]:prev;
+    return cur-prev;
+  }
+  function renderCvBars(data){
+    var el=document.getElementById('cvBars'); if(!el)return;
+    var hojeW=data.hojeW>0?data.hojeW:1;
+    var weeks=[]; for(var w=hojeW-3;w<=hojeW+3;w++)weeks.push(w);
+    var vals=weeks.map(function(w){
+      if(w<1||w>data.tw)return {w:w,p:null,r:null};
+      return {w:w,p:weeklyDelta(data.totalSeries,w)||0,r:weeklyDelta(data.realTotalSeries,w)||0};
+    });
+    var W=480,H=190,pl=30,pr=10,pt=10,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
+    var maxV=1; vals.forEach(function(v){ if(v.p!=null)maxV=Math.max(maxV,v.p); if(v.r!=null)maxV=Math.max(maxV,v.r); });
+    var xx=function(i){return pl+iw*i/n;}, yy=function(v){return pt+ih-ih*v/maxV;};
+    var grpW=iw/n*0.8, barW=grpW*0.42;
+    var s='';
+    for(var g=0;g<=3;g++){var val=maxV*g/3; s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(0)+'</text>';}
+    vals.forEach(function(v,i){
+      var x0=xx(i), wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
+      s+='<text x="'+(x0+grpW/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      if(v.p==null)return;
+      if(v.p>0){
+        var yP1=yy(v.p),yP2=yy(0);
+        s+='<rect x="'+x0.toFixed(1)+'" y="'+yP1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yP2-yP1).toFixed(1)+'" fill="var(--line-2)" stroke="var(--muted)"><title>Previsto '+wLbl+': '+v.p.toFixed(1)+'%</title></rect>';
+      }
+      if(v.r>0){
+        var col=v.r>v.p?'var(--crit)':(v.r<v.p?'var(--warn)':'var(--good)');
+        var yR1=yy(v.r),yR2=yy(0);
+        s+='<rect x="'+(x0+barW*1.15).toFixed(1)+'" y="'+yR1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yR2-yR1).toFixed(1)+'" fill="'+col+'"><title>Realizado '+wLbl+': '+v.r.toFixed(1)+'%</title></rect>';
+      }
+    });
+    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+  }
+  function renderCvIdp(data){
+    var el=document.getElementById('cvIdp'); if(!el)return;
+    var hojeW=data.hojeW>0?data.hojeW:1;
+    var weeks=[]; for(var w=hojeW-5;w<=hojeW;w++)weeks.push(w);
+    var vals=weeks.map(function(w){
+      if(w<1||w>data.tw)return {w:w,idp:null};
+      var p=data.totalSeries[w]||0, r=data.realTotalSeries[w]||0;
+      return {w:w,idp:p>0?(r/p):null};
+    });
+    var W=480,H=190,pl=30,pr=10,pt=14,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
+    var maxV=1.2; vals.forEach(function(v){ if(v.idp!=null)maxV=Math.max(maxV,v.idp*1.15); });
+    var xx=function(i){return pl+iw*i/n;}, yy=function(v){return pt+ih-ih*v/maxV;};
+    var barW=(iw/n)*0.5;
+    var s='';
+    [0,0.5,1].forEach(function(val){
+      if(val>maxV)return;
+      s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="'+(val===1?'var(--good)':'var(--line)')+'"'+(val===1?' stroke-dasharray="4 3"':'')+'/><text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(1)+'</text>';
+    });
+    vals.forEach(function(v,i){
+      var x0=xx(i)+(iw/n-barW)/2, wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
+      s+='<text x="'+(xx(i)+iw/n/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      if(v.idp==null)return;
+      var col=v.idp>=1?'var(--good)':'var(--warn)';
+      var y1=yy(v.idp),y2=yy(0);
+      s+='<rect x="'+x0.toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+col+'"><title>IDP '+wLbl+': '+v.idp.toFixed(2)+'</title></rect>'+
+        '<text x="'+(x0+barW/2)+'" y="'+(y1-3)+'" text-anchor="middle" font-size="8" fill="var(--ink-2)">'+v.idp.toFixed(2)+'</text>';
+    });
+    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
 
   function renderHistChart(){
