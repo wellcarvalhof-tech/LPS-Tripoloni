@@ -311,6 +311,7 @@
   .print-only{display:none}
   @media print{
     @page{size:landscape;margin:10mm}
+    *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
     .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign,.tc-svctoggle{display:none!important}
     .app{display:block}
     .content{max-width:none!important;padding:0!important}
@@ -736,7 +737,7 @@
   VIEWS['cr-matriz']=function(){
     var TB=[['modelo','Modelo','▤'],['imp-xls','Importar Excel','↥'],['imp-tc','Importar Tempo-Caminho','↥'],
       ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],['reset','Reiniciar exemplo','↺'],
-      ['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
+      ['exp-dados','Exportar dados','↧'],['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
     var tb=TB.map(function(t){var cls=(t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn';
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
@@ -2849,11 +2850,19 @@
     });
     return rows;
   }
+  /** Exporta só a matriz visual (Tempo-Caminho), igual ao que aparece na tela/PDF. */
   function exportExcel(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
     var wb=XLSX.utils.book_new();
-
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(matrixSheetRows()),'Matriz Tempo-Caminho');
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    XLSX.writeFile(wb,nome+'_matriz_tempo_caminho.xlsx');
+    toast('Excel exportado.');
+  }
+  /** Exporta os dados estruturados (serviços/lotes/calendário/tempo-caminho) — compatível com "Importar Excel". */
+  function exportDadosExcel(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
+    var wb=XLSX.utils.book_new();
 
     var servRows=[['Nome','Unidade','Cor','Equipes','Produtividade','Lag','Predecessores']];
     SERV.forEach(function(s){
@@ -2877,12 +2886,13 @@
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(tcRows),'TempoCaminho');
 
     var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
-    XLSX.writeFile(wb,nome+'_tempo_caminho.xlsx');
-    toast('Excel exportado.');
+    XLSX.writeFile(wb,nome+'_dados.xlsx');
+    toast('Dados exportados.');
   }
   function exportPdf(){
     window._cronoTab='tc'; // relatório sempre a partir da visão limpa (com totais por lote)
     var prevZoom=window._matrixZoom||1;
+    var prevTitle=document.title;
     window._matrixZoom=1;
     renderCrono();
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
@@ -2891,6 +2901,10 @@
     var gerado=p2(d.getDate())+'/'+p2(d.getMonth()+1)+'/'+d.getFullYear()+' '+p2(d.getHours())+':'+p2(d.getMinutes());
     var t=document.getElementById('printTitle'); if(t)t.textContent=nome+' — Rascunho';
     var s=document.getElementById('printSub'); if(s)s.textContent='Gerado em '+gerado+' — '+tw+' semana'+(tw===1?'':'s');
+    // O navegador usa document.title como nome sugerido do PDF e no cabeçalho de impressão
+    // (o carimbo de data/hora do lado esquerdo é do navegador — só some desmarcando
+    // "Cabeçalhos e rodapés" no diálogo de impressão, não dá pra remover via código).
+    document.title='Tempo Caminho - '+nome;
     var foot=document.getElementById('printFoot');
     if(foot){
       var legRows=SERV.map(function(sv){
@@ -2902,20 +2916,23 @@
         '<li>A última semana de uma atividade mostra o saldo (qtd. &lt; produção semanal cheia).</li></ul>';
     }
     // Encolhe a matriz (zoom) pra caber título + matriz + legenda numa única folha paisagem.
+    // Reserva espaço extra pro cabeçalho/rodapé que o navegador injeta na impressão (fora do
+    // nosso controle) — desmarcar "Cabeçalhos e rodapés" no diálogo de impressão dá mais folga.
     var wrap=document.getElementById('tcWrap');
     var table=wrap?wrap.querySelector('table'):null;
+    var head=document.querySelector('.print-head');
     if(table){
       var naturalW=table.scrollWidth, naturalH=table.scrollHeight;
       var pxPerMm=96/25.4;
       var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
-      var reserved=(foot?foot.scrollHeight:0)+80;
+      var reserved=(head?head.scrollHeight:40)+(foot?foot.scrollHeight:0)+110;
       if(naturalW>0&&naturalH>0){
         var fitScale=Math.min(1,(pageW-4)/naturalW,(pageH-reserved)/naturalH);
-        window._matrixZoom=Math.max(0.15,+fitScale.toFixed(3));
+        window._matrixZoom=Math.max(0.12,+fitScale.toFixed(3));
         renderCrono();
       }
     }
-    window.onafterprint=function(){ window._matrixZoom=prevZoom; renderCrono(); window.onafterprint=null; };
+    window.onafterprint=function(){ window._matrixZoom=prevZoom; document.title=prevTitle; renderCrono(); window.onafterprint=null; };
     window.print();
   }
 
@@ -3014,7 +3031,7 @@
     var wsLot=wb.Sheets['Lotes'];
     var wsCal=wb.Sheets['Calendario']||wb.Sheets['Calendário'];
     if(!wsServ&&!wsLot&&!wsCal){
-      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar Excel".');
+      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar dados".');
       return;
     }
     if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. O cronograma é recalculado pelo app a partir desses dados (use "Importar Tempo-Caminho" se quiser reproduzir exatamente as semanas de uma aba TempoCaminho).'))return;
@@ -3446,6 +3463,7 @@
         var a=b.getAttribute('data-act');
         if(a==='sair'){showLanding();return;}
         if(a==='exp-xls'){exportExcel();return;}
+        if(a==='exp-dados'){exportDadosExcel();return;}
         if(a==='exp-pdf'){exportPdf();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
