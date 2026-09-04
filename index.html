@@ -562,7 +562,7 @@
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,ovr:(r.ajustes_manuais&&typeof r.ajustes_manuais==='object')?r.ajustes_manuais:{},ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
-    ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
+    ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     REC_DIRTY={}; REALIZADO_DIRTY={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
@@ -734,6 +734,7 @@
   var OVR={}; // ajustes manuais: {"loteId::servicoId": {startWeek, team, duration, productivity}}
   var ADJ_DIRTY=false; // true quando há ajustes ainda não salvos no Supabase
   var ADJ_PENDING={}; // {"loteId::servicoId": true} — ajustes feitos nesta sessão, ainda não salvos
+  var ACTIVE_CENARIO=null; // {id,nome} do cenário carregado no editor agora, ou null = cronograma ao vivo da obra
 
   /* ================= VIEWS ================= */
   var VIEWS={};
@@ -770,7 +771,10 @@
     return head('Tempo-Caminho','Cronograma automático para obras rodoviárias — monte, importe, ajuste e exporte.','')+
     '<div class="card">'+
       '<div id="cronoToolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px">'+tb+'</div>'+
-      '<div class="banner" style="margin-bottom:14px">'+(function(){
+      '<div class="banner" style="margin-bottom:14px'+(ACTIVE_CENARIO?';background:var(--accent-soft);border-color:var(--accent)':'')+'">'+(function(){
+        if(ACTIVE_CENARIO)return 'Editando o cenário <b>"'+ACTIVE_CENARIO.nome+'"</b> — mudanças aqui não afetam o cronograma ao vivo nem a obra até você salvar. '+
+          '<button class="btn" id="saveIntoCenBtn" style="margin-left:6px;padding:3px 10px;font-size:11.5px">💾 Salvar neste cenário</button>'+
+          '<button class="btn" id="exitCenBtn" style="margin-left:6px;padding:3px 10px;font-size:11.5px">↩ Voltar ao cronograma ao vivo</button>';
         var b=activeBaseline();
         return b?('Linha de base ativa: <b>'+b.revisao+'</b> — '+b.nome+'. Ajustes aqui não alteram a linha de base até você gerar uma nova revisão.'):
           'Rascunho — você ainda está montando o cronograma. Quando estiver pronto, gere a <b>linha de base</b> (REV00) pra criar a referência de previsto e o histórico de revisões.';
@@ -1147,18 +1151,21 @@
   }
   VIEWS['cr-cenarios']=function(){
     var liveStats=scenarioStats(OVR);
-    var liveRow='<tr style="background:var(--elev)"><td><b>Cronograma atual (ao vivo)</b></td><td><span class="pill mut">em edição</span></td>'+
+    var editingLive=!ACTIVE_CENARIO;
+    var liveRow='<tr style="background:var(--elev)'+(editingLive?';outline:2px solid var(--accent);outline-offset:-2px':'')+'"><td><b>Cronograma atual (ao vivo)</b></td><td><span class="pill '+(editingLive?'warn':'mut')+'">'+(editingLive?'✏ editando agora':'salvo')+'</span></td>'+
       '<td class="r mono">'+liveStats.tw+' sem</td><td class="r mono">'+liveStats.peak+' equipes</td>'+
-      '<td style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn primary" id="cnLiveBase">❄ Gerar linha de base</button></td></tr>';
+      '<td style="display:flex;gap:6px;flex-wrap:wrap">'+(ACTIVE_CENARIO?'<button class="btn" id="cnBackLive">↩ Voltar a editar aqui</button>':'<button class="btn primary" id="cnLiveBase">❄ Gerar linha de base</button>')+'</td></tr>';
     var rows=CENARIOS.slice().sort(function(a,b){return (a.ordem||0)-(b.ordem||0);}).map(function(c){
       var st=scenarioStats(c.ovr);
-      var estado=c.tipo==='baseline'?('<span class="pill '+(c.ativo?'good':'mut')+'">'+c.revisao+(c.ativo?' · ativa':'')+'</span>'):'<span class="pill mut">rascunho</span>';
+      var isActive=ACTIVE_CENARIO&&ACTIVE_CENARIO.id===c.id;
+      var estado=c.tipo==='baseline'?('<span class="pill '+(c.ativo?'good':'mut')+'">'+c.revisao+(c.ativo?' · ativa':'')+'</span>'):'<span class="pill '+(isActive?'warn':'mut')+'">'+(isActive?'✏ editando agora':'rascunho')+'</span>';
       var acoes='<button class="btn" data-cnload="'+c.id+'">Carregar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
         (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button><button class="iconbtn" data-cndel="'+c.id+'">✕</button>':'');
-      return '<tr><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
+      return '<tr'+(isActive?' style="outline:2px solid var(--accent);outline-offset:-2px"':'')+'><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
     }).join('');
     return head('Cenários','Salve alternativas de sequenciamento/equipes, compare prazo e pico de recursos, e gere linhas de base (REV00, REV01...) ao longo da obra.',impBtn()+'<button class="btn primary" id="cnNovo">+ Cenário</button>')+
-    '<div class="card" style="margin-bottom:14px"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
+    (ACTIVE_CENARIO?'<div class="banner" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">Você está editando o cenário <b>"'+ACTIVE_CENARIO.nome+'"</b> — vá em <b>Matriz Tempo-Caminho ▸ Ajuste manual</b> pra mexer nele, e volte aqui pra salvar ou trocar de cenário.</div>':'')+
+    '<div class="card" style="margin-bottom:14px"><div class="note" style="margin-bottom:8px">"Carregar" abre o cenário pra edição em Ajuste Manual. "Duplicar" cria uma cópia independente. A linha destacada mostra o que está aberto no editor agora.</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
       liveRow+rows+'</tbody></table></div>'+
       (CENARIOS.length?'':'<div class="note" style="margin-top:8px">Nenhum cenário salvo ainda. Clique em "+ Cenário" pra guardar um snapshot do cronograma atual, ou em "❄ Gerar linha de base" na linha acima pra criar a primeira revisão (REV00).</div>')+
     '</div>'+
@@ -1943,12 +1950,16 @@
       });
       var liveBase=document.getElementById('cnLiveBase');
       if(liveBase)liveBase.addEventListener('click',function(){ gerarLinhaDeBase(OVR,null); });
+      var backLive=document.getElementById('cnBackLive');
+      if(backLive)backLive.addEventListener('click',exitCenarioEdit);
       document.querySelectorAll('[data-cnload]').forEach(function(b){
         b.addEventListener('click',function(){
           var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnload');})[0]; if(!c)return;
           if(hasAnyDirty()&&!confirm('Há alterações não salvas no cronograma atual. Carregar este cenário substitui o que está em edição agora (o que já foi salvo no banco não é perdido). Continuar?'))return;
           OVR=JSON.parse(JSON.stringify(c.ovr||{})); ADJ_DIRTY=true; ADJ_PENDING={};
-          toast('Cenário "'+c.nome+'" carregado no editor.');
+          ACTIVE_CENARIO={id:c.id,nome:c.nome};
+          window._cronoTab='ajuste';
+          toast('Cenário "'+c.nome+'" carregado — você está editando ele agora.');
           go('cr-matriz');
         });
       });
@@ -3523,7 +3534,7 @@
       (ADJ_DIRTY?' <b style="color:var(--warn)">Há ajustes não salvos.</b>':'')+'</p></div>'+
       '<div style="display:flex;gap:8px;white-space:nowrap">'+
         '<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
-        '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 Salvar ajustes</button>'+
+        '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
     if(tab==='equipe') return editarPorEquipeHTML();
@@ -3546,7 +3557,10 @@
       var saveB=document.getElementById('saveAdjustsBtn');
       if(saveB)saveB.addEventListener('click',async function(){
         saveB.disabled=true; saveB.textContent='Salvando…';
-        try{ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; toast('Ajustes salvos.'); renderCrono(); }
+        try{
+          if(ACTIVE_CENARIO){ await saveIntoActiveCenario(); }
+          else{ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; toast('Ajustes salvos.'); renderCrono(); }
+        }
         catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); saveB.disabled=false; saveB.textContent='💾 Salvar ajustes'; }
       });
     }
@@ -3690,7 +3704,38 @@
         renderCrono();
       });
     });
+    var saveIntoCen=document.getElementById('saveIntoCenBtn');
+    if(saveIntoCen)saveIntoCen.addEventListener('click',saveIntoActiveCenario);
+    var exitCen=document.getElementById('exitCenBtn');
+    if(exitCen)exitCen.addEventListener('click',exitCenarioEdit);
     renderCrono();
+  }
+  /** Salva o cronograma em edição de volta no cenário carregado (não mexe no ajustes_manuais da obra). */
+  async function saveIntoActiveCenario(){
+    if(!ACTIVE_CENARIO||!selectedObra)return;
+    try{
+      var snap=JSON.parse(JSON.stringify(OVR));
+      await sbUpdateCenario(ACTIVE_CENARIO.id,{ajustes_manuais:snap});
+      var c=CENARIOS.filter(function(x){return x.id===ACTIVE_CENARIO.id;})[0];
+      if(c)c.ovr=snap;
+      ADJ_DIRTY=false; ADJ_PENDING={};
+      toast('Alterações salvas no cenário "'+ACTIVE_CENARIO.nome+'".');
+      go(current);
+    }catch(e){ alert('Falha ao salvar no cenário: '+((e&&e.message)||e)); }
+  }
+  /** Sai do modo "editando cenário" e volta a mostrar o cronograma ao vivo (ajustes_manuais salvo na obra). */
+  async function exitCenarioEdit(){
+    if(!selectedObra)return;
+    if(hasAnyDirty()&&!confirm('Há alterações não salvas neste cenário. Sair sem salvar?'))return;
+    try{
+      var r=await SB.from('obras').select('ajustes_manuais').eq('id',selectedObra.id).single();
+      if(r.error)throw r.error;
+      OVR=(r.data.ajustes_manuais&&typeof r.data.ajustes_manuais==='object')?r.data.ajustes_manuais:{};
+    }catch(e){ OVR={}; }
+    ADJ_DIRTY=false; ADJ_PENDING={};
+    ACTIVE_CENARIO=null;
+    toast('Voltou pro cronograma ao vivo.');
+    go(current);
   }
 
   function renderAssignPanel(){
