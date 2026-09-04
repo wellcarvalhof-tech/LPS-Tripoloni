@@ -1165,7 +1165,7 @@
       for(var w=1;w<=data.tw;w++)opts+='<option value="'+w+'">S'+isoWeek(mondayOf(w))+'</option>';
       weekSel='<select class="esel" id="cvWeekSel" style="height:28px">'+opts+'</select>';
     }
-    return '<div class="cv-compact">'+
+    return '<div class="cv-compact" id="cvRoot">'+
     '<div class="cv-cardgrid" id="cvCards" style="margin-bottom:12px"></div>'+
     '<div class="card" style="padding:12px 15px;margin-bottom:14px">'+
       '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:4px">'+
@@ -1178,12 +1178,12 @@
         '</div>'+
       '</div>'+
       '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
-      '<svg class="chart" id="scv2" viewBox="0 0 700 230" style="max-height:42vh"></svg>'+
-      '<div class="note" style="margin-top:6px;font-size:10.5px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
+      '<svg class="chart" id="scv2" viewBox="0 0 700 170" style="max-height:28vh"></svg>'+
+      '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
-      '<div class="card" style="padding:12px 15px"><div class="eyebrow" style="margin-bottom:4px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 190"></svg></div>'+
-      '<div class="card" style="padding:12px 15px"><div class="eyebrow" style="margin-bottom:4px">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 190"></svg></div>'+
+      '<div class="card" style="padding:10px 14px"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 150" style="max-height:22vh"></svg></div>'+
+      '<div class="card" style="padding:10px 14px"><div class="eyebrow" style="margin-bottom:2px">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 150" style="max-height:22vh"></svg></div>'+
     '</div></div>';
   };
 
@@ -1897,7 +1897,19 @@
       if(cvPrint)cvPrint.addEventListener('click',function(){
         var prevTitle=document.title;
         document.title='Curva S - '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra');
-        window.onafterprint=function(){ document.title=prevTitle; window.onafterprint=null; };
+        var root=document.getElementById('cvRoot');
+        var prevZoom=root?root.style.zoom:'';
+        if(root){
+          root.style.zoom='1';
+          var naturalW=root.scrollWidth, naturalH=root.scrollHeight;
+          var pxPerMm=96/25.4;
+          var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
+          if(naturalW>0&&naturalH>0){
+            var fitScale=Math.min(1,(pageW-4)/naturalW,(pageH-60)/naturalH);
+            root.style.zoom=Math.max(0.25,+fitScale.toFixed(3));
+          }
+        }
+        window.onafterprint=function(){ document.title=prevTitle; if(root)root.style.zoom=prevZoom||''; window.onafterprint=null; };
         window.print();
       });
     }
@@ -2263,16 +2275,17 @@
   }
   function sCurve(id,data,sel){
     var el=document.getElementById(id); if(!el)return;
-    var W=700,H=230,pl=34,pr=12,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb;
+    var W=700,H=170,pl=28,pr=10,pt=10,pb=16,iw=W-pl-pr,ih=H-pt-pb;
+    var afs='style="font-size:7px"';
     var tw=data.tw;
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
     var n=tw+1;
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
     var s='';
-    for(var g=0;g<=100;g+=25){s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(g)+3)+'" text-anchor="end">'+g+'</text>';}
+    for(var g=0;g<=100;g+=25){s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" '+afs+' x="'+(pl-5)+'" y="'+(yy(g)+2.5)+'" text-anchor="end">'+g+'</text>';}
     var stepLbl=Math.max(1,Math.ceil((n-1)/13));
-    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" x="'+xx(i)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(i))+'</text>';}
-    if((n-1)%stepLbl!==0)s+='<text class="axm" x="'+xx(tw)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(tw))+'</text>';
+    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" '+afs+' x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(i))+'</text>';}
+    if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(tw)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(tw))+'</text>';
     function path(a){if(!a)return '';var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
     var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
     if(cCliente)s+='<path d="'+path(cCliente)+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
@@ -2281,7 +2294,7 @@
     if(data.hojeW>0&&data.hojeW<=tw){
       var hx=xx(data.hojeW);
       s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
-        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm">hoje</text>';
+        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" '+afs+'>hoje</text>';
     }
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
@@ -2335,20 +2348,21 @@
       if(w<1||w>data.tw)return {w:w,p:null,r:null,e:null};
       return {w:w,p:weeklyDelta(cCliente,w),r:weeklyDelta(cReal,w)||0,e:weeklyDelta(cExec,w)||0};
     });
-    var W=480,H=190,pl=30,pr=10,pt=10,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
+    var W=480,H=150,pl=26,pr=8,pt=14,pb=18,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
     var maxV=1; vals.forEach(function(v){ [v.p,v.r,v.e].forEach(function(x){if(x!=null)maxV=Math.max(maxV,x);}); });
     var xx=function(i){return pl+iw*i/n;}, yy=function(v){return pt+ih-ih*v/maxV;};
     var grpW=iw/n*0.82, barW=grpW*0.28;
     var s='';
-    for(var g=0;g<=3;g++){var val=maxV*g/3; s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(0)+'</text>';}
+    for(var g=0;g<=3;g++){var val=maxV*g/3; s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text x="'+(pl-4)+'" y="'+(yy(val)+2.5)+'" text-anchor="end" font-size="7" fill="var(--muted)">'+val.toFixed(0)+'</text>';}
     vals.forEach(function(v,i){
       var x0=xx(i), wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
-      s+='<text x="'+(x0+grpW/2)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      s+='<text x="'+(x0+grpW/2)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
       if(v.w<1||v.w>data.tw)return;
       function bar(idx,val,color,label){
         if(val==null||val<=0)return;
         var bx=x0+idx*barW*1.08, y1=yy(val), y2=yy(0);
-        s+='<rect x="'+bx.toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+color+'"><title>'+label+' '+wLbl+': '+val.toFixed(1)+'%</title></rect>';
+        s+='<rect x="'+bx.toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,y2-y1).toFixed(1)+'" fill="'+color+'"><title>'+label+' '+wLbl+': '+val.toFixed(1)+'%</title></rect>'+
+          '<text x="'+(bx+barW/2)+'" y="'+(y1-2)+'" text-anchor="middle" font-size="6.5" fill="var(--ink-2)">'+val.toFixed(1)+'</text>';
       }
       bar(0,v.p,'var(--crit)','Previsto cliente');
       bar(1,v.r,'var(--good)','Realizado');
@@ -2368,7 +2382,7 @@
       var e=cExec&&cExec[w]!=null?cExec[w]:0;
       return {w:w,cli:(p!=null&&p>0)?(r/p):null,exe:e>0?(r/e):null};
     });
-    var W=480,H=190,pl=30,pr=10,pt=14,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
+    var W=480,H=150,pl=26,pr=8,pt=14,pb=18,iw=W-pl-pr,ih=H-pt-pb,n=vals.length;
     var maxV=1.3; vals.forEach(function(v){ if(v.cli!=null)maxV=Math.max(maxV,v.cli*1.15); if(v.exe!=null)maxV=Math.max(maxV,v.exe*1.15); });
     var minV=0.5; vals.forEach(function(v){ if(v.cli!=null)minV=Math.min(minV,v.cli*0.9); if(v.exe!=null)minV=Math.min(minV,v.exe*0.9); });
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*(v-minV)/(maxV-minV);};
@@ -2378,16 +2392,16 @@
     band(yy(Math.max(minV,0)),yy(0.85),'var(--crit)');
     band(yy(0.85),yy(1),'var(--warn)');
     band(yy(1),yy(maxV),'var(--good)');
-    s+='<line x1="'+pl+'" y1="'+yy(1)+'" x2="'+(W-pr)+'" y2="'+yy(1)+'" stroke="var(--good)" stroke-width="1.2" stroke-dasharray="4 3"/><text x="'+(W-pr)+'" y="'+(yy(1)-3)+'" text-anchor="end" font-size="8" fill="var(--good)">Meta 1,0</text>';
-    [minV,1,maxV].forEach(function(val){ s+='<text x="'+(pl-5)+'" y="'+(yy(val)+3)+'" text-anchor="end" font-size="8" fill="var(--muted)">'+val.toFixed(2)+'</text>'; });
+    s+='<line x1="'+pl+'" y1="'+yy(1)+'" x2="'+(W-pr)+'" y2="'+yy(1)+'" stroke="var(--good)" stroke-width="1.2" stroke-dasharray="4 3"/><text x="'+(W-pr)+'" y="'+(yy(1)-3)+'" text-anchor="end" font-size="7" fill="var(--good)">Meta 1,0</text>';
+    [minV,1,maxV].forEach(function(val){ s+='<text x="'+(pl-4)+'" y="'+(yy(val)+2.5)+'" text-anchor="end" font-size="7" fill="var(--muted)">'+val.toFixed(2)+'</text>'; });
     function path(key){var d='',started=false;for(var j=0;j<vals.length;j++){var v=vals[j][key];if(v==null){started=false;continue;}d+=(started?'L':'M')+xx(j).toFixed(1)+' '+yy(v).toFixed(1)+' ';started=true;}return d;}
     s+='<path d="'+path('cli')+'" fill="none" stroke="var(--ink)" stroke-width="1.6"/>';
     s+='<path d="'+path('exe')+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
     vals.forEach(function(v,i){
       var wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
-      s+='<text x="'+xx(i)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
-      if(v.cli!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.cli)+'" r="2.4" fill="var(--ink)"/>';
-      if(v.exe!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.exe)+'" r="2.4" fill="var(--crit)"/>';
+      s+='<text x="'+xx(i)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      if(v.cli!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.cli)+'" r="2.2" fill="var(--ink)"/><text x="'+xx(i)+'" y="'+(yy(v.cli)-4)+'" text-anchor="middle" font-size="6.5" fill="var(--ink)">'+v.cli.toFixed(2)+'</text>';
+      if(v.exe!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.exe)+'" r="2.2" fill="var(--crit)"/><text x="'+xx(i)+'" y="'+(yy(v.exe)+9)+'" text-anchor="middle" font-size="6.5" fill="var(--crit)">'+v.exe.toFixed(2)+'</text>';
     });
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
