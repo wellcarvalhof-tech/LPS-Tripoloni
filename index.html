@@ -109,6 +109,10 @@
   .kpi .lab{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
   .kpi .val{font-family:"Archivo",sans-serif;font-weight:800;font-size:25px;line-height:1.05;margin-top:7px;letter-spacing:-.02em}
   .kpi .foot{font-size:11.5px;color:var(--ink-2);margin-top:4px}
+  .cv-compact .kpi{padding:7px 10px}
+  .cv-compact .kpi .lab{font-size:9px}
+  .cv-compact .kpi .val{font-size:16px;margin-top:2px}
+  .cv-compact .kpi .foot{font-size:9px;margin-top:1px}
   .up{color:var(--good)}.down{color:var(--crit)}.flat{color:var(--warn)}
 
   table{width:100%;border-collapse:collapse;font-size:13px}
@@ -312,7 +316,8 @@
   @media print{
     @page{size:landscape;margin:10mm}
     *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
-    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign,.tc-svctoggle{display:none!important}
+    .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign,.tc-svctoggle,.cv-toolbar{display:none!important}
+    .cv-compact svg.chart{max-height:none!important}
     .app{display:block}
     .content{max-width:none!important;padding:0!important}
     .card{box-shadow:none;border:1px solid #ccc}
@@ -1150,16 +1155,28 @@
 
   VIEWS['ac-curvas']=function(){
     var hidden=window._curvaSHidden||{};
+    var cvd=curvaSData();
     var toggles=SERV.map(function(s,si){
-      return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;margin:0 12px 6px 0;cursor:pointer"><input type="checkbox" data-cvtoggle="'+si+'"'+(hidden[si]?'':' checked')+'><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</label>';
+      return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin:0 10px 4px 0;cursor:pointer"><input type="checkbox" data-cvtoggle="'+si+'"'+(hidden[si]?'':' checked')+'><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</label>';
     }).join('');
-    toggles+='<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;margin:0 12px 6px 0;cursor:pointer;font-weight:700"><input type="checkbox" data-cvtoggle="total"'+(hidden.total?'':' checked')+'><span class="swatch" style="background:var(--ink)"></span>Total</label>';
-    return head('Curva S','Avanço acumulado previsto × realizado (%), por serviço e total.',impBtn())+
-    '<div class="card"><div style="margin-bottom:8px">'+(SERV.length?toggles:'')+'</div>'+
-    '<div class="note" id="cvRef" style="margin-bottom:10px"></div>'+
-    '<div class="grid g4" id="cvCards" style="margin-bottom:14px"></div>'+
-    '<svg class="chart" id="scv2" viewBox="0 0 700 320"></svg>'+
-    '<div class="note" style="margin-top:6px">Linha <b>tracejada</b> = previsto (linha de base ativa, ou o cronograma atual se nenhuma foi gerada). Linha <b>cheia</b> = realizado (apontamentos de Produção Diária). A linha vertical vermelha marca a semana de hoje.</div></div>';
+    toggles+='<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin:0 10px 4px 0;cursor:pointer;font-weight:700"><input type="checkbox" data-cvtoggle="total"'+(hidden.total?'':' checked')+'><span class="swatch" style="background:var(--ink)"></span>Total</label>';
+    var weekSel='';
+    if(cvd.tw>0){
+      var opts='<option value="auto">Hoje'+(cvd.hojeW>0?' (S'+isoWeek(mondayOf(cvd.hojeW))+')':'')+'</option>';
+      for(var w=1;w<=cvd.tw;w++)opts+='<option value="'+w+'">S'+isoWeek(mondayOf(w))+'</option>';
+      var curSel=window._curvaSWeek==null?'auto':window._curvaSWeek;
+      weekSel='<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin-left:auto"><span class="note" style="margin:0">Ver semana:</span><select class="esel" id="cvWeekSel" style="height:26px">'+opts+'</select></label>';
+    }
+    return '<div class="card cv-compact" style="padding:12px 15px">'+
+    '<div class="cv-toolbar" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:6px">'+(SERV.length?toggles:'')+
+      '<button class="btn" id="cvPrintBtn" style="padding:4px 10px;font-size:12px;margin-left:'+(SERV.length?'8px':'0')+'">🖨 Imprimir</button>'+
+      weekSel+
+    '</div>'+
+    '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
+    '<div class="note" id="cvRef" style="margin-bottom:8px;font-size:11.5px"></div>'+
+    '<div class="grid g4" id="cvCards" style="gap:8px;margin-bottom:10px"></div>'+
+    '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:44vh"></svg>'+
+    '<div class="note" style="margin-top:6px;font-size:10.5px">Linha <b>tracejada</b> = previsto (linha de base ativa, ou o cronograma atual se nenhuma foi gerada). Linha <b>cheia</b> = realizado (apontamentos de Produção Diária). A linha vertical vermelha marca a semana de hoje.</div></div>';
   };
 
   VIEWS['ac-prod']=function(){
@@ -1863,6 +1880,21 @@
           renderCurvaS();
         });
       });
+      var weekSelEl=document.getElementById('cvWeekSel');
+      if(weekSelEl){
+        weekSelEl.value=window._curvaSWeek==null?'auto':window._curvaSWeek;
+        weekSelEl.addEventListener('change',function(){
+          window._curvaSWeek=weekSelEl.value==='auto'?null:+weekSelEl.value;
+          renderCurvaS();
+        });
+      }
+      var cvPrint=document.getElementById('cvPrintBtn');
+      if(cvPrint)cvPrint.addEventListener('click',function(){
+        var prevTitle=document.title;
+        document.title='Curva S - '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra');
+        window.onafterprint=function(){ document.title=prevTitle; window.onafterprint=null; };
+        window.print();
+      });
     }
     if(view==='cr-matriz'){setupCrono();}
     if(view==='cr-cenarios'){
@@ -2211,7 +2243,7 @@
   }
   function sCurve(id,data){
     var el=document.getElementById(id); if(!el)return;
-    var W=700,H=320,pl=38,pr=12,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb;
+    var W=700,H=210,pl=34,pr=12,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb;
     var tw=data.tw;
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
     var n=tw+1;
@@ -2242,20 +2274,23 @@
   }
   function renderCurvaS(){
     var data=curvaSData(), hidden=window._curvaSHidden||{};
+    var wSel=(window._curvaSWeek!=null&&window._curvaSWeek<=data.tw)?window._curvaSWeek:data.hojeW;
     var refEl=document.getElementById('cvRef');
     if(refEl)refEl.innerHTML=data.baseline?('Previsto: <b>linha de base '+data.baseline.revisao+'</b> — '+data.baseline.nome+(data.baseline.congeladoEm?(' (congelada em '+brDate(data.baseline.congeladoEm.slice(0,10))+')'):'')):
       'Previsto: <b>cronograma atual</b> (nenhuma linha de base gerada ainda — congele uma em Cenários ou no Tempo-Caminho).';
+    var ptEl=document.getElementById('cvPrintTitle');
+    if(ptEl)ptEl.textContent='Curva S — '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra');
     var cardsEl=document.getElementById('cvCards');
     if(cardsEl){
-      var atWk=data.hojeW>0?'S'+isoWeek(mondayOf(data.hojeW)):'antes do início';
+      var atWk=wSel>0?'S'+isoWeek(mondayOf(wSel)):'antes do início';
       var html='';
       SERV.forEach(function(s,si){
         if(hidden[si])return;
-        var p=(data.series[si]&&data.series[si][data.hojeW])||0, r=(data.realSeries[si]&&data.realSeries[si][data.hojeW])||0;
+        var p=(data.series[si]&&data.series[si][wSel])||0, r=(data.realSeries[si]&&data.realSeries[si][wSel])||0;
         html+='<div class="kpi"><div class="stripe" style="background:'+svcColor(s)+'"></div><div class="lab">'+s.n+'</div><div class="val num">'+r.toFixed(1)+'%</div><div class="foot">realizado · previsto '+p.toFixed(1)+'% até '+atWk+'</div></div>';
       });
       if(!hidden.total){
-        var tp=(data.totalSeries&&data.totalSeries[data.hojeW])||0, tr=(data.realTotalSeries&&data.realTotalSeries[data.hojeW])||0;
+        var tp=(data.totalSeries&&data.totalSeries[wSel])||0, tr=(data.realTotalSeries&&data.realTotalSeries[wSel])||0;
         html+='<div class="kpi"><div class="stripe" style="background:var(--ink)"></div><div class="lab">Total</div><div class="val num">'+tr.toFixed(1)+'%</div><div class="foot">realizado · previsto '+tp.toFixed(1)+'% até '+atWk+'</div></div>';
       }
       cardsEl.innerHTML=html||'<div class="note">Marque ao menos um serviço acima pra ver o percentual.</div>';
