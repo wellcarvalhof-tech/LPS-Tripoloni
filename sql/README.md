@@ -12,5 +12,6 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `06_add_categoria_recurso.sql` | Coluna `recursos.categoria` (agrupamento na tabela Realizado) | ✅ já rodado |
 | `07_add_cenarios.sql` | Colunas novas em `cenarios` (tabela já existia desde o `01`; agora com tipo/revisao/ativo/ajustes_manuais/ordem) | ⚠️ corrigido — rodar de novo |
 | `08_add_producao_diaria.sql` | Confirma colunas usadas em `producao_diaria` (tabela já existia desde o `01`) | ⚠️ rodar (seguro repetir) |
+| `09_add_pacote_contratual_lote.sql` | Coluna `lotes.pacote_contratual` (obra com vários contratos/lotes, cronograma integrado mas relatório separado) | ⚠️ novo — rodar |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.
