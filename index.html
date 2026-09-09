@@ -3593,17 +3593,32 @@
     if(!confirm('Importar esse cronograma como ajustes manuais (semana de início, equipe e duração) sobre o cálculo atual? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
     var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
     var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
-    var applied=0;
+    // Agrupa por lote+serviço antes de aplicar — um lote pode ter mais de uma linha
+    // (equipes em paralelo dividindo a quantidade); sem agrupar, a última linha lida
+    // sobrescreveria as anteriores e a divisão entre equipes se perderia ao reimportar.
+    var groups={};
     sheetRows(ws).slice(1).forEach(function(r){
       if(!r||r[0]==null||r[2]==null)return;
       var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[2]).trim().toLowerCase()];
       if(si==null||li==null)return;
       var team=parseInt(r[1],10), startWeek=parseInt(r[3],10), duracao=parseInt(r[5],10);
       var k=ovrKey(li,si); if(!k)return;
+      (groups[k]||(groups[k]=[])).push({team:team,startWeek:startWeek,duracao:duracao});
+    });
+    var applied=0;
+    Object.keys(groups).forEach(function(k){
+      var rows=groups[k];
       var patch={};
-      if(startWeek>0)patch.startWeek=startWeek;
-      if(team>0)patch.team=team;
-      if(duracao>0)patch.duration=duracao;
+      var starts=rows.map(function(r){return r.startWeek;}).filter(function(w){return w>0;});
+      if(starts.length)patch.startWeek=Math.min.apply(null,starts);
+      var teamsArr=rows.map(function(r){return r.team;}).filter(function(t){return t>0;});
+      teamsArr=teamsArr.filter(function(t,i){return teamsArr.indexOf(t)===i;});
+      if(teamsArr.length>1){ patch.teams=teamsArr; patch.team=undefined; }
+      else if(teamsArr.length===1){ patch.team=teamsArr[0]; patch.teams=undefined; }
+      // Com mais de uma equipe no mesmo lote a duração de cada uma pode ter sido diferente
+      // (produtividades distintas) — nesse caso não fixa duração, deixa recalcular a partir
+      // da quantidade/produtividade atual pra não distorcer a divisão.
+      if(teamsArr.length<=1&&rows[0].duracao>0)patch.duration=rows[0].duracao;
       if(Object.keys(patch).length===0)return;
       OVR[k]=Object.assign({},OVR[k],patch);
       applied++;
