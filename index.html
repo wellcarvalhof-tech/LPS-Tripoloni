@@ -763,7 +763,9 @@
   };
 
   VIEWS['cr-matriz']=function(){
-    var TB=[['modelo','Modelo','▤'],['imp-xls','Importar Excel','↥'],['imp-tc','Importar Tempo-Caminho','↥'],
+    var TB=[['modelo','Modelo','▤'],
+      ['imp-xls','Importar Excel (tudo)','↥'],['imp-serv','Importar Serviços','↥'],['imp-lot','Importar Lotes','↥'],['imp-cal','Importar Calendário','↥'],
+      ['imp-tc','Importar Tempo-Caminho','↥'],['imp-cronog','Importar Cronograma (Project)','↥'],
       ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],['reset','Reiniciar exemplo','↺'],
       ['exp-dados','Exportar dados','↧'],['exp-cronog','Exportar Cronograma (Project)','↧'],['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
     var tb=TB.map(function(t){var cls=(t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn';
@@ -3549,18 +3551,12 @@
     go('cr-hist'); toast(applied+' apontamento(s) importado(s). Clique "Salvar apontamentos" pra confirmar.');
   }
 
-  async function applyImportWorkbook(wb){
-    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
-    var wsServ=wb.Sheets['Servicos']||wb.Sheets['Serviços'];
-    var wsLot=wb.Sheets['Lotes'];
-    var wsCal=wb.Sheets['Calendario']||wb.Sheets['Calendário'];
-    if(!wsServ&&!wsLot&&!wsCal){
-      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar dados".');
-      return;
-    }
-    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. Se a planilha veio de "Exportar dados", ela também traz a configuração de cronograma (fila dinâmica, sem paralisações, predecessores, produtividades por equipe) e os ajustes manuais (equipe/sequência por lote), então o Tempo-Caminho recalculado tende a sair igual ao original — mas continua livre pra editar depois, nenhuma semana fica travada.'))return;
+  // ---- Seções de import reutilizáveis (usadas tanto por "Importar Excel" quanto pelos botões
+  // segmentados "Importar Serviços/Lotes/Calendário", que tocam só a parte pedida). ----
 
-    // 1) Serviços (nome/unidade/cor/equipes/produtividade/lag + config de cronograma)
+  /** Serviços: nome/unidade/cor/equipes/produtividade/lag + config de cronograma + predecessores. */
+  async function importServicosSection(wsServ){
+    if(!wsServ)return {createdServ:0,updatedServ:0};
     var byName={}; SERV.forEach(function(s){byName[s.n.trim().toLowerCase()]=s;});
     var createdServ=0, updatedServ=0, cfgPatchByName={};
     var servRows=sheetRows(wsServ).slice(1);
@@ -3585,157 +3581,140 @@
     }
     await sbLoadCadastro(selectedObra.id); // recarrega com ids reais antes de gravar predecessores/config
 
-    // 1b) Predecessores + config de cronograma (precisa dos ids reais do banco, por isso roda depois do reload)
-    if(wsServ){
-      var byNameNow={}; SERV.forEach(function(s){byNameNow[s.n.trim().toLowerCase()]=s;});
-      for(var pi=0;pi<servRows.length;pi++){
-        var pr=servRows[pi]; if(!pr||!pr[0])continue;
-        var pname=String(pr[0]).trim().toLowerCase();
-        var self=byNameNow[pname]; if(!self)continue;
-        var predIds=pr[6]?String(pr[6]).split(';').map(function(n){return n.trim();}).filter(Boolean)
-          .map(function(n){var p=byNameNow[n.toLowerCase()];return p?p.id:null;}).filter(Boolean):[];
-        var cfgPatch=cfgPatchByName[pname]||{};
-        if(predIds.length||Object.keys(cfgPatch).length){
-          var cfg=Object.assign({},self.cfg,cfgPatch);
-          if(predIds.length)cfg.predecessors=predIds;
-          await sbUpdateServico(self.id,{config:cfg});
-          self.cfg=cfg;
-        }
+    // Predecessores + config de cronograma (precisa dos ids reais do banco, por isso roda depois do reload)
+    var byNameNow={}; SERV.forEach(function(s){byNameNow[s.n.trim().toLowerCase()]=s;});
+    for(var pi=0;pi<servRows.length;pi++){
+      var pr=servRows[pi]; if(!pr||!pr[0])continue;
+      var pname=String(pr[0]).trim().toLowerCase();
+      var self=byNameNow[pname]; if(!self)continue;
+      var predIds=pr[6]?String(pr[6]).split(';').map(function(n){return n.trim();}).filter(Boolean)
+        .map(function(n){var p=byNameNow[n.toLowerCase()];return p?p.id:null;}).filter(Boolean):[];
+      var cfgPatch=cfgPatchByName[pname]||{};
+      if(predIds.length||Object.keys(cfgPatch).length){
+        var cfg=Object.assign({},self.cfg,cfgPatch);
+        if(predIds.length)cfg.predecessors=predIds;
+        await sbUpdateServico(self.id,{config:cfg});
+        self.cfg=cfg;
       }
     }
-
-    // 2) Lotes + quantidades — uma sheet só: Lote, [Pacote,] Ordem, <serviço1>, <serviço2>...
-    // ("Pacote" é opcional — arquivos exportados antes dessa coluna existir continuam funcionando.)
-    var createdLot=0, qtyCount=0;
-    if(wsLot){
-      var lotAoa=sheetRows(wsLot);
-      if(lotAoa.length>1){
-        var header=lotAoa[0];
-        var hasPacoteCol=String(header[1]||'').trim().toLowerCase()==='pacote';
-        var qtyOffset=hasPacoteCol?3:2;
-        var svcCols=header.slice(qtyOffset).map(function(n){return String(n||'').trim();});
-        var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
-        var rows=[];
-        for(var j=1;j<lotAoa.length;j++){
-          var row=lotAoa[j]; if(!row||row[0]==null||row[0]==='')continue;
-          var lname=String(row[0]).trim(); if(!lname)continue;
-          var pacoteVal=hasPacoteCol&&row[1]!=null?String(row[1]).trim():null;
-          if(!lotByName.hasOwnProperty(lname.toLowerCase())){
-            await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1,pacote_contratual:pacoteVal||null});
-            createdLot++;
-          }
-          rows.push(row);
-        }
-        if(createdLot>0)await sbLoadCadastro(selectedObra.id);
-        var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
-        var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
-        if(hasPacoteCol){
-          for(var pk=0;pk<rows.length;pk++){
-            var prow=rows[pk];
-            var pli=lotIdxByName[String(prow[0]).trim().toLowerCase()]; if(pli==null)continue;
-            var pval=prow[1]!=null?String(prow[1]).trim():'';
-            if((LOTE_PACOTE[pli]||'')!==pval){
-              await sbUpdateLote(window._LOTIDS[pli],{pacote_contratual:pval||null});
-              LOTE_PACOTE[pli]=pval;
-            }
-          }
-        }
-        for(var k=0;k<rows.length;k++){
-          var qrow=rows[k];
-          var li2=lotIdxByName[String(qrow[0]).trim().toLowerCase()]; if(li2==null)continue;
-          for(var c2=0;c2<svcCols.length;c2++){
-            var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
-            var val=Number(qrow[c2+qtyOffset]); if(!isFinite(val))continue;
-            await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
-            qtyCount++;
-          }
-        }
-        await sbLoadCadastro(selectedObra.id);
-      }
-    }
-
-    // 3) Calendário — linha "Início" (data), "Paralisação" (início,fim) e "Chuva" (desc,início,fim,%prod,%dias)
-    var calChanged=false;
-    if(wsCal){
-      var calPatch={};
-      var feriadosSet={}; calHolidays().forEach(function(f){feriadosSet[f]=true;});
-      var rainsFound=[];
-      sheetRows(wsCal).forEach(function(row){
-        if(!row||!row[0])return;
-        var label=String(row[0]).trim().toLowerCase();
-        if(label.indexOf('inicio')===0||label.indexOf('início')===0){
-          if(row[1])calPatch.data_inicio=excelDateToIso(row[1]);
-        } else if(label.indexOf('paralisa')===0){
-          if(row[1]){
-            var s0=excelDateToIso(row[1]), s1=row[2]?excelDateToIso(row[2]):s0;
-            expandRangeToMondays(s0,s1).forEach(function(iso){feriadosSet[iso]=true;});
-          }
-        } else if(label.indexOf('chuva')===0){
-          var desc=row[1]!=null?String(row[1]).trim():'Período chuvoso';
-          var rs=row[2]?excelDateToIso(row[2]):'', re=row[3]?excelDateToIso(row[3]):rs;
-          var producao=Number(row[4]), dias=Number(row[5]);
-          rainsFound.push({desc:desc,start:rs,end:re,producao:isFinite(producao)?producao:20,dias:isFinite(dias)?dias:20});
-        }
-      });
-      var feriadosArr=Object.keys(feriadosSet).sort();
-      if(calPatch.data_inicio||feriadosArr.length||rainsFound.length){
-        calPatch.feriados={holidayWeeks:feriadosArr,rainPeriods:rainsFound.length?rainsFound:calRainPeriods()};
-        await sbUpdateObra(selectedObra.id,calPatch);
-        window._OBRA=Object.assign({},window._OBRA,calPatch);
-        calChanged=true;
-      }
-    }
-
-    // 4) Ajustes manuais (OVR) — restaura equipe/sequência/produtividade por lote+serviço, por
-    // nome. De propósito NÃO restaura semana travada nem duração fixa: isso faz o cronograma
-    // recalculado bater com o original (mesma equipe, mesma ordem), mas continua 100% editável
-    // depois — uma semana travada impediria mexer no cronograma (arrastar, trocar equipe etc.)
-    // porque o ajuste importado ganharia do que você mudar depois.
-    var wsAdj=wb.Sheets['AjustesManuais'];
-    var adjApplied=0;
-    if(wsAdj){
-      var lotIdxByName2={}; LOTS.forEach(function(l,li){lotIdxByName2[l.trim().toLowerCase()]=li;});
-      var svcIdxByName2={}; SERV.forEach(function(s,si){svcIdxByName2[s.n.trim().toLowerCase()]=si;});
-      sheetRows(wsAdj).slice(1).forEach(function(row){
-        if(!row||row[0]==null||row[1]==null)return;
-        var li=lotIdxByName2[String(row[0]).trim().toLowerCase()], si=svcIdxByName2[String(row[1]).trim().toLowerCase()];
-        if(li==null||si==null)return;
-        var k=ovrKey(li,si); if(!k)return;
-        var o={};
-        var teamsRaw=row[4]!=null?String(row[4]).trim():'';
-        if(teamsRaw)o.teams=teamsRaw.split(';').map(function(v){return parseInt(v,10);}).filter(function(v){return v>0;});
-        else { var tm=parseInt(row[3],10); if(tm>0)o.team=tm; }
-        if(row[5]!=null&&row[5]!==''){ var seq=parseInt(row[5],10); if(isFinite(seq))o.seq=seq; }
-        var prod=pnum(row[7]); if(prod>0)o.productivity=prod;
-        if(Object.keys(o).length){ OVR[k]=o; adjApplied++; }
-      });
-      if(adjApplied>0)ADJ_DIRTY=true;
-    }
-
-    go(current);
-    toast('Importado: '+createdServ+' serviço(s) novo(s), '+updatedServ+' atualizado(s), '+createdLot+' lote(s) novo(s), '+qtyCount+' quantidade(s)'+(calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar ajustes" no Ajuste Manual pra confirmar':'')+'.');
+    return {createdServ:createdServ,updatedServ:updatedServ};
   }
 
-  async function importTempoCaminhoWorkbook(wb){
-    var ws=wb.Sheets['TempoCaminho']||wb.Sheets['Cronograma'];
-    if(!ws){alert('Essa planilha não tem uma aba "TempoCaminho" (ou "Cronograma") com o cronograma calculado.');return;}
-    if(!confirm('Importar esse cronograma como ajuste manual de equipe sobre o cálculo atual (semanas continuam sendo calculadas pelo app, não ficam travadas)? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
-    var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
-    var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
-    // Agrupa por lote+serviço antes de aplicar — um lote pode ter mais de uma linha
-    // (equipes em paralelo dividindo a quantidade); sem agrupar, a última linha lida
-    // sobrescreveria as anteriores e a divisão entre equipes se perderia ao reimportar.
-    // De propósito não fixa semana de início nem duração: isso manteria o cronograma travado
-    // pra edição depois — só a equipe de cada lote é restaurada, as semanas continuam calculadas.
-    var groups={};
-    sheetRows(ws).slice(1).forEach(function(r){
-      if(!r||r[0]==null||r[2]==null)return;
-      var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[2]).trim().toLowerCase()];
-      if(si==null||li==null)return;
-      var team=parseInt(r[1],10);
-      var k=ovrKey(li,si); if(!k)return;
-      (groups[k]||(groups[k]=[])).push({team:team});
+  /** Lotes + quantidades — uma sheet só: Lote, [Pacote,] Ordem, <serviço1>, <serviço2>...
+   * ("Pacote" é opcional — arquivos exportados antes dessa coluna existir continuam funcionando.)
+   * Casa as quantidades pelo nome do serviço já cadastrado na obra (precisa dos Serviços prontos). */
+  async function importLotesSection(wsLot){
+    var createdLot=0, qtyCount=0;
+    if(!wsLot)return {createdLot:0,qtyCount:0};
+    var lotAoa=sheetRows(wsLot);
+    if(lotAoa.length<=1)return {createdLot:0,qtyCount:0};
+    var header=lotAoa[0];
+    var hasPacoteCol=String(header[1]||'').trim().toLowerCase()==='pacote';
+    var qtyOffset=hasPacoteCol?3:2;
+    var svcCols=header.slice(qtyOffset).map(function(n){return String(n||'').trim();});
+    var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
+    var rows=[];
+    for(var j=1;j<lotAoa.length;j++){
+      var row=lotAoa[j]; if(!row||row[0]==null||row[0]==='')continue;
+      var lname=String(row[0]).trim(); if(!lname)continue;
+      var pacoteVal=hasPacoteCol&&row[1]!=null?String(row[1]).trim():null;
+      if(!lotByName.hasOwnProperty(lname.toLowerCase())){
+        await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1,pacote_contratual:pacoteVal||null});
+        createdLot++;
+      }
+      rows.push(row);
+    }
+    if(createdLot>0)await sbLoadCadastro(selectedObra.id);
+    var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
+    var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+    if(hasPacoteCol){
+      for(var pk=0;pk<rows.length;pk++){
+        var prow=rows[pk];
+        var pli=lotIdxByName[String(prow[0]).trim().toLowerCase()]; if(pli==null)continue;
+        var pval=prow[1]!=null?String(prow[1]).trim():'';
+        if((LOTE_PACOTE[pli]||'')!==pval){
+          await sbUpdateLote(window._LOTIDS[pli],{pacote_contratual:pval||null});
+          LOTE_PACOTE[pli]=pval;
+        }
+      }
+    }
+    for(var k=0;k<rows.length;k++){
+      var qrow=rows[k];
+      var li2=lotIdxByName[String(qrow[0]).trim().toLowerCase()]; if(li2==null)continue;
+      for(var c2=0;c2<svcCols.length;c2++){
+        var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
+        var val=Number(qrow[c2+qtyOffset]); if(!isFinite(val))continue;
+        await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
+        qtyCount++;
+      }
+    }
+    await sbLoadCadastro(selectedObra.id);
+    return {createdLot:createdLot,qtyCount:qtyCount};
+  }
+
+  /** Calendário — linha "Início" (data), "Paralisação" (início,fim) e "Chuva" (desc,início,fim,%prod,%dias). */
+  async function importCalendarioSection(wsCal){
+    if(!wsCal)return {calChanged:false};
+    var calPatch={};
+    var feriadosSet={}; calHolidays().forEach(function(f){feriadosSet[f]=true;});
+    var rainsFound=[];
+    sheetRows(wsCal).forEach(function(row){
+      if(!row||!row[0])return;
+      var label=String(row[0]).trim().toLowerCase();
+      if(label.indexOf('inicio')===0||label.indexOf('início')===0){
+        if(row[1])calPatch.data_inicio=excelDateToIso(row[1]);
+      } else if(label.indexOf('paralisa')===0){
+        if(row[1]){
+          var s0=excelDateToIso(row[1]), s1=row[2]?excelDateToIso(row[2]):s0;
+          expandRangeToMondays(s0,s1).forEach(function(iso){feriadosSet[iso]=true;});
+        }
+      } else if(label.indexOf('chuva')===0){
+        var desc=row[1]!=null?String(row[1]).trim():'Período chuvoso';
+        var rs=row[2]?excelDateToIso(row[2]):'', re=row[3]?excelDateToIso(row[3]):rs;
+        var producao=Number(row[4]), dias=Number(row[5]);
+        rainsFound.push({desc:desc,start:rs,end:re,producao:isFinite(producao)?producao:20,dias:isFinite(dias)?dias:20});
+      }
     });
+    var feriadosArr=Object.keys(feriadosSet).sort();
+    if(!calPatch.data_inicio&&!feriadosArr.length&&!rainsFound.length)return {calChanged:false};
+    calPatch.feriados={holidayWeeks:feriadosArr,rainPeriods:rainsFound.length?rainsFound:calRainPeriods()};
+    await sbUpdateObra(selectedObra.id,calPatch);
+    window._OBRA=Object.assign({},window._OBRA,calPatch);
+    return {calChanged:true};
+  }
+
+  /** Ajustes manuais (OVR) — restaura equipe/sequência/produtividade por lote+serviço, por nome.
+   * De propósito NÃO restaura semana travada nem duração fixa: isso faz o cronograma recalculado
+   * bater com o original (mesma equipe, mesma ordem), mas continua 100% editável depois — uma
+   * semana travada impediria mexer no cronograma (arrastar, trocar equipe etc.) porque o ajuste
+   * importado ganharia do que você mudar depois. */
+  function importAjustesSection(wb){
+    var wsAdj=wb.Sheets['AjustesManuais'];
+    if(!wsAdj)return 0;
+    var lotIdxByName2={}; LOTS.forEach(function(l,li){lotIdxByName2[l.trim().toLowerCase()]=li;});
+    var svcIdxByName2={}; SERV.forEach(function(s,si){svcIdxByName2[s.n.trim().toLowerCase()]=si;});
+    var adjApplied=0;
+    sheetRows(wsAdj).slice(1).forEach(function(row){
+      if(!row||row[0]==null||row[1]==null)return;
+      var li=lotIdxByName2[String(row[0]).trim().toLowerCase()], si=svcIdxByName2[String(row[1]).trim().toLowerCase()];
+      if(li==null||si==null)return;
+      var k=ovrKey(li,si); if(!k)return;
+      var o={};
+      var teamsRaw=row[4]!=null?String(row[4]).trim():'';
+      if(teamsRaw)o.teams=teamsRaw.split(';').map(function(v){return parseInt(v,10);}).filter(function(v){return v>0;});
+      else { var tm=parseInt(row[3],10); if(tm>0)o.team=tm; }
+      if(row[5]!=null&&row[5]!==''){ var seq=parseInt(row[5],10); if(isFinite(seq))o.seq=seq; }
+      var prod=pnum(row[7]); if(prod>0)o.productivity=prod;
+      if(Object.keys(o).length){ OVR[k]=o; adjApplied++; }
+    });
+    if(adjApplied>0)ADJ_DIRTY=true;
+    return adjApplied;
+  }
+
+  /** Aplica {li::si -> [{team},...]} em OVR como equipe/equipes — só isso, nunca semana/duração
+   * (ver nota em importAjustesSection). Compartilhado por "Importar Tempo-Caminho" e "Importar
+   * Cronograma (Project)", que só diferem na forma de ler a planilha de origem. */
+  function applyTeamOvrGroups(groups){
     var applied=0;
     Object.keys(groups).forEach(function(k){
       var rows=groups[k];
@@ -3749,6 +3728,111 @@
       applied++;
     });
     if(applied>0)ADJ_DIRTY=true;
+    return applied;
+  }
+
+  async function applyImportWorkbook(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var wsServ=wb.Sheets['Servicos']||wb.Sheets['Serviços'];
+    var wsLot=wb.Sheets['Lotes'];
+    var wsCal=wb.Sheets['Calendario']||wb.Sheets['Calendário'];
+    if(!wsServ&&!wsLot&&!wsCal){
+      alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar dados".');
+      return;
+    }
+    if(!confirm('Importar essa planilha nesta obra (serviços + lotes + calendário + ajustes manuais)? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. Prefere importar só uma parte? Use "Importar Serviços"/"Importar Lotes"/"Importar Calendário". Se a planilha veio de "Exportar dados", ela também traz a configuração de cronograma (fila dinâmica, sem paralisações, predecessores, produtividades por equipe) e os ajustes manuais (equipe/sequência por lote), então o Tempo-Caminho recalculado tende a sair igual ao original — mas continua livre pra editar depois, nenhuma semana fica travada.'))return;
+
+    var rServ=await importServicosSection(wsServ);
+    var rLot=await importLotesSection(wsLot);
+    var rCal=await importCalendarioSection(wsCal);
+    var adjApplied=importAjustesSection(wb);
+
+    go(current);
+    toast('Importado: '+rServ.createdServ+' serviço(s) novo(s), '+rServ.updatedServ+' atualizado(s), '+rLot.createdLot+' lote(s) novo(s), '+rLot.qtyCount+' quantidade(s)'+(rCal.calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar ajustes" no Ajuste Manual pra confirmar':'')+'.');
+  }
+
+  async function importOnlyServicos(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var wsServ=wb.Sheets['Servicos']||wb.Sheets['Serviços'];
+    if(!wsServ){alert('Essa planilha não tem uma aba "Servicos". Gere um modelo com "Exportar dados".');return;}
+    if(!confirm('Importar só os SERVIÇOS dessa planilha (nome, unidade, produtividade, predecessores, config de cronograma)? Lotes, calendário e ajustes manuais não são tocados. Serviços com o mesmo nome são atualizados; nomes novos criam registros novos.'))return;
+    var r=await importServicosSection(wsServ);
+    go(current);
+    toast('Importado: '+r.createdServ+' serviço(s) novo(s), '+r.updatedServ+' atualizado(s).');
+  }
+
+  async function importOnlyLotes(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var wsLot=wb.Sheets['Lotes'];
+    if(!wsLot){alert('Essa planilha não tem uma aba "Lotes". Gere um modelo com "Exportar dados".');return;}
+    if(!confirm('Importar só os LOTES e quantidades dessa planilha? Serviços, calendário e ajustes manuais não são tocados — as quantidades são casadas pelo nome dos serviços já cadastrados nesta obra. Lotes com o mesmo nome são atualizados; nomes novos criam lotes novos.'))return;
+    var r=await importLotesSection(wsLot);
+    go(current);
+    toast('Importado: '+r.createdLot+' lote(s) novo(s), '+r.qtyCount+' quantidade(s).');
+  }
+
+  async function importOnlyCalendario(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var wsCal=wb.Sheets['Calendario']||wb.Sheets['Calendário'];
+    if(!wsCal){alert('Essa planilha não tem uma aba "Calendario". Gere um modelo com "Exportar dados".');return;}
+    if(!confirm('Importar só o CALENDÁRIO dessa planilha (data de início, paralisações e chuva)? Serviços, lotes e ajustes manuais não são tocados.'))return;
+    var r=await importCalendarioSection(wsCal);
+    go(current);
+    toast(r.calChanged?'Calendário atualizado.':'Nenhuma informação de calendário reconhecida nessa planilha.');
+  }
+
+  async function importTempoCaminhoWorkbook(wb){
+    var ws=wb.Sheets['TempoCaminho']||wb.Sheets['Cronograma'];
+    if(!ws){alert('Essa planilha não tem uma aba "TempoCaminho" (ou "Cronograma") com o cronograma calculado.');return;}
+    if(!confirm('Importar esse cronograma como ajuste manual de equipe sobre o cálculo atual (semanas continuam sendo calculadas pelo app, não ficam travadas)? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
+    var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
+    var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
+    // Agrupa por lote+serviço antes de aplicar — um lote pode ter mais de uma linha
+    // (equipes em paralelo dividindo a quantidade); sem agrupar, a última linha lida
+    // sobrescreveria as anteriores e a divisão entre equipes se perderia ao reimportar.
+    var groups={};
+    sheetRows(ws).slice(1).forEach(function(r){
+      if(!r||r[0]==null||r[2]==null)return;
+      var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[2]).trim().toLowerCase()];
+      if(si==null||li==null)return;
+      var team=parseInt(r[1],10);
+      var k=ovrKey(li,si); if(!k)return;
+      (groups[k]||(groups[k]=[])).push({team:team});
+    });
+    var applied=applyTeamOvrGroups(groups);
+    go(current);
+    toast(applied+' atividade(s) importada(s) como ajuste manual.'+(applied>0?' Clique em "Salvar ajustes" pra confirmar.':''));
+  }
+
+  /** Importa a aba "Cronograma" gerada por "Exportar Cronograma (Project)" — agrupada por lote
+   * (linha-resumo sem equipe) com os serviços indentados abaixo (linha com equipe). Reconstrói
+   * só a equipe de cada lote+serviço como ajuste manual — as semanas continuam calculadas pelo
+   * app (mesmo motivo do "Importar Tempo-Caminho": não travar o cronograma pra edição depois). */
+  async function importProjectWorkbook(wb){
+    var ws=wb.Sheets['Cronograma'];
+    if(!ws){alert('Essa planilha não tem uma aba "Cronograma". Gere um modelo com "Exportar Cronograma (Project)".');return;}
+    if(!confirm('Importar esse cronograma (formato Project, agrupado por lote) como ajuste manual de equipe sobre o cálculo atual? As semanas continuam sendo calculadas pelo app — não ficam travadas. Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
+    var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
+    var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
+    var groups={}, curLi=null;
+    sheetRows(ws).slice(1).forEach(function(r){
+      if(!r||r[0]==null||String(r[0]).trim()==='')return;
+      var rawName=String(r[0]);
+      var teamVal=r[1]!=null&&r[1]!==''?parseInt(r[1],10):NaN;
+      if(!(teamVal>0)){
+        // Linha sem equipe = cabeçalho/resumo do lote — atualiza o lote "corrente" pras
+        // próximas linhas de serviço, até o próximo cabeçalho de lote.
+        var loteName=rawName.trim().toLowerCase();
+        curLi=lotIdx.hasOwnProperty(loteName)?lotIdx[loteName]:null;
+        return;
+      }
+      if(curLi==null)return;
+      var svcName=rawName.replace(/^\s+/,'').replace(/\s+—\s+Equipe\s+\d+\s*$/i,'').trim().toLowerCase();
+      var si=svcIdx[svcName]; if(si==null)return;
+      var k=ovrKey(curLi,si); if(!k)return;
+      (groups[k]||(groups[k]=[])).push({team:teamVal});
+    });
+    var applied=applyTeamOvrGroups(groups);
     go(current);
     toast(applied+' atividade(s) importada(s) como ajuste manual.'+(applied>0?' Clique em "Salvar ajustes" pra confirmar.':''));
   }
@@ -4067,6 +4151,10 @@
         if(a==='exp-pdf'){exportPdf();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='imp-cronog'){pickExcelFile(function(file){readWorkbookFile(file).then(importProjectWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='imp-serv'){pickExcelFile(function(file){readWorkbookFile(file).then(importOnlyServicos).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='imp-lot'){pickExcelFile(function(file){readWorkbookFile(file).then(importOnlyLotes).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='imp-cal'){pickExcelFile(function(file){readWorkbookFile(file).then(importOnlyCalendario).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='rev00'){gerarLinhaDeBase(captureLiveSnapshot(),null);return;}
         if(a==='imp-mpp'||a==='imp-img'){toast(b.getAttribute('data-label')+' — ainda não implementado nesta etapa.');return;}
         toast(b.getAttribute('data-label')+' — função do app (mockup visual)');
