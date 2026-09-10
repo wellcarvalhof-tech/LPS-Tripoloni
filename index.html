@@ -765,7 +765,7 @@
   VIEWS['cr-matriz']=function(){
     var TB=[['modelo','Modelo','▤'],['imp-xls','Importar Excel','↥'],['imp-tc','Importar Tempo-Caminho','↥'],
       ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],['reset','Reiniciar exemplo','↺'],
-      ['exp-dados','Exportar dados','↧'],['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
+      ['exp-dados','Exportar dados','↧'],['exp-cronog','Exportar Cronograma (Project)','↧'],['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
     var tb=TB.map(function(t){var cls=(t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn';
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
@@ -3299,6 +3299,66 @@
     setTimeout(function(){URL.revokeObjectURL(url);},2000);
     toast('Excel exportado.');
   }
+  /** Exporta um cronograma no estilo MS Project: agrupado por lote (linha-resumo em negrito,
+   * recolhível), com os serviços de cada lote listados abaixo — equipe, data de início, data de
+   * fim e duração de cada um. Pensado pra leitura/relatório, não pra reimportar no app. */
+  async function exportProjectWorkbook(){
+    if(typeof ExcelJS==='undefined'){alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.');return;}
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    function addDays(d,n){var r=new Date(d.getTime());r.setDate(r.getDate()+n);return r;}
+    var segs=buildSchedule();
+    var byLote=LOTS.map(function(){return [];});
+    segs.forEach(function(sg){ if(byLote[sg.li])byLote[sg.li].push(sg); });
+
+    var wb=new ExcelJS.Workbook();
+    var ws=wb.addWorksheet('Cronograma',{views:[{state:'frozen',ySplit:1}]});
+    ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
+    ws.columns=[
+      {header:'Lote / Serviço',key:'nome',width:42},
+      {header:'Equipe',key:'equipe',width:10},
+      {header:'Início',key:'inicio',width:12},
+      {header:'Fim',key:'fim',width:12},
+      {header:'Duração (semanas)',key:'dur',width:17},
+      {header:'Quantidade',key:'qtd',width:16}
+    ];
+    var headRow=ws.getRow(1);
+    headRow.font={bold:true};
+    headRow.eachCell(function(c){ c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEEEEEE'}}; c.border={bottom:{style:'thin',color:{argb:'FFBBBBBB'}}}; });
+
+    LOTS.forEach(function(loteName,li){
+      var lsegs=byLote[li].slice().sort(function(a,b){return a.start-b.start||a.si-b.si;});
+      if(!lsegs.length)return;
+      var minStart=Infinity,maxEnd=-Infinity;
+      lsegs.forEach(function(sg){ minStart=Math.min(minStart,sg.start); maxEnd=Math.max(maxEnd,sg.start+sg.dur-1); });
+      var loteRow=ws.addRow({nome:loteName,equipe:'',
+        inicio:fmtDate(mondayOf(minStart)),fim:fmtDate(addDays(mondayOf(maxEnd),6)),
+        dur:(maxEnd-minStart+1),qtd:''});
+      loteRow.font={bold:true};
+      loteRow.eachCell(function(c){ c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFDDEBF7'}}; });
+      lsegs.forEach(function(sg){
+        var s=SERV[sg.si]; if(!s)return;
+        var r=ws.addRow({
+          nome:'    '+s.n+(sg.teams>1?' — '+teamLabel(s.n,sg.team):''),
+          equipe:sg.team,
+          inicio:fmtDate(mondayOf(sg.start)),
+          fim:fmtDate(addDays(mondayOf(sg.start+sg.dur-1),6)),
+          dur:sg.dur,
+          qtd:fmtBR(sg.qty)+' '+s.u
+        });
+        r.outlineLevel=1;
+        r.getCell(1).font={color:{argb:argb(svcColor(s))}};
+      });
+    });
+
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download=(nome.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'_cronograma_por_lote.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},2000);
+    toast('Cronograma exportado.');
+  }
   /** Exporta os dados estruturados (serviços/lotes/calendário/tempo-caminho) — compatível com "Importar Excel". */
   function exportDadosExcel(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
@@ -4003,6 +4063,7 @@
         if(a==='sair'){showLanding();return;}
         if(a==='exp-xls'){exportExcel();return;}
         if(a==='exp-dados'){exportDadosExcel();return;}
+        if(a==='exp-cronog'){exportProjectWorkbook();return;}
         if(a==='exp-pdf'){exportPdf();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
