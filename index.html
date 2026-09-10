@@ -3332,9 +3332,10 @@
     segs.forEach(function(sg){ tcRows.push([SERV[sg.si]?SERV[sg.si].n:'',sg.team,LOTS[sg.li]||'',sg.start,sg.start+sg.dur-1,sg.dur,sg.qty]); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(tcRows),'TempoCaminho');
 
-    // Ajustes manuais (OVR) por lote+serviço — é isso que garante reproduzir exatamente as
-    // escolhas manuais (equipe, sequência, semana travada) num projeto novo, em vez de só
-    // recalcular do zero e torcer pra bater.
+    // Ajustes manuais (OVR) por lote+serviço — reproduz as escolhas manuais (equipe/sequência/
+    // produtividade) num projeto novo em vez de recalcular do zero com as regras padrão.
+    // SemanaInicio/Duracao vão só como referência (o que deu na obra de origem) — a importação
+    // NÃO trava essas semanas, senão o cronograma ficaria preso e não daria pra editar depois.
     var ajHeader=['Lote','Servico','SemanaInicio','Equipe','Equipes','Sequencia','Duracao','Produtividade'];
     var ajRows=[ajHeader];
     Object.keys(OVR).forEach(function(k){
@@ -3497,7 +3498,7 @@
       alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar dados".');
       return;
     }
-    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. Se a planilha veio de "Exportar dados", ela também traz a configuração de cronograma (fila dinâmica, sem paralisações, predecessores, produtividades por equipe) e os ajustes manuais (equipe/sequência/semana travada por lote), então o Tempo-Caminho recalculado tende a sair igual ao original.'))return;
+    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. Se a planilha veio de "Exportar dados", ela também traz a configuração de cronograma (fila dinâmica, sem paralisações, predecessores, produtividades por equipe) e os ajustes manuais (equipe/sequência por lote), então o Tempo-Caminho recalculado tende a sair igual ao original — mas continua livre pra editar depois, nenhuma semana fica travada.'))return;
 
     // 1) Serviços (nome/unidade/cor/equipes/produtividade/lag + config de cronograma)
     var byName={}; SERV.forEach(function(s){byName[s.n.trim().toLowerCase()]=s;});
@@ -3625,9 +3626,11 @@
       }
     }
 
-    // 4) Ajustes manuais (OVR) — restaura direto do que foi exportado, por nome de lote+serviço.
-    // É isso que faz o Tempo-Caminho recalculado bater com o original (equipe/sequência/semana
-    // travada por lote), em vez de só recalcular do zero com as regras padrão.
+    // 4) Ajustes manuais (OVR) — restaura equipe/sequência/produtividade por lote+serviço, por
+    // nome. De propósito NÃO restaura semana travada nem duração fixa: isso faz o cronograma
+    // recalculado bater com o original (mesma equipe, mesma ordem), mas continua 100% editável
+    // depois — uma semana travada impediria mexer no cronograma (arrastar, trocar equipe etc.)
+    // porque o ajuste importado ganharia do que você mudar depois.
     var wsAdj=wb.Sheets['AjustesManuais'];
     var adjApplied=0;
     if(wsAdj){
@@ -3639,12 +3642,10 @@
         if(li==null||si==null)return;
         var k=ovrKey(li,si); if(!k)return;
         var o={};
-        var sw=parseInt(row[2],10); if(sw>0)o.startWeek=sw;
         var teamsRaw=row[4]!=null?String(row[4]).trim():'';
         if(teamsRaw)o.teams=teamsRaw.split(';').map(function(v){return parseInt(v,10);}).filter(function(v){return v>0;});
         else { var tm=parseInt(row[3],10); if(tm>0)o.team=tm; }
         if(row[5]!=null&&row[5]!==''){ var seq=parseInt(row[5],10); if(isFinite(seq))o.seq=seq; }
-        var dur=parseInt(row[6],10); if(dur>0)o.duration=dur;
         var prod=pnum(row[7]); if(prod>0)o.productivity=prod;
         if(Object.keys(o).length){ OVR[k]=o; adjApplied++; }
       });
@@ -3658,35 +3659,31 @@
   async function importTempoCaminhoWorkbook(wb){
     var ws=wb.Sheets['TempoCaminho']||wb.Sheets['Cronograma'];
     if(!ws){alert('Essa planilha não tem uma aba "TempoCaminho" (ou "Cronograma") com o cronograma calculado.');return;}
-    if(!confirm('Importar esse cronograma como ajustes manuais (semana de início, equipe e duração) sobre o cálculo atual? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
+    if(!confirm('Importar esse cronograma como ajuste manual de equipe sobre o cálculo atual (semanas continuam sendo calculadas pelo app, não ficam travadas)? Ainda precisa clicar em "Salvar ajustes" depois pra confirmar.'))return;
     var svcIdx={}; SERV.forEach(function(s,si){svcIdx[s.n.trim().toLowerCase()]=si;});
     var lotIdx={}; LOTS.forEach(function(l,li){lotIdx[l.trim().toLowerCase()]=li;});
     // Agrupa por lote+serviço antes de aplicar — um lote pode ter mais de uma linha
     // (equipes em paralelo dividindo a quantidade); sem agrupar, a última linha lida
     // sobrescreveria as anteriores e a divisão entre equipes se perderia ao reimportar.
+    // De propósito não fixa semana de início nem duração: isso manteria o cronograma travado
+    // pra edição depois — só a equipe de cada lote é restaurada, as semanas continuam calculadas.
     var groups={};
     sheetRows(ws).slice(1).forEach(function(r){
       if(!r||r[0]==null||r[2]==null)return;
       var si=svcIdx[String(r[0]).trim().toLowerCase()], li=lotIdx[String(r[2]).trim().toLowerCase()];
       if(si==null||li==null)return;
-      var team=parseInt(r[1],10), startWeek=parseInt(r[3],10), duracao=parseInt(r[5],10);
+      var team=parseInt(r[1],10);
       var k=ovrKey(li,si); if(!k)return;
-      (groups[k]||(groups[k]=[])).push({team:team,startWeek:startWeek,duracao:duracao});
+      (groups[k]||(groups[k]=[])).push({team:team});
     });
     var applied=0;
     Object.keys(groups).forEach(function(k){
       var rows=groups[k];
       var patch={};
-      var starts=rows.map(function(r){return r.startWeek;}).filter(function(w){return w>0;});
-      if(starts.length)patch.startWeek=Math.min.apply(null,starts);
       var teamsArr=rows.map(function(r){return r.team;}).filter(function(t){return t>0;});
       teamsArr=teamsArr.filter(function(t,i){return teamsArr.indexOf(t)===i;});
       if(teamsArr.length>1){ patch.teams=teamsArr; patch.team=undefined; }
       else if(teamsArr.length===1){ patch.team=teamsArr[0]; patch.teams=undefined; }
-      // Com mais de uma equipe no mesmo lote a duração de cada uma pode ter sido diferente
-      // (produtividades distintas) — nesse caso não fixa duração, deixa recalcular a partir
-      // da quantidade/produtividade atual pra não distorcer a divisão.
-      if(teamsArr.length<=1&&rows[0].duracao>0)patch.duration=rows[0].duracao;
       if(Object.keys(patch).length===0)return;
       OVR[k]=Object.assign({},OVR[k],patch);
       applied++;
