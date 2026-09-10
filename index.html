@@ -3304,10 +3304,16 @@
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.');return;}
     var wb=XLSX.utils.book_new();
 
-    var servRows=[['Nome','Unidade','Cor','Equipes','Produtividade','Lag','Predecessores']];
+    var servHeader=['Nome','Unidade','Cor','Equipes','Produtividade','Lag','Predecessores',
+      'FilaDinamica','SemParalisacoes','ParaleloPredecessor','SemanaInicio','SemanaAlvo','ProdutividadesEquipes'];
+    var servRows=[servHeader];
     SERV.forEach(function(s){
-      var preds=((s.cfg&&s.cfg.predecessors)||[]).map(function(pid){var p=SERV.filter(function(x){return x.id===pid;})[0];return p?p.n:null;}).filter(Boolean).join('; ');
-      servRows.push([s.n,s.u,s.hex||'',s.eq,pnum(s.p),s.lag||0,preds]);
+      var cfg=s.cfg||{};
+      var preds=((cfg.predecessors)||[]).map(function(pid){var p=SERV.filter(function(x){return x.id===pid;})[0];return p?p.n:null;}).filter(Boolean).join('; ');
+      var teamProds=((cfg.teamProductivities)||[]).join(';');
+      servRows.push([s.n,s.u,s.hex||'',s.eq,pnum(s.p),s.lag||0,preds,
+        cfg.pullFromQueue?'sim':'',cfg.noInterruption?'sim':'',cfg.parallelWithPredecessor?'sim':'',
+        cfg.minStartWeek>0?cfg.minStartWeek:'',cfg.targetEndWeek>0?cfg.targetEndWeek:'',teamProds]);
     });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(servRows),'Servicos');
 
@@ -3318,12 +3324,29 @@
 
     var calRows=[['Início',(window._OBRA&&window._OBRA.data_inicio)||'']];
     calHolidays().forEach(function(f){ calRows.push(['Paralisação',f,f]); });
+    calRainPeriods().forEach(function(r){ calRows.push(['Chuva',r.desc||'',r.start||'',r.end||'',r.producao||0,r.dias||0]); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(calRows),'Calendario');
 
     var segs=buildSchedule().slice().sort(function(a,b){return a.start-b.start||a.si-b.si||a.li-b.li;});
     var tcRows=[['Servico','Equipe','Lote','SemanaInicio','SemanaFim','Duracao','Quantidade']];
     segs.forEach(function(sg){ tcRows.push([SERV[sg.si]?SERV[sg.si].n:'',sg.team,LOTS[sg.li]||'',sg.start,sg.start+sg.dur-1,sg.dur,sg.qty]); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(tcRows),'TempoCaminho');
+
+    // Ajustes manuais (OVR) por lote+serviço — é isso que garante reproduzir exatamente as
+    // escolhas manuais (equipe, sequência, semana travada) num projeto novo, em vez de só
+    // recalcular do zero e torcer pra bater.
+    var ajHeader=['Lote','Servico','SemanaInicio','Equipe','Equipes','Sequencia','Duracao','Produtividade'];
+    var ajRows=[ajHeader];
+    Object.keys(OVR).forEach(function(k){
+      var o=OVR[k]; if(!o)return;
+      var parts=k.split('::'), lotId=parts[0], svcId=parts[1];
+      var li=(window._LOTIDS||[]).indexOf(lotId); var si=-1;
+      SERV.forEach(function(s,i){ if(s.id===svcId)si=i; });
+      if(li<0||si<0)return;
+      ajRows.push([LOTS[li],SERV[si].n,o.startWeek||'',o.team||'',(Array.isArray(o.teams)?o.teams.join(';'):''),
+        (o.seq!=null?o.seq:''),o.duration||'',o.productivity||'']);
+    });
+    if(ajRows.length>1)XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ajRows),'AjustesManuais');
 
     var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
     XLSX.writeFile(wb,nome+'_dados.xlsx');
@@ -3474,11 +3497,11 @@
       alert('Planilha não reconhecida. Use um arquivo exportado por este app (abas "Servicos", "Lotes", "Calendario") — gere um modelo com "Exportar dados".');
       return;
     }
-    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. O cronograma é recalculado pelo app a partir desses dados (use "Importar Tempo-Caminho" se quiser reproduzir exatamente as semanas de uma aba TempoCaminho).'))return;
+    if(!confirm('Importar essa planilha nesta obra? Serviços/lotes com o mesmo nome são atualizados; nomes novos criam registros novos. Isso não apaga o que já existe. Se a planilha veio de "Exportar dados", ela também traz a configuração de cronograma (fila dinâmica, sem paralisações, predecessores, produtividades por equipe) e os ajustes manuais (equipe/sequência/semana travada por lote), então o Tempo-Caminho recalculado tende a sair igual ao original.'))return;
 
-    // 1) Serviços (nome/unidade/cor/equipes/produtividade/lag)
+    // 1) Serviços (nome/unidade/cor/equipes/produtividade/lag + config de cronograma)
     var byName={}; SERV.forEach(function(s){byName[s.n.trim().toLowerCase()]=s;});
-    var createdServ=0, updatedServ=0;
+    var createdServ=0, updatedServ=0, cfgPatchByName={};
     var servRows=sheetRows(wsServ).slice(1);
     for(var i=0;i<servRows.length;i++){
       var r=servRows[i]; if(!r||!r[0])continue;
@@ -3488,19 +3511,32 @@
       var existing=byName[nome.toLowerCase()];
       if(existing){ await sbUpdateServico(existing.id,patch); updatedServ++; }
       else { await sbCreateServico(selectedObra.id,Object.assign({ordem:SERV.length+createdServ},patch)); createdServ++; }
+      // Colunas extras (opcionais — arquivos antigos sem elas continuam funcionando)
+      var cfgPatch={};
+      var fila=String(r[7]||'').trim().toLowerCase(); if(fila)cfgPatch.pullFromQueue=(fila==='sim'||fila==='true'||fila==='1');
+      var semPar=String(r[8]||'').trim().toLowerCase(); if(semPar)cfgPatch.noInterruption=(semPar==='sim'||semPar==='true'||semPar==='1');
+      var paralelo=String(r[9]||'').trim().toLowerCase(); if(paralelo)cfgPatch.parallelWithPredecessor=(paralelo==='sim'||paralelo==='true'||paralelo==='1');
+      var minSW=parseInt(r[10],10); if(minSW>0)cfgPatch.minStartWeek=minSW;
+      var targetEW=parseInt(r[11],10); if(targetEW>0)cfgPatch.targetEndWeek=targetEW;
+      var teamProdsRaw=r[12]!=null?String(r[12]).trim():'';
+      if(teamProdsRaw)cfgPatch.teamProductivities=teamProdsRaw.split(';').map(function(v){return pnum(v)||0;});
+      if(Object.keys(cfgPatch).length)cfgPatchByName[nome.toLowerCase()]=cfgPatch;
     }
-    await sbLoadCadastro(selectedObra.id); // recarrega com ids reais antes de gravar predecessores
+    await sbLoadCadastro(selectedObra.id); // recarrega com ids reais antes de gravar predecessores/config
 
-    // 1b) Predecessores (precisa dos ids reais do banco, por isso roda depois do reload)
+    // 1b) Predecessores + config de cronograma (precisa dos ids reais do banco, por isso roda depois do reload)
     if(wsServ){
       var byNameNow={}; SERV.forEach(function(s){byNameNow[s.n.trim().toLowerCase()]=s;});
       for(var pi=0;pi<servRows.length;pi++){
-        var pr=servRows[pi]; if(!pr||!pr[0]||!pr[6])continue;
-        var self=byNameNow[String(pr[0]).trim().toLowerCase()]; if(!self)continue;
-        var predIds=String(pr[6]).split(';').map(function(n){return n.trim();}).filter(Boolean)
-          .map(function(n){var p=byNameNow[n.toLowerCase()];return p?p.id:null;}).filter(Boolean);
-        if(predIds.length){
-          var cfg=Object.assign({},self.cfg,{predecessors:predIds});
+        var pr=servRows[pi]; if(!pr||!pr[0])continue;
+        var pname=String(pr[0]).trim().toLowerCase();
+        var self=byNameNow[pname]; if(!self)continue;
+        var predIds=pr[6]?String(pr[6]).split(';').map(function(n){return n.trim();}).filter(Boolean)
+          .map(function(n){var p=byNameNow[n.toLowerCase()];return p?p.id:null;}).filter(Boolean):[];
+        var cfgPatch=cfgPatchByName[pname]||{};
+        if(predIds.length||Object.keys(cfgPatch).length){
+          var cfg=Object.assign({},self.cfg,cfgPatch);
+          if(predIds.length)cfg.predecessors=predIds;
           await sbUpdateServico(self.id,{config:cfg});
           self.cfg=cfg;
         }
@@ -3557,11 +3593,12 @@
       }
     }
 
-    // 3) Calendário — linha "Início" (data) + linha(s) "Paralisação"/"Paralisações" (início,fim)
+    // 3) Calendário — linha "Início" (data), "Paralisação" (início,fim) e "Chuva" (desc,início,fim,%prod,%dias)
     var calChanged=false;
     if(wsCal){
       var calPatch={};
       var feriadosSet={}; calHolidays().forEach(function(f){feriadosSet[f]=true;});
+      var rainsFound=[];
       sheetRows(wsCal).forEach(function(row){
         if(!row||!row[0])return;
         var label=String(row[0]).trim().toLowerCase();
@@ -3572,19 +3609,50 @@
             var s0=excelDateToIso(row[1]), s1=row[2]?excelDateToIso(row[2]):s0;
             expandRangeToMondays(s0,s1).forEach(function(iso){feriadosSet[iso]=true;});
           }
+        } else if(label.indexOf('chuva')===0){
+          var desc=row[1]!=null?String(row[1]).trim():'Período chuvoso';
+          var rs=row[2]?excelDateToIso(row[2]):'', re=row[3]?excelDateToIso(row[3]):rs;
+          var producao=Number(row[4]), dias=Number(row[5]);
+          rainsFound.push({desc:desc,start:rs,end:re,producao:isFinite(producao)?producao:20,dias:isFinite(dias)?dias:20});
         }
       });
       var feriadosArr=Object.keys(feriadosSet).sort();
-      if(calPatch.data_inicio||feriadosArr.length){
-        calPatch.feriados={holidayWeeks:feriadosArr,rainPeriods:calRainPeriods()};
+      if(calPatch.data_inicio||feriadosArr.length||rainsFound.length){
+        calPatch.feriados={holidayWeeks:feriadosArr,rainPeriods:rainsFound.length?rainsFound:calRainPeriods()};
         await sbUpdateObra(selectedObra.id,calPatch);
         window._OBRA=Object.assign({},window._OBRA,calPatch);
         calChanged=true;
       }
     }
 
+    // 4) Ajustes manuais (OVR) — restaura direto do que foi exportado, por nome de lote+serviço.
+    // É isso que faz o Tempo-Caminho recalculado bater com o original (equipe/sequência/semana
+    // travada por lote), em vez de só recalcular do zero com as regras padrão.
+    var wsAdj=wb.Sheets['AjustesManuais'];
+    var adjApplied=0;
+    if(wsAdj){
+      var lotIdxByName2={}; LOTS.forEach(function(l,li){lotIdxByName2[l.trim().toLowerCase()]=li;});
+      var svcIdxByName2={}; SERV.forEach(function(s,si){svcIdxByName2[s.n.trim().toLowerCase()]=si;});
+      sheetRows(wsAdj).slice(1).forEach(function(row){
+        if(!row||row[0]==null||row[1]==null)return;
+        var li=lotIdxByName2[String(row[0]).trim().toLowerCase()], si=svcIdxByName2[String(row[1]).trim().toLowerCase()];
+        if(li==null||si==null)return;
+        var k=ovrKey(li,si); if(!k)return;
+        var o={};
+        var sw=parseInt(row[2],10); if(sw>0)o.startWeek=sw;
+        var teamsRaw=row[4]!=null?String(row[4]).trim():'';
+        if(teamsRaw)o.teams=teamsRaw.split(';').map(function(v){return parseInt(v,10);}).filter(function(v){return v>0;});
+        else { var tm=parseInt(row[3],10); if(tm>0)o.team=tm; }
+        if(row[5]!=null&&row[5]!==''){ var seq=parseInt(row[5],10); if(isFinite(seq))o.seq=seq; }
+        var dur=parseInt(row[6],10); if(dur>0)o.duration=dur;
+        var prod=pnum(row[7]); if(prod>0)o.productivity=prod;
+        if(Object.keys(o).length){ OVR[k]=o; adjApplied++; }
+      });
+      if(adjApplied>0)ADJ_DIRTY=true;
+    }
+
     go(current);
-    toast('Importado: '+createdServ+' serviço(s) novo(s), '+updatedServ+' atualizado(s), '+createdLot+' lote(s) novo(s), '+qtyCount+' quantidade(s)'+(calChanged?', calendário atualizado':'')+'.');
+    toast('Importado: '+createdServ+' serviço(s) novo(s), '+updatedServ+' atualizado(s), '+createdLot+' lote(s) novo(s), '+qtyCount+' quantidade(s)'+(calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar ajustes" no Ajuste Manual pra confirmar':'')+'.');
   }
 
   async function importTempoCaminhoWorkbook(wb){
