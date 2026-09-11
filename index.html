@@ -489,6 +489,57 @@
     var r=await SB.from('lote_servico').upsert({obra_id:obraId,lote_id:loteId,servico_id:servicoId,quantidade:quantidade,unidade:unidade||null},{onConflict:'lote_id,servico_id'});
     if(r.error)throw r.error;
   }
+  async function sbSetLoteComprimento(id,comprimento,espacamento){
+    await sbRequireSession();
+    var r=await SB.from('lotes').update({comprimento_m:comprimento,espacamento_estaca_m:espacamento}).eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbGerarEstacas(loteId,comprimento,espacamento){
+    await sbRequireSession();
+    var n=Math.max(0,Math.floor((Number(comprimento)||0)/(Number(espacamento)||20)));
+    var existing=(ESTACAS[loteId]||[]).map(function(e){return e.numero;});
+    var toCreate=[];
+    for(var i=0;i<=n;i++){ if(existing.indexOf(i)<0)toCreate.push({id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,numero:i,distancia_m:i*(Number(espacamento)||20)}); }
+    if(!toCreate.length)return 0;
+    var r=await SB.from('lote_estacas').insert(toCreate);
+    if(r.error)throw r.error;
+    return toCreate.length;
+  }
+  async function sbDeleteEstaca(id){
+    await sbRequireSession();
+    var r=await SB.from('lote_estacas').delete().eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbLoadEstacas(loteId){
+    await sbRequireSession();
+    var res=await Promise.all([
+      SB.from('lote_estacas').select('*').eq('lote_id',loteId).order('numero',{ascending:true}),
+      SB.from('estaca_quantidades').select('estaca_id,servico_id,quantidade').eq('lote_id',loteId),
+      SB.from('estaca_apontamentos').select('estaca_id,servico_id,data_inicio,data_fim,producao_diaria_id').eq('lote_id',loteId)
+    ]);
+    res.forEach(function(x){if(x.error)throw x.error;});
+    var est=res[0].data||[], qty=res[1].data||[], ap=res[2].data||[];
+    ESTACAS[loteId]=est.map(function(r){return {id:r.id,numero:r.numero,dist:Number(r.distancia_m)||0};});
+    var qtyMap={}; qty.forEach(function(r){qtyMap[r.estaca_id+'::'+r.servico_id]=Number(r.quantidade)||0;});
+    ESTACA_QTY[loteId]=qtyMap;
+    var apMap={}; ap.forEach(function(r){apMap[r.estaca_id+'::'+r.servico_id]={inicio:r.data_inicio||'',fim:r.data_fim||'',prodId:r.producao_diaria_id||null};});
+    ESTACA_AVANCO[loteId]=apMap;
+  }
+  async function sbUpsertEstacaQtd(loteId,estacaId,servicoId,quantidade){
+    await sbRequireSession();
+    var r=await SB.from('estaca_quantidades').upsert({obra_id:selectedObra.id,lote_id:loteId,estaca_id:estacaId,servico_id:servicoId,quantidade:quantidade},{onConflict:'estaca_id,servico_id'});
+    if(r.error)throw r.error;
+  }
+  async function sbUpsertEstacaApontamento(loteId,estacaId,servicoId,patch){
+    await sbRequireSession();
+    var r=await SB.from('estaca_apontamentos').upsert(Object.assign({obra_id:selectedObra.id,lote_id:loteId,estaca_id:estacaId,servico_id:servicoId},patch),{onConflict:'estaca_id,servico_id'});
+    if(r.error)throw r.error;
+  }
+  async function sbUpdateProducao(id,patch){
+    await sbRequireSession();
+    var r=await SB.from('producao_diaria').update(patch).eq('id',id);
+    if(r.error)throw r.error;
+  }
   async function sbCreateRecurso(obraId,patch){
     await sbRequireSession();
     var id=newUuid();
@@ -557,13 +608,16 @@
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
     LOTE_PACOTE=lot.map(function(r){return r.pacote_contratual||'';});
+    LOTE_COMPR=lot.map(function(r){return r.comprimento_m!=null?Number(r.comprimento_m):null;});
+    LOTE_ESPAC=lot.map(function(r){return r.espacamento_estaca_m!=null?Number(r.espacamento_estaca_m):20;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||''};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
-    ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
+    ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; LOT_COMPR_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
+    ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={};
     REC_DIRTY={}; REALIZADO_DIRTY={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
@@ -688,8 +742,8 @@
   }
   function hasAnyDirty(){
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
-      Object.keys(QTY_DIRTY||{}).length>0 || Object.keys(LOT_PACOTE_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY ||
-      Object.keys(REC_DIRTY||{}).length>0 || Object.keys(REALIZADO_DIRTY||{}).length>0;
+      Object.keys(QTY_DIRTY||{}).length>0 || Object.keys(LOT_PACOTE_DIRTY||{}).length>0 || Object.keys(LOT_COMPR_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY ||
+      Object.keys(REC_DIRTY||{}).length>0 || Object.keys(REALIZADO_DIRTY||{}).length>0 || Object.keys(ESTACA_QTY_DIRTY||{}).length>0;
   }
   function refreshTopSaveBtn(){
     var b=document.getElementById('topSaveBtn'); if(!b)return;
@@ -709,9 +763,14 @@
         if(CAL_DIRTY)await saveCalendarAll();
         if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; if(current==='cr-matriz')go(current); }
       }
-      if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length)await saveLotesAll();
+      if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length||Object.keys(LOT_COMPR_DIRTY).length)await saveLotesAll();
       if(Object.keys(REC_DIRTY).length)await saveRecursosAll();
       if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
+      if(Object.keys(ESTACA_QTY_DIRTY).length){
+        var estLi=window._estLote; if(estLi==null||estLi>=LOTS.length)estLi=0;
+        var estLoteId=(window._LOTIDS||[])[estLi];
+        if(estLoteId)await saveEstacaQtdAll(estLi,estLoteId);
+      }
       toast('Tudo salvo.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
     if(b){b.disabled=false;b.textContent='💾 Salvar alterações';}
@@ -735,6 +794,13 @@
   ];
   var LOTS=['Lote 01','Lote 02','Lote 03','Lote 04','Lote 05','Lote 06'];
   var LOTE_PACOTE=[]; // pacote contratual de cada lote (mesmo índice de LOTS) — texto livre, ex: "Lote 1", "Lote 2"
+  var LOTE_COMPR=[]; // comprimento do lote em metros (mesmo índice de LOTS) — base pra gerar as estacas
+  var LOTE_ESPAC=[]; // espaçamento entre estacas em metros (padrão 20m, editável na tela de Estacas)
+  // Estaqueamento (controle de produção por estaca, dentro do lote — não afeta o cronograma):
+  var ESTACAS={}; // {loteId: [{id,numero,dist}]} — carregado sob demanda (sbLoadEstacas), não no boot da obra
+  var ESTACA_QTY={}; // {loteId: {"estacaId::servicoId": quantidade}}
+  var ESTACA_QTY_DIRTY={}; // {"estacaId::servicoId": quantidade} — pendente de salvar na tela de Quantidades por estaca
+  var ESTACA_AVANCO={}; // {loteId: {"estacaId::servicoId": {inicio,fim,prodId}}}
   var RECURSOS=[]; // catálogo de recursos (funções/equipamentos) da obra: {id,n,tipo,u}
   var REALIZADO_REC={}; // {"recursoId::data_semana(ISO)": quantidade}
   var CENARIOS=[]; // {id,nome,tipo:'rascunho'|'baseline',revisao,ativo,ovr,ordem,congeladoEm}
@@ -859,7 +925,7 @@
 
   var LOT_SELECTED={}; // {li: true} — lotes marcados pra exclusão em lote
   VIEWS['cad-lotes']=function(){
-    var th='<th style="width:26px"><input type="checkbox" id="selAllLotes"'+(LOTS.length&&Object.keys(LOT_SELECTED).length===LOTS.length?' checked':'')+'></th><th>#</th><th>Nome</th><th>Pacote contratual</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
+    var th='<th style="width:26px"><input type="checkbox" id="selAllLotes"'+(LOTS.length&&Object.keys(LOT_SELECTED).length===LOTS.length?' checked':'')+'></th><th>#</th><th>Nome</th><th>Pacote contratual</th><th>Comprimento (m)</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
     var rows=LOTS.map(function(l,li){
       var qcells=SERV.map(function(s,si){return '<td><input class="einp" data-qty-si="'+si+'" type="number" style="width:96px" value="'+(QTY[li][si]||0)+'"></td>';}).join('');
       return '<tr data-li="'+li+'" draggable="true"><td><input type="checkbox" data-selrow="'+li+'"'+(LOT_SELECTED[li]?' checked':'')+'></td>'+
@@ -867,17 +933,18 @@
         '<button class="iconbtn" data-up="'+li+'" title="subir"'+(li===0?' disabled':'')+'>↑</button><button class="iconbtn" data-down="'+li+'" title="descer"'+(li===LOTS.length-1?' disabled':'')+'>↓</button></div></td>'+
         '<td><input class="einp" data-lotenome style="width:150px" value="'+escAttr(l)+'"></td>'+
         '<td><input class="einp" data-lotepacote list="pacoteOpts" style="width:130px" placeholder="ex.: Lote 1" value="'+escAttr(LOTE_PACOTE[li]||'')+'"></td>'+
-        qcells+'<td><button class="iconbtn" data-dellote>✕</button></td></tr>';
+        '<td><input class="einp" data-lotecompr type="number" min="0" style="width:100px" placeholder="—" value="'+(LOTE_COMPR[li]!=null?LOTE_COMPR[li]:'')+'"></td>'+
+        qcells+'<td style="display:flex;gap:4px"><button class="iconbtn" data-goestacas="'+li+'" title="Controle de produção por estaca">📏</button><button class="iconbtn" data-dellote>✕</button></td></tr>';
     }).join('');
     var pacoteSet={}; LOTE_PACOTE.forEach(function(p){if(p)pacoteSet[p]=true;});
     var pacoteOpts='<datalist id="pacoteOpts">'+Object.keys(pacoteSet).map(function(p){return '<option value="'+escAttr(p)+'">';}).join('')+'</datalist>';
-    var lotesDirty=Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length;
+    var lotesDirty=Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length||Object.keys(LOT_COMPR_DIRTY).length;
     var selCount=Object.keys(LOT_SELECTED).length;
     return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.'+(lotesDirty?' Há alterações não salvas.':''),impBtn()+
       (selCount?'<button class="btn" id="delSelLotes" style="color:var(--crit);border-color:var(--crit)">✕ Excluir selecionados ('+selCount+')</button>':'')+
       '<button class="btn primary" id="addLote">+ Adicionar</button>'+'<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar alterações</button>')+
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+pacoteOpts+
-    '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes. <b>Pacote contratual</b> é opcional — preencha quando a obra for dividida em mais de um contrato (ex.: "Lote 1", "Lote 2") pra depois ver a Curva S e os relatórios separados por pacote, mesmo com o cronograma todo integrado.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
+    '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes. <b>Pacote contratual</b> é opcional — preencha quando a obra for dividida em mais de um contrato (ex.: "Lote 1", "Lote 2") pra depois ver a Curva S e os relatórios separados por pacote, mesmo com o cronograma todo integrado. <b>Comprimento</b> é opcional — preencha e clique em 📏 pra gerar as estacas do lote e controlar a produção por estaca (corte, aterro, CFT, base...), sem mudar o cronograma, que continua calculado por lote.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
   };
 
   VIEWS['cad-equipes']=function(){
@@ -1335,7 +1402,7 @@
       go('cad-serv'); toast('Serviço adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
-  var LOT_NAME_DIRTY={}, QTY_DIRTY={}, LOT_PACOTE_DIRTY={}; // lotes/quantidades com edição pendente de salvar
+  var LOT_NAME_DIRTY={}, QTY_DIRTY={}, LOT_PACOTE_DIRTY={}, LOT_COMPR_DIRTY={}; // lotes/quantidades com edição pendente de salvar
   function saveLoteNome(li,inp){
     var id=(window._LOTIDS||[])[li]; if(!id)return;
     var val=inp.value.trim(); if(!val){inp.value=LOTS[li];return;}
@@ -1349,6 +1416,13 @@
     LOT_PACOTE_DIRTY[li]=true;
     go('cad-lotes');
   }
+  function saveCompr(li,inp){
+    var id=(window._LOTIDS||[])[li]; if(!id)return;
+    var val=inp.value===''?null:Math.max(0,parseFloat(inp.value)||0);
+    LOTE_COMPR[li]=val;
+    LOT_COMPR_DIRTY[li]=true;
+    go('cad-lotes');
+  }
   function saveQuantidade(li,si,inp){
     var loteId=(window._LOTIDS||[])[li], sv=SERV[si];
     if(!loteId||!sv||!sv.id||!selectedObra)return;
@@ -1359,8 +1433,8 @@
     go('cad-lotes');
   }
   async function saveLotesAll(){
-    var nameKeys=Object.keys(LOT_NAME_DIRTY).map(Number), qtyKeys=Object.keys(QTY_DIRTY), pacKeys=Object.keys(LOT_PACOTE_DIRTY).map(Number);
-    if(!nameKeys.length&&!qtyKeys.length&&!pacKeys.length)return;
+    var nameKeys=Object.keys(LOT_NAME_DIRTY).map(Number), qtyKeys=Object.keys(QTY_DIRTY), pacKeys=Object.keys(LOT_PACOTE_DIRTY).map(Number), comprKeys=Object.keys(LOT_COMPR_DIRTY).map(Number);
+    if(!nameKeys.length&&!qtyKeys.length&&!pacKeys.length&&!comprKeys.length)return;
     try{
       for(var i=0;i<nameKeys.length;i++){
         var li=nameKeys[i], id=(window._LOTIDS||[])[li]; if(!id)continue;
@@ -1376,7 +1450,11 @@
         var li3=pacKeys[k], id3=(window._LOTIDS||[])[li3]; if(!id3)continue;
         await sbUpdateLote(id3,{pacote_contratual:LOTE_PACOTE[li3]||null});
       }
-      LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={};
+      for(var m=0;m<comprKeys.length;m++){
+        var li4=comprKeys[m], id4=(window._LOTIDS||[])[li4]; if(!id4)continue;
+        await sbUpdateLote(id4,{comprimento_m:LOTE_COMPR[li4]});
+      }
+      LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; LOT_COMPR_DIRTY={};
       go('cad-lotes'); toast('Lotes e quantidades salvos.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-lotes'); }
   }
@@ -1385,7 +1463,7 @@
     if(!confirm('Excluir este lote e suas quantidades?'))return;
     try{
       await sbDeleteLote(id);
-      LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1); LOTE_PACOTE.splice(li,1); LOT_SELECTED={};
+      LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1); LOTE_PACOTE.splice(li,1); LOTE_COMPR.splice(li,1); LOTE_ESPAC.splice(li,1); LOT_SELECTED={};
       go('cad-lotes'); toast('Lote excluído.');
     }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
   }
@@ -1397,7 +1475,7 @@
       LOTS.push(nome);
       window._LOTIDS=window._LOTIDS||[]; window._LOTIDS.push(id);
       QTY.push(SERV.map(function(){return 0;}));
-      LOTE_PACOTE.push('');
+      LOTE_PACOTE.push(''); LOTE_COMPR.push(null); LOTE_ESPAC.push(20);
       go('cad-lotes'); toast('Lote adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
@@ -1414,19 +1492,21 @@
       var tmpId=lotIds[li]; lotIds[li]=lotIds[target]; lotIds[target]=tmpId;
       var tmpQty=QTY[li]; QTY[li]=QTY[target]; QTY[target]=tmpQty;
       var tmpPac=LOTE_PACOTE[li]; LOTE_PACOTE[li]=LOTE_PACOTE[target]; LOTE_PACOTE[target]=tmpPac;
+      var tmpCompr=LOTE_COMPR[li]; LOTE_COMPR[li]=LOTE_COMPR[target]; LOTE_COMPR[target]=tmpCompr;
+      var tmpEspac=LOTE_ESPAC[li]; LOTE_ESPAC[li]=LOTE_ESPAC[target]; LOTE_ESPAC[target]=tmpEspac;
       go('cad-lotes'); toast('Lote reordenado.');
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
   }
   async function reorderLote(fromLi,toLi,onDone){
     if(fromLi==null||toLi==null||fromLi===toLi)return;
     var origIds=(window._LOTIDS||[]).slice();
-    var names=LOTS.slice(), lotIds=origIds.slice(), qtyRows=QTY.slice(), pacotes=LOTE_PACOTE.slice();
-    var movedName=names.splice(fromLi,1)[0], movedId=lotIds.splice(fromLi,1)[0], movedQty=qtyRows.splice(fromLi,1)[0], movedPac=pacotes.splice(fromLi,1)[0];
+    var names=LOTS.slice(), lotIds=origIds.slice(), qtyRows=QTY.slice(), pacotes=LOTE_PACOTE.slice(), comprs=LOTE_COMPR.slice(), espacs=LOTE_ESPAC.slice();
+    var movedName=names.splice(fromLi,1)[0], movedId=lotIds.splice(fromLi,1)[0], movedQty=qtyRows.splice(fromLi,1)[0], movedPac=pacotes.splice(fromLi,1)[0], movedCompr=comprs.splice(fromLi,1)[0], movedEspac=espacs.splice(fromLi,1)[0];
     if(movedId==null)return;
-    names.splice(toLi,0,movedName); lotIds.splice(toLi,0,movedId); qtyRows.splice(toLi,0,movedQty); pacotes.splice(toLi,0,movedPac);
+    names.splice(toLi,0,movedName); lotIds.splice(toLi,0,movedId); qtyRows.splice(toLi,0,movedQty); pacotes.splice(toLi,0,movedPac); comprs.splice(toLi,0,movedCompr); espacs.splice(toLi,0,movedEspac);
     try{
       for(var i=0;i<lotIds.length;i++){ if(lotIds[i]!==origIds[i])await sbUpdateLote(lotIds[i],{ordem:i+1}); }
-      LOTS=names; window._LOTIDS=lotIds; QTY=qtyRows; LOTE_PACOTE=pacotes; LOT_SELECTED={};
+      LOTS=names; window._LOTIDS=lotIds; QTY=qtyRows; LOTE_PACOTE=pacotes; LOTE_COMPR=comprs; LOTE_ESPAC=espacs; LOT_SELECTED={};
       toast('Lote reordenado.');
       (onDone||function(){go('cad-lotes');})();
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
@@ -1439,7 +1519,7 @@
       for(var i=0;i<idxs.length;i++){
         var li=idxs[i], id=(window._LOTIDS||[])[li]; if(!id)continue;
         await sbDeleteLote(id);
-        LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1); LOTE_PACOTE.splice(li,1);
+        LOTS.splice(li,1); window._LOTIDS.splice(li,1); QTY.splice(li,1); LOTE_PACOTE.splice(li,1); LOTE_COMPR.splice(li,1); LOTE_ESPAC.splice(li,1);
       }
       LOT_SELECTED={};
       go('cad-lotes'); toast('Lotes excluídos.');
@@ -1853,17 +1933,147 @@
   /* ---- Produção Diária: lista / tempo-caminho / matriz de estacas ---- */
   window._prodMode=window._prodMode||'lista';
   window.PROD_LIST=window.PROD_LIST||[]; // {id,data,servId,loteId,qtd} — persistido em producao_diaria
+  function estLabel(distM){ var d=Math.round(Number(distM)||0), km=Math.floor(d/1000), rest=d%1000; return km+'+'+(''+rest).padStart(3,'0'); }
+  /** Controle de produção por estaca, dentro de um lote — quantidades (corte/aterro/CFT/base...)
+   * e avanço (início/término por serviço). Não interfere no cronograma: as quantidades por
+   * estaca só somam pra virar a quantidade do lote inteiro (a mesma usada no Tempo-Caminho), e
+   * o avanço só alimenta o "realizado" (producao_diaria) que já move a Curva S. */
   function estacasHTML(){
-    window._estDe=window._estDe==null?0:window._estDe; window._estAte=window._estAte==null?500:window._estAte;
-    var est=[]; for(var m=window._estDe;m<=window._estAte;m+=20)est.push(m);
-    var th='<th>Estaca</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+'<div style="font-weight:400;color:var(--muted);font-size:9px">início / término</div></th>';}).join('');
-    var body=est.map(function(m){var km=Math.floor(m/1000),rest=(''+(m%1000)).padStart(3,'0');
-      return '<tr><td class="mono">'+km+'+'+rest+'</td>'+SERV.map(function(){return '<td><input class="einp" type="date" style="width:120px"><input class="einp" type="date" style="width:120px;margin-top:3px"></td>';}).join('')+'</tr>';}).join('');
-    return '<div class="assign" style="margin:0 0 14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span class="lab" style="margin:0">Matriz de estacas (a cada 20 m)</span>'+
-      '<label style="font-size:12.5px">De (m): <input class="einp" id="estDe" type="number" value="'+window._estDe+'" style="width:90px"></label>'+
-      '<label style="font-size:12.5px">Até (m): <input class="einp" id="estAte" type="number" value="'+window._estAte+'" style="width:90px"></label>'+
-      '<button class="btn" id="estApply">Aplicar</button></div>'+
-      '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div><div class="note" style="margin-top:8px">Vertical: estacas a cada 20 m. Horizontal: serviços — digite início e término de cada serviço em cada estaca.</div></div>';
+    if(!LOTS.length)return '<div class="card"><div class="note">Nenhum lote cadastrado ainda. Cadastre em "Lotes & Quantidades".</div></div>';
+    var li=window._estLote; if(li==null||li>=LOTS.length)li=window._estLote=0;
+    var loteId=(window._LOTIDS||[])[li];
+    var loteSel='<select class="einp" id="estLoteSel" style="width:200px">'+LOTS.map(function(l,i){return '<option value="'+i+'"'+(i===li?' selected':'')+'>'+l+'</option>';}).join('')+'</select>';
+    var header='<div class="assign" style="margin:0 0 14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span class="lab" style="margin:0">Lote</span>'+loteSel+'</div>';
+    if(!loteId)return header+'<div class="card"><div class="note">Lote inválido.</div></div>';
+    var estacas=ESTACAS[loteId];
+    if(estacas==null){
+      sbLoadEstacas(loteId).then(renderProd).catch(function(e){toast('Falha ao carregar estacas: '+((e&&e.message)||e));});
+      return header+'<div class="card"><div class="note">Carregando estacas…</div></div>';
+    }
+    var compr=LOTE_COMPR[li], espac=LOTE_ESPAC[li]||20;
+    if(!estacas.length){
+      return header+'<div class="card"><div class="eyebrow">Gerar estacas deste lote</div>'+
+        '<div style="display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin-top:10px">'+
+          '<label style="font-size:12.5px">Comprimento (m)<br><input class="einp" id="estComprInp" type="number" min="0" style="width:130px" value="'+(compr!=null?compr:'')+'"></label>'+
+          '<label style="font-size:12.5px">Espaçamento entre estacas (m)<br><input class="einp" id="estEspacInp" type="number" min="1" style="width:130px" value="'+espac+'"></label>'+
+          '<button class="btn primary" id="estGerarBtn">Gerar estacas</button>'+
+        '</div>'+
+        '<div class="note" style="margin-top:10px">Sem estacas cadastradas pra este lote ainda. Informe o comprimento (o mesmo campo existe em "Lotes & Quantidades") e gere — dá pra gerar de novo depois se o comprimento aumentar (só adiciona as que faltam, nunca apaga as existentes).</div></div>';
+    }
+    var tab=window._estTab||'qtd';
+    var tabsHtml='<div class="subtabs" style="margin:0 0 14px"><button class="subtab'+(tab==='qtd'?' active':'')+'" data-esttab="qtd">Quantidades por estaca</button><button class="subtab'+(tab==='avanco'?' active':'')+'" data-esttab="avanco">Avanço (início/término)</button></div>';
+    return header+tabsHtml+(tab==='avanco'?estAvancoHTML(li,loteId,estacas):estQtdHTML(li,loteId,estacas));
+  }
+  function estQtdHTML(li,loteId,estacas){
+    var qtyMap=ESTACA_QTY[loteId]||{};
+    var th='<th>Estaca</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
+    var totals=SERV.map(function(){return 0;});
+    var body=estacas.map(function(e){
+      var cells=SERV.map(function(s,si){
+        var k=e.id+'::'+s.id, val=ESTACA_QTY_DIRTY.hasOwnProperty(k)?ESTACA_QTY_DIRTY[k]:(qtyMap[k]||0);
+        totals[si]+=(+val||0);
+        return '<td><input class="einp" data-estqty="'+e.id+'" data-estqty-sid="'+s.id+'" type="number" min="0" style="width:92px" value="'+(val||'')+'"></td>';
+      }).join('');
+      return '<tr><td class="mono">'+estLabel(e.dist)+'</td>'+cells+'<td><button class="iconbtn" data-delest="'+e.id+'" title="Remover estaca">✕</button></td></tr>';
+    }).join('');
+    var totRow='<tr style="font-weight:700"><td>Total (vira a quantidade do lote)</td>'+SERV.map(function(s,si){return '<td class="r num">'+fmtBR(totals[si])+'</td>';}).join('')+'<td></td></tr>';
+    var dirtyN=Object.keys(ESTACA_QTY_DIRTY).length;
+    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">'+
+      '<div class="note" style="margin:0;max-width:520px">A soma por estaca vira automaticamente a quantidade do lote inteiro por serviço (mesma matriz de "Lotes & Quantidades") — o cronograma usa só o total, nunca a estaca.</div>'+
+      '<button class="btn primary" id="estSaveQtd"'+(dirtyN?'':' disabled')+'>💾 Salvar quantidades'+(dirtyN?' ('+dirtyN+')':'')+'</button>'+
+    '</div><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+body+totRow+'</tbody></table></div></div>';
+  }
+  function estAvancoHTML(li,loteId,estacas){
+    if(!SERV.length)return '<div class="card"><div class="note">Cadastre serviços antes de lançar avanço.</div></div>';
+    var si=window._estServ; if(si==null||!SERV[si])si=window._estServ=0;
+    var svcSel='<select class="einp" id="estServSel" style="width:220px">'+SERV.map(function(s,i){return '<option value="'+i+'"'+(i===si?' selected':'')+'>'+s.n+'</option>';}).join('')+'</select>';
+    var apMap=ESTACA_AVANCO[loteId]||{}, qtyMap=ESTACA_QTY[loteId]||{}, sv=SERV[si];
+    var rows=estacas.map(function(e){
+      var k=e.id+'::'+sv.id, ap=apMap[k]||{inicio:'',fim:''}, qty=qtyMap[k]||0;
+      var status=ap.fim?'<span style="color:var(--good);font-weight:600">✓ Concluída</span>':(ap.inicio?'<span style="color:var(--warn);font-weight:600">Em andamento</span>':'<span style="color:var(--muted)">Não iniciada</span>');
+      return '<tr><td class="mono">'+estLabel(e.dist)+'</td><td class="r num">'+(qty?fmtBR(qty)+' '+sv.u:'—')+'</td>'+
+        '<td><input class="einp" type="date" data-estavstart="'+e.id+'" value="'+escAttr(ap.inicio||'')+'"></td>'+
+        '<td><input class="einp" type="date" data-estavend="'+e.id+'" value="'+escAttr(ap.fim||'')+'"></td>'+
+        '<td>'+status+'</td></tr>';
+    }).join('');
+    return '<div class="card"><div style="display:flex;gap:14px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><span class="lab" style="margin:0">Serviço</span>'+svcSel+
+      '<div class="note" style="margin:0;max-width:440px">Ao preencher <b>Término</b>, a quantidade cadastrada daquela estaca entra automaticamente como realizado (alimenta a Curva S). Limpar o término remove o lançamento.</div></div>'+
+      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Estaca</th><th class="r">Quantidade</th><th>Início</th><th>Término</th><th>Status</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  }
+  async function gerarEstacasClick(li,loteId){
+    var comprInp=document.getElementById('estComprInp'), espacInp=document.getElementById('estEspacInp');
+    var compr=Math.max(0,parseFloat(comprInp&&comprInp.value)||0), espac=Math.max(1,parseFloat(espacInp&&espacInp.value)||20);
+    if(compr<=0){alert('Informe o comprimento do lote (em metros).');return;}
+    try{
+      await sbSetLoteComprimento((window._LOTIDS||[])[li],compr,espac);
+      LOTE_COMPR[li]=compr; LOTE_ESPAC[li]=espac;
+      var n=await sbGerarEstacas(loteId,compr,espac);
+      await sbLoadEstacas(loteId);
+      renderProd(); toast(n+' estaca(s) gerada(s).');
+    }catch(e){ alert('Falha ao gerar estacas: '+((e&&e.message)||e)); }
+  }
+  async function deleteEstacaClick(loteId,estacaId){
+    if(!confirm('Remover esta estaca e suas quantidades/avanço?'))return;
+    try{
+      await sbDeleteEstaca(estacaId);
+      ESTACAS[loteId]=(ESTACAS[loteId]||[]).filter(function(e){return e.id!==estacaId;});
+      Object.keys(ESTACA_QTY[loteId]||{}).forEach(function(k){if(k.indexOf(estacaId+'::')===0)delete ESTACA_QTY[loteId][k];});
+      Object.keys(ESTACA_AVANCO[loteId]||{}).forEach(function(k){if(k.indexOf(estacaId+'::')===0)delete ESTACA_AVANCO[loteId][k];});
+      Object.keys(ESTACA_QTY_DIRTY).forEach(function(k){if(k.indexOf(estacaId+'::')===0)delete ESTACA_QTY_DIRTY[k];});
+      renderProd(); toast('Estaca removida.');
+    }catch(e){ alert('Falha ao remover: '+((e&&e.message)||e)); }
+  }
+  async function saveEstacaQtdAll(li,loteId){
+    var keys=Object.keys(ESTACA_QTY_DIRTY); if(!keys.length)return;
+    try{
+      var touchedSi={};
+      for(var i=0;i<keys.length;i++){
+        var k=keys[i], parts=k.split('::'), estacaId=parts[0], servicoId=parts[1];
+        var val=Math.max(0,+ESTACA_QTY_DIRTY[k]||0);
+        await sbUpsertEstacaQtd(loteId,estacaId,servicoId,val);
+        ESTACA_QTY[loteId]=ESTACA_QTY[loteId]||{}; ESTACA_QTY[loteId][k]=val;
+        touchedSi[servicoId]=true;
+      }
+      ESTACA_QTY_DIRTY={};
+      var sids=Object.keys(touchedSi);
+      for(var j=0;j<sids.length;j++){
+        var sid=sids[j], si=-1; SERV.forEach(function(s,idx){if(s.id===sid)si=idx;}); if(si<0)continue;
+        var sum=0; (ESTACAS[loteId]||[]).forEach(function(e){sum+=(ESTACA_QTY[loteId]||{})[e.id+'::'+sid]||0;});
+        await sbUpsertQuantidade(selectedObra.id,loteId,sid,sum,SERV[si].u);
+        QTY[li][si]=sum;
+      }
+      renderProd(); toast('Quantidades por estaca salvas — total do lote atualizado.');
+    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  }
+  async function saveEstacaAvanco(li,loteId,estacaId,servicoId,field,val){
+    var k=estacaId+'::'+servicoId;
+    ESTACA_AVANCO[loteId]=ESTACA_AVANCO[loteId]||{};
+    var ap=Object.assign({inicio:'',fim:'',prodId:null},ESTACA_AVANCO[loteId][k]);
+    ap[field]=val;
+    try{
+      if(field==='fim'){
+        var qty=(ESTACA_QTY[loteId]||{})[k]||0;
+        if(val){
+          if(ap.prodId){
+            await sbUpdateProducao(ap.prodId,{data:val,quantidade:qty});
+            var ex=window.PROD_LIST.filter(function(r){return r.id===ap.prodId;})[0];
+            if(ex){ex.data=val;ex.qtd=qty;}
+          } else {
+            var estRow=(ESTACAS[loteId]||[]).filter(function(e){return e.id===estacaId;})[0];
+            var newId=await sbCreateProducao(selectedObra.id,{servico_id:servicoId,lote_id:loteId,data:val,quantidade:qty,observacao:'Estaca '+estLabel(estRow?estRow.dist:0)});
+            window.PROD_LIST.unshift({id:newId,data:val,servId:servicoId,loteId:loteId,qtd:qty});
+            ap.prodId=newId;
+          }
+        } else if(ap.prodId){
+          await sbDeleteProducao(ap.prodId);
+          window.PROD_LIST=window.PROD_LIST.filter(function(r){return r.id!==ap.prodId;});
+          ap.prodId=null;
+        }
+      }
+      await sbUpsertEstacaApontamento(loteId,estacaId,servicoId,{data_inicio:ap.inicio||null,data_fim:ap.fim||null,producao_diaria_id:ap.prodId||null});
+      ESTACA_AVANCO[loteId][k]=ap;
+      renderProd();
+    }catch(e){ alert('Falha ao salvar avanço: '+((e&&e.message)||e)); }
   }
   function renderProd(){
     var root=document.getElementById('prodRoot');if(!root)return;
@@ -1916,7 +2126,43 @@
         }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
       });
     });
-    var ea=document.getElementById('estApply');if(ea)ea.addEventListener('click',function(){window._estDe=+document.getElementById('estDe').value||0;window._estAte=Math.max(window._estDe+20,+document.getElementById('estAte').value||500);renderProd();});
+    if(window._prodMode==='matriz'){
+      var li0=window._estLote; if(li0==null||li0>=LOTS.length)li0=0;
+      var loteId0=(window._LOTIDS||[])[li0];
+      var loteSelEl=document.getElementById('estLoteSel');
+      if(loteSelEl)loteSelEl.addEventListener('change',function(){ window._estLote=+loteSelEl.value; ESTACA_QTY_DIRTY={}; renderProd(); });
+      var gerarBtn=document.getElementById('estGerarBtn');
+      if(gerarBtn)gerarBtn.addEventListener('click',function(){ gerarEstacasClick(li0,loteId0); });
+      root.querySelectorAll('[data-esttab]').forEach(function(b){
+        b.addEventListener('click',function(){ window._estTab=b.getAttribute('data-esttab'); renderProd(); });
+      });
+      root.querySelectorAll('[data-delest]').forEach(function(b){
+        b.addEventListener('click',function(){ deleteEstacaClick(loteId0,b.getAttribute('data-delest')); });
+      });
+      root.querySelectorAll('[data-estqty]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var k=inp.getAttribute('data-estqty')+'::'+inp.getAttribute('data-estqty-sid');
+          ESTACA_QTY_DIRTY[k]=Math.max(0,parseFloat(inp.value)||0);
+          renderProd();
+        });
+      });
+      var saveQtdBtn=document.getElementById('estSaveQtd');
+      if(saveQtdBtn)saveQtdBtn.addEventListener('click',function(){ saveEstacaQtdAll(li0,loteId0); });
+      var servSelEl=document.getElementById('estServSel');
+      if(servSelEl)servSelEl.addEventListener('change',function(){ window._estServ=+servSelEl.value; renderProd(); });
+      root.querySelectorAll('[data-estavstart]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var sv=SERV[window._estServ||0]; if(!sv)return;
+          saveEstacaAvanco(li0,loteId0,inp.getAttribute('data-estavstart'),sv.id,'inicio',inp.value||'');
+        });
+      });
+      root.querySelectorAll('[data-estavend]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var sv=SERV[window._estServ||0]; if(!sv)return;
+          saveEstacaAvanco(li0,loteId0,inp.getAttribute('data-estavend'),sv.id,'fim',inp.value||'');
+        });
+      });
+    }
   }
 
   /* ---- Gantt + resumo semanal (aba do Cronograma) ---- */
@@ -2109,11 +2355,15 @@
         if(nomeInp)nomeInp.addEventListener('change',function(){saveLoteNome(li,nomeInp);});
         var pacInp=tr.querySelector('[data-lotepacote]');
         if(pacInp)pacInp.addEventListener('change',function(){savePacote(li,pacInp);});
+        var comprInp=tr.querySelector('[data-lotecompr]');
+        if(comprInp)comprInp.addEventListener('change',function(){saveCompr(li,comprInp);});
         tr.querySelectorAll('[data-qty-si]').forEach(function(inp){
           inp.addEventListener('change',function(){saveQuantidade(li,+inp.getAttribute('data-qty-si'),inp);});
         });
         var del=tr.querySelector('[data-dellote]');
         if(del)del.addEventListener('click',function(){deleteLoteRow(li);});
+        var goEst=tr.querySelector('[data-goestacas]');
+        if(goEst)goEst.addEventListener('click',function(){ window._estLote=li; window._prodMode='matriz'; go('ac-prod'); });
         var up=tr.querySelector('[data-up]');
         if(up)up.addEventListener('click',function(){moveLote(li,-1);});
         var down=tr.querySelector('[data-down]');
