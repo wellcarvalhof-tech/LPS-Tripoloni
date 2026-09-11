@@ -1944,7 +1944,7 @@
     if(!LOTS.length)return '<div class="card"><div class="note">Nenhum lote cadastrado ainda. Cadastre em "Lotes & Quantidades".</div></div>';
     var dirtyN=Object.keys(ESTACA_QTY_DIRTY).length;
     var toolbar='<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
-      '<div class="note" style="margin:0">Clique num lote pra abrir as estacas dele. Informe o comprimento pra gerar automaticamente (a estaca usa o número do lote, ex.: "2+040" = lote 2, 40m).</div>'+
+      '<div class="note" style="margin:0">Clique num lote pra abrir as estacas dele. Informe o comprimento pra gerar automaticamente (a estaca usa o nome/número do lote na frente, ex.: lote "248" → "248+040" aos 40m).</div>'+
       '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
         '<button class="btn" id="estModeloBtn">⇩ Planilha modelo</button>'+
         '<button class="btn" id="estImportBtn">↥ Importar estaqueamento</button>'+
@@ -2010,7 +2010,7 @@
           '<td><input class="einp" type="date" data-estavstart="'+e.id+'" data-estav-sid="'+s.id+'" data-lote="'+loteId+'" value="'+escAttr(ap.inicio||'')+'"></td>'+
           '<td><input class="einp" type="date" data-estavend="'+e.id+'" data-estav-sid="'+s.id+'" data-lote="'+loteId+'" value="'+escAttr(ap.fim||'')+'"></td>';
       }).join('');
-      return '<tr><td class="mono">'+estLabel(li+1,e.dist)+'</td>'+cells+'<td><button class="iconbtn" data-delest="'+e.id+'" data-lote="'+loteId+'" title="Remover estaca">✕</button></td></tr>';
+      return '<tr><td class="mono">'+estLabel(escAttr(LOTS[li]),e.dist)+'</td>'+cells+'<td><button class="iconbtn" data-delest="'+e.id+'" data-lote="'+loteId+'" title="Remover estaca">✕</button></td></tr>';
     }).join('');
     var totRow='<tr style="font-weight:700"><td>Total</td>'+SERV.map(function(s,si){return '<td class="r num">'+fmtBR(totals[si])+'</td><td></td><td></td>';}).join('')+'<td></td></tr>';
     return '<div class="tbl-wrap est-compact"><table class="edtbl compact"><thead><tr><th rowspan="2">Estaca</th>'+groupHead+'<th rowspan="2"></th></tr><tr>'+subHead+'</tr></thead><tbody>'+body+totRow+'</tbody></table></div>';
@@ -2082,7 +2082,7 @@
           } else {
             var li3=(window._LOTIDS||[]).indexOf(loteId);
             var estRow=(ESTACAS[loteId]||[]).filter(function(e){return e.id===estacaId;})[0];
-            var newId=await sbCreateProducao(selectedObra.id,{servico_id:servicoId,lote_id:loteId,data:val,quantidade:qty,observacao:'Estaca '+estLabel(li3+1,estRow?estRow.dist:0)});
+            var newId=await sbCreateProducao(selectedObra.id,{servico_id:servicoId,lote_id:loteId,data:val,quantidade:qty,observacao:'Estaca '+estLabel(li3>=0?LOTS[li3]:'',estRow?estRow.dist:0)});
             window.PROD_LIST.unshift({id:newId,data:val,servId:servicoId,loteId:loteId,qtd:qty});
             ap.prodId=newId;
           }
