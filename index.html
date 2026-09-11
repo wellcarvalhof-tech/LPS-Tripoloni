@@ -1977,7 +1977,23 @@
       return comprRow+'<div class="note">Carregando estacas…</div>';
     }
     if(!estacas.length)return comprRow+'<div class="note">Informe o comprimento acima pra gerar as estacas deste lote automaticamente (a cada '+fmtBR(espac)+'m). Dá pra aumentar o comprimento depois — só adiciona as estacas que faltam, nunca apaga as existentes.</div>';
-    return comprRow+'<div class="note" style="margin-bottom:8px">'+estacas.length+' estaca(s) · a cada '+fmtBR(espac)+'m.</div>'+estMatrizHTML(li,loteId,estacas);
+    return comprRow+'<div class="note" style="margin-bottom:8px">'+estacas.length+' estaca(s) · a cada '+fmtBR(espac)+'m.</div>'+estBulkFillHTML(li)+estMatrizHTML(li,loteId,estacas);
+  }
+  /** Preenchimento em massa: escolhe um trecho (de/até, em metros) + serviço + campo (início/
+   * término) + data, e aplica a mesma data a todas as estacas do trecho de uma vez. */
+  function estBulkFillHTML(li){
+    if(!SERV.length)return '';
+    var svcOpts=SERV.map(function(s,i){return '<option value="'+i+'">'+s.n+'</option>';}).join('');
+    return '<div style="background:var(--elev);border-radius:8px;padding:10px 12px;margin-bottom:10px">'+
+      '<div style="font-size:11.5px;color:var(--muted);margin-bottom:6px">Preencher um trecho de uma vez</div>'+
+      '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">'+
+        '<label style="font-size:12.5px">De (m)<br><input class="einp" data-bulkfrom="'+li+'" type="number" min="0" style="width:80px" placeholder="0"></label>'+
+        '<label style="font-size:12.5px">Até (m)<br><input class="einp" data-bulkto="'+li+'" type="number" min="0" style="width:80px" placeholder="fim"></label>'+
+        '<label style="font-size:12.5px">Serviço<br><select class="einp" data-bulksvc="'+li+'" style="width:180px">'+svcOpts+'</select></label>'+
+        '<label style="font-size:12.5px">Campo<br><select class="einp" data-bulkfield="'+li+'" style="width:100px"><option value="inicio">Início</option><option value="fim">Término</option></select></label>'+
+        '<label style="font-size:12.5px">Data<br><input class="einp" data-bulkdate="'+li+'" type="date" style="width:145px"></label>'+
+        '<button class="btn primary" data-bulkapply="'+li+'">Aplicar ao trecho</button>'+
+      '</div></div>';
   }
   function estMatrizHTML(li,loteId,estacas){
     if(!SERV.length)return '<div class="note">Cadastre serviços antes de lançar quantidades/avanço.</div>';
@@ -2080,6 +2096,68 @@
       ESTACA_AVANCO[loteId][k]=ap;
       renderProd();
     }catch(e){ alert('Falha ao salvar avanço: '+((e&&e.message)||e)); }
+  }
+  /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
+   * em lotes de escrita (upsert em massa) em vez de uma chamada por estaca. */
+  async function saveEstacaAvancoBulk(loteId,estacaIds,servicoId,field,val){
+    if(!estacaIds.length)return 0;
+    ESTACA_AVANCO[loteId]=ESTACA_AVANCO[loteId]||{};
+    var apRows=[], prodUpserts=[], prodDeleteIds=[];
+    estacaIds.forEach(function(estacaId){
+      var k=estacaId+'::'+servicoId;
+      var ap=Object.assign({inicio:'',fim:'',prodId:null},ESTACA_AVANCO[loteId][k]);
+      ap[field]=val;
+      if(field==='fim'){
+        var qty=(ESTACA_QTY[loteId]||{})[k]||0;
+        if(val){
+          var prodId=ap.prodId||newUuid();
+          prodUpserts.push({id:prodId,obra_id:selectedObra.id,servico_id:servicoId,lote_id:loteId,data:val,quantidade:qty});
+          ap.prodId=prodId;
+        } else if(ap.prodId){
+          prodDeleteIds.push(ap.prodId);
+          ap.prodId=null;
+        }
+      }
+      apRows.push({obra_id:selectedObra.id,lote_id:loteId,estaca_id:estacaId,servico_id:servicoId,data_inicio:ap.inicio||null,data_fim:ap.fim||null,producao_diaria_id:ap.prodId||null});
+      ESTACA_AVANCO[loteId][k]=ap;
+    });
+    if(prodUpserts.length){
+      var r1=await SB.from('producao_diaria').upsert(prodUpserts,{onConflict:'id'});
+      if(r1.error)throw r1.error;
+      prodUpserts.forEach(function(p){
+        var ex=window.PROD_LIST.filter(function(r){return r.id===p.id;})[0];
+        if(ex){ex.data=p.data;ex.qtd=p.quantidade;}
+        else window.PROD_LIST.unshift({id:p.id,data:p.data,servId:p.servico_id,loteId:p.lote_id,qtd:p.quantidade});
+      });
+    }
+    if(prodDeleteIds.length){
+      var r2=await SB.from('producao_diaria').delete().in('id',prodDeleteIds);
+      if(r2.error)throw r2.error;
+      window.PROD_LIST=window.PROD_LIST.filter(function(r){return prodDeleteIds.indexOf(r.id)<0;});
+    }
+    var r3=await SB.from('estaca_apontamentos').upsert(apRows,{onConflict:'estaca_id,servico_id'});
+    if(r3.error)throw r3.error;
+    return estacaIds.length;
+  }
+  async function applyBulkAvanco(li){
+    var loteId=(window._LOTIDS||[])[li]; if(!loteId)return;
+    var fromInp=document.querySelector('[data-bulkfrom="'+li+'"]'), toInp=document.querySelector('[data-bulkto="'+li+'"]');
+    var svcSel=document.querySelector('[data-bulksvc="'+li+'"]'), fieldSel=document.querySelector('[data-bulkfield="'+li+'"]'), dateInp=document.querySelector('[data-bulkdate="'+li+'"]');
+    if(!svcSel||!fieldSel)return;
+    var from=(fromInp&&fromInp.value!=='')?+fromInp.value:-Infinity;
+    var to=(toInp&&toInp.value!=='')?+toInp.value:Infinity;
+    var estacas=(ESTACAS[loteId]||[]).filter(function(e){return e.dist>=from&&e.dist<=to;});
+    if(!estacas.length){alert('Nenhuma estaca nesse trecho.');return;}
+    var sv=SERV[+svcSel.value]; if(!sv)return;
+    var field=fieldSel.value, val=(dateInp&&dateInp.value)||'';
+    if(!val&&!confirm('Data em branco vai LIMPAR o campo "'+(field==='fim'?'Término':'Início')+'" de '+estacas.length+' estaca(s) do serviço "'+sv.n+'". Continuar?'))return;
+    else if(val&&!confirm('Aplicar '+(field==='fim'?'Término':'Início')+' = '+brDate(val)+' em '+estacas.length+' estaca(s) do serviço "'+sv.n+'"?'))return;
+    var btn=document.querySelector('[data-bulkapply="'+li+'"]');
+    if(btn){btn.disabled=true;btn.textContent='Aplicando…';}
+    try{
+      var n=await saveEstacaAvancoBulk(loteId,estacas.map(function(e){return e.id;}),sv.id,field,val);
+      renderProd(); toast('Aplicado a '+n+' estaca(s).');
+    }catch(e){ alert('Falha ao aplicar: '+((e&&e.message)||e)); if(btn){btn.disabled=false;btn.textContent='Aplicar ao trecho';} }
   }
   /** Exporta um modelo Excel pra importar o estaqueamento em massa: Lote, Estaca (m) e uma
    * coluna de quantidade por serviço cadastrado. */
@@ -2216,6 +2294,9 @@
           EST_OPEN[li]=!EST_OPEN[li];
           renderProd();
         });
+      });
+      root.querySelectorAll('[data-bulkapply]').forEach(function(b){
+        b.addEventListener('click',function(){ applyBulkAvanco(+b.getAttribute('data-bulkapply')); });
       });
       root.querySelectorAll('[data-estcompr]').forEach(function(inp){
         inp.addEventListener('change',function(){
