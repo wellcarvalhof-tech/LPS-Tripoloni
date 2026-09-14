@@ -3492,18 +3492,25 @@
 
   /* ================= HISTOGRAMA DE RECURSOS ================= */
   /** Equipes ativas por serviço em cada semana (índice 0 = semana 1). */
+  /** Equipes ativas (mobilizadas) por serviço/semana. Regra: uma vez que a equipe inicia o
+   * serviço, ela conta como mobilizada em TODA semana até concluir o último lote que executa
+   * nesse serviço — mesmo em semanas "vazias" entre um lote e outro da mesma equipe — sem
+   * desmobilizar e remobilizar nesse intervalo. Por isso agrupa por serviço+equipe (do primeiro
+   * início ao último término), em vez de olhar semana a semana se há produção naquela semana. */
   function activeTeamsByWeek(){
     var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
     var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<tw;w++)out[si].push(0);});
-    var seen={};
+    var spanByTeam={}; // "si::team" -> {min,max}
     segs.forEach(function(sg){
-      for(var i=0;i<sg.dur;i++){
-        var w=sg.start+i, qty=sg.wq[i]||0; if(qty<=0)continue;
-        var key=sg.si+'::'+w; seen[key]=seen[key]||{};
-        if(seen[key][sg.team])continue;
-        seen[key][sg.team]=true;
-        if(out[sg.si]&&w>=1&&w<=tw)out[sg.si][w-1]+=1;
-      }
+      if(!sg.dur)return;
+      var k=sg.si+'::'+sg.team, start=sg.start, end=sg.start+sg.dur-1;
+      var cur=spanByTeam[k];
+      if(!cur)spanByTeam[k]={si:sg.si,min:start,max:end};
+      else{ cur.min=Math.min(cur.min,start); cur.max=Math.max(cur.max,end); }
+    });
+    Object.keys(spanByTeam).forEach(function(k){
+      var span=spanByTeam[k], from=Math.max(1,span.min), to=Math.min(tw,span.max);
+      for(var w=from;w<=to;w++){ if(out[span.si])out[span.si][w-1]+=1; }
     });
     return {teamsByService:out,tw:tw};
   }
