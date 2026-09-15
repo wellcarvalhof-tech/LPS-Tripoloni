@@ -4125,27 +4125,47 @@
     if(!ws){alert('Planilha vazia.');return;}
     var aoa=sheetRows(ws);
     if(aoa.length<2){alert('Planilha vazia.');return;}
-    if(!confirm('Importar essa planilha de equipes? Para cada serviço mencionado na planilha, a composição da equipe é SUBSTITUÍDA pela da planilha (serviços não mencionados na planilha não são tocados). Funções/equipamentos citados que ainda não existem no catálogo são criados automaticamente.'))return;
     var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
     var recByKey={}; RECURSOS.forEach(function(r){recByKey[r.tipo+'::'+r.n.trim().toLowerCase()]=r;});
-    var rows=aoa.slice(1).filter(function(r){return r&&r[0]!=null&&r[0]!==''&&r[2]!=null&&r[2]!=='';});
-    var touchedSi={}, createdRec=0, appliedRows=0, skippedSvc={};
-    for(var i=0;i<rows.length;i++){
-      var row=rows[i];
-      var svcName=String(row[0]).trim();
-      var si=svcIdxByName[svcName.toLowerCase()];
-      if(si==null){ skippedSvc[svcName]=true; continue; }
+    var rows=aoa.slice(1).map(function(r,idx){return {row:r,line:idx+2};}).filter(function(x){return x.row&&x.row[0]!=null&&x.row[0]!==''&&x.row[2]!=null&&x.row[2]!=='';});
+
+    // Verificação prévia: os nomes de Serviço/Função/Equipamento da planilha precisam bater
+    // (exatamente, sem contar maiúsc./minúsc.) com o que já está cadastrado nesta obra. Se algo
+    // não bater, para tudo e mostra o motivo — nada é criado ou alterado automaticamente, pra
+    // evitar duplicar cadastro por causa de um nome digitado diferente.
+    var svcProblems=[], recProblems=[], seenSvc={}, seenRec={};
+    rows.forEach(function(x){
+      var row=x.row;
+      var svcName=String(row[0]).trim(), svcKey=svcName.toLowerCase();
+      if(svcIdxByName[svcKey]==null&&!seenSvc[svcKey]){
+        seenSvc[svcKey]=true;
+        svcProblems.push('Linha '+x.line+': serviço "'+svcName+'" não encontrado em Serviços');
+      }
       var tipoRaw=String(row[1]||'').trim().toLowerCase();
       var tipo=tipoRaw.indexOf('eq')===0?'equipamento':'funcao';
-      var recName=String(row[2]).trim(); if(!recName)continue;
-      var qty=Math.max(0,+row[3]||0); if(qty<=0)continue;
-      var r=recByKey[tipo+'::'+recName.toLowerCase()];
-      if(!r){
-        var id=await sbCreateRecurso(selectedObra.id,{nome:recName,tipo:tipo,unidade:'un',categoria:null,ordem:RECURSOS.length});
-        r={id:id,n:recName,tipo:tipo,u:'un',cat:''};
-        RECURSOS.push(r); recByKey[tipo+'::'+recName.toLowerCase()]=r;
-        createdRec++;
+      var recName=String(row[2]).trim(), recKey=tipo+'::'+recName.toLowerCase();
+      if(recByKey[recKey]==null&&!seenRec[recKey]){
+        seenRec[recKey]=true;
+        recProblems.push('Linha '+x.line+': '+(tipo==='funcao'?'função':'equipamento')+' "'+recName+'" não encontrado(a) no catálogo de '+(tipo==='funcao'?'Funções':'Equipamentos'));
       }
+    });
+    if(svcProblems.length||recProblems.length){
+      var msg='A planilha tem nomes que não batem com o que já está cadastrado nesta obra. Verifique a lista de importação e corrija — o nome precisa ser idêntico ao já cadastrado em Serviços/Funções/Equipamentos (ou cadastre o item que falta antes de importar). Nada foi importado ainda.\n';
+      if(svcProblems.length)msg+='\nSERVIÇOS não encontrados:\n'+svcProblems.join('\n');
+      if(recProblems.length)msg+='\nFUNÇÕES/EQUIPAMENTOS não encontrados:\n'+recProblems.join('\n');
+      alert(msg);
+      return;
+    }
+
+    if(!confirm('Importar essa planilha de equipes? Para cada serviço mencionado na planilha, a composição da equipe é SUBSTITUÍDA pela da planilha (serviços não mencionados não são tocados).'))return;
+    var touchedSi={}, appliedRows=0;
+    for(var i=0;i<rows.length;i++){
+      var row=rows[i].row;
+      var si=svcIdxByName[String(row[0]).trim().toLowerCase()];
+      var tipoRaw2=String(row[1]||'').trim().toLowerCase();
+      var tipo2=tipoRaw2.indexOf('eq')===0?'equipamento':'funcao';
+      var r=recByKey[tipo2+'::'+String(row[2]).trim().toLowerCase()];
+      var qty=Math.max(0,+row[3]||0); if(qty<=0)continue;
       var s=SERV[si];
       if(!touchedSi[si]){ s.cfg=Object.assign({},s.cfg,{crew:[]}); touchedSi[si]=true; }
       var crew=s.cfg.crew.filter(function(c){return c.resourceId!==r.id;});
@@ -4154,9 +4174,8 @@
       SVC_DIRTY[si]=true;
       appliedRows++;
     }
-    var skippedList=Object.keys(skippedSvc);
     go('cr-hist');
-    toast('Importado: '+appliedRows+' item(ns) de equipe em '+Object.keys(touchedSi).length+' serviço(s)'+(createdRec?', '+createdRec+' recurso(s) novo(s)':'')+'.'+(skippedList.length?' Serviço(s) não encontrado(s): '+skippedList.join(', ')+'.':'')+' Clique em "Salvar alterações" pra confirmar.');
+    toast('Importado: '+appliedRows+' item(ns) de equipe em '+Object.keys(touchedSi).length+' serviço(s). Clique em "Salvar alterações" pra confirmar.');
   }
   async function importRealizadoWorkbook(wb){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
