@@ -1070,6 +1070,7 @@
   };
 
   var HIST_FILTER='todos', HIST_SVC=null;
+  var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
   var HIST_OPEN={};
   var REAL_FILTER='todos';
   function sectionCard(key,title,note,actionsHtml,bodyHtml){
@@ -1081,17 +1082,32 @@
     '</div>'+(open?bodyHtml:'')+'</div>';
   }
   /** Aloca o realizado de cada recurso, por semana, proporcionalmente ao previsto de cada serviço que o utiliza naquela semana. */
+  /** Previsto/realizado semanal por "linha" — uma por serviço (chave 's'+si) + uma linha única
+   * pro Apoio Administrativo inteiro (chave 'apoio', somando todos os itens/funções/equipamentos
+   * cadastrados — constante em todas as semanas do cronograma, já que não tem equipes próprias).
+   * O realizado apontado por recurso é rateado entre TODAS as linhas que o usam naquela semana
+   * (serviços e apoio juntos), proporcional ao previsto de cada uma. */
   function computeServicePR(hist){
     var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
     var previsto={}, realizado={};
     SERV.forEach(function(s,si){
-      var arr=[], arr2=[]; for(var w=0;w<tw;w++){arr.push(0);arr2.push(0);}
-      previsto[si]=arr; realizado[si]=arr2;
+      var arr=[]; for(var w=0;w<tw;w++)arr.push(0);
+      previsto['s'+si]=arr;
       var crew=(s.cfg&&s.cfg.crew)||[], teams=teamsByService[si]||[];
       crew.forEach(function(item){
         for(var w2=0;w2<tw;w2++) arr[w2]+=(teams[w2]||0)*(item.qtyPerTeam||0);
       });
+      realizado['s'+si]=[]; for(var w3=0;w3<tw;w3++)realizado['s'+si].push(0);
     });
+    var arrApoio=[]; for(var wA=0;wA<tw;wA++)arrApoio.push(0);
+    APOIO.forEach(function(a){
+      ((a.cfg&&a.cfg.crew)||[]).forEach(function(item){
+        for(var w4=0;w4<tw;w4++) arrApoio[w4]+=(item.qtyPerTeam||0);
+      });
+    });
+    previsto.apoio=arrApoio;
+    realizado.apoio=[]; for(var w5=0;w5<tw;w5++)realizado.apoio.push(0);
+
     for(var w=1;w<=tw;w++){
       var d=mondayOf(w).toISOString().slice(0,10);
       RECURSOS.forEach(function(r){
@@ -1102,23 +1118,31 @@
           var item=crew.filter(function(c){return c.resourceId===r.id;})[0];
           if(!item)return;
           var teams=(teamsByService[si]||[])[w-1]||0, p=teams*item.qtyPerTeam;
-          if(p>0){shares.push({si:si,p:p}); totalPrev+=p;}
+          if(p>0){shares.push({key:'s'+si,p:p}); totalPrev+=p;}
         });
+        var apoioP=0;
+        APOIO.forEach(function(a){
+          var item=((a.cfg&&a.cfg.crew)||[]).filter(function(c){return c.resourceId===r.id;})[0];
+          if(item)apoioP+=item.qtyPerTeam||0;
+        });
+        if(apoioP>0){shares.push({key:'apoio',p:apoioP}); totalPrev+=apoioP;}
         if(totalPrev<=0)return;
-        shares.forEach(function(x){ realizado[x.si][w-1]+=rv*(x.p/totalPrev); });
+        shares.forEach(function(x){ realizado[x.key][w-1]+=rv*(x.p/totalPrev); });
       });
     }
     return {previsto:previsto,realizado:realizado,tw:tw};
   }
   function servicoPRHTML(spr){
     var tw=spr.tw;
-    if(!SERV.length||!tw)return sectionCard('servicopr','Previsto × Realizado por serviço','',null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra ver essa visão.</div>');
+    if((!SERV.length&&!APOIO.length)||!tw)return sectionCard('servicopr','Previsto × Realizado por serviço','',null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra ver essa visão.</div>');
     var visible=[];
     SERV.forEach(function(s,si){
-      var p=spr.previsto[si]||[], r=spr.realizado[si]||[], has=false;
+      var p=spr.previsto['s'+si]||[], r=spr.realizado['s'+si]||[], has=false;
       for(var w=0;w<tw;w++){ if(p[w]>0||r[w]>0){has=true;break;} }
       if(has)visible.push(si);
     });
+    var apoioP=spr.previsto.apoio||[], apoioR=spr.realizado.apoio||[], apoioHas=false;
+    for(var wA=0;wA<tw;wA++){ if(apoioP[wA]>0||apoioR[wA]>0){apoioHas=true;break;} }
     var w, th='<th style="min-width:150px">Serviço</th>';
     for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
     var th2='<th></th>';
@@ -1127,7 +1151,7 @@
     var rows=visible.map(function(si){
       var s=SERV[si], cells='';
       for(var w2=1;w2<=tw;w2++){
-        var p=(spr.previsto[si]||[])[w2-1]||0, rv=(spr.realizado[si]||[])[w2-1]||0;
+        var p=(spr.previsto['s'+si]||[])[w2-1]||0, rv=(spr.realizado['s'+si]||[])[w2-1]||0;
         totP[w2-1]+=p; totR[w2-1]+=rv;
         var has=p>0||rv>0;
         var bg=has?(rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)')):'transparent';
@@ -1137,7 +1161,20 @@
       }
       return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td>'+cells+'</tr>';
     }).join('');
-    if(visible.length){
+    if(apoioHas){
+      var cellsA='';
+      for(var w2b=1;w2b<=tw;w2b++){
+        var pA=apoioP[w2b-1]||0, rvA=apoioR[w2b-1]||0;
+        totP[w2b-1]+=pA; totR[w2b-1]+=rvA;
+        var hasA=pA>0||rvA>0;
+        var bgA=hasA?(rvA>pA?'var(--crit-bg)':(rvA<pA?'var(--warn-bg)':'var(--good-bg)')):'transparent';
+        var fgA=hasA?(rvA>pA?'var(--crit)':(rvA<pA?'var(--warn)':'var(--good)')):'var(--muted)';
+        cellsA+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(pA>0?fmtBR(pA):'—')+'</td>'+
+          '<td class="r mono" style="background:'+bgA+';color:'+fgA+';font-size:10.5px">'+(rvA>0?fmtBR(rvA):'—')+'</td>';
+      }
+      rows+='<tr><td><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td>'+cellsA+'</tr>';
+    }
+    if(visible.length||apoioHas){
       var totCells='';
       for(var w3=1;w3<=tw;w3++){
         var p3=totP[w3-1], r3=totR[w3-1];
@@ -1149,9 +1186,9 @@
       rows+='<tr style="background:var(--elev)"><td style="font-weight:700">Total geral</td>'+totCells+'</tr>';
     }
     return sectionCard('servicopr','Previsto × Realizado por serviço',
-      'Mostra só serviços com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre os serviços que o utilizam naquela semana, proporcional ao previsto.',
+      'Mostra só serviços (e Apoio Administrativo) com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre todos os consumidores (serviços + apoio) que o utilizam naquela semana, proporcional ao previsto.',
       null,
-      visible.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço com previsto ou realizado apontado ainda.</div>'
+      (visible.length||apoioHas)?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço ou item de apoio com previsto ou realizado apontado ainda.</div>'
     );
   }
   function realizadoHTML(hist){
@@ -1351,9 +1388,16 @@
       var comp=((s.cfg&&s.cfg.crew)||[]).map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ')||'—';
       return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td><td class="mono">'+s.eq+'</td><td class="note">'+comp+'</td><td class="r mono">'+fmtBR(hist.totalByService[si]||0)+'</td></tr>';
     }).join('');
+    if(hist.grandTotalIndireto>0){
+      var compA=APOIO.map(function(a){
+        var comp=((a.cfg&&a.cfg.crew)||[]).map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ');
+        return comp;
+      }).filter(Boolean).join(', ')||'—';
+      totRows+='<tr><td><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td><td class="mono">—</td><td class="note">'+compA+'</td><td class="r mono">'+fmtBR(hist.grandTotalIndireto)+'</td></tr>';
+    }
     var totais=sectionCard('totais','Quantidades totais',null,null,
-      SERV.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipes</th><th>Composição da equipe típica</th><th class="r">Total do serviço</th></tr></thead><tbody>'+totRows+
-        '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>'
+      (SERV.length||APOIO.length)?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipes</th><th>Composição da equipe típica</th><th class="r">Total</th></tr></thead><tbody>'+totRows+
+        '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra (direto + indireto)</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>'
     );
 
     var servicoPR=servicoPRHTML(computeServicePR(hist));
@@ -1362,8 +1406,16 @@
       var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
       return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
     }).join('');
-    var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,filtroBtns,
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação).</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+    var origemBtns=['todos','direto','indireto'].map(function(o){
+      var lbl=o==='todos'?'Todos':o==='direto'?'Direto (serviços)':'Indireto (apoio)';
+      return '<button class="subtab'+(HIST_ORIGEM===o?' active':'')+'" data-historigem="'+o+'">'+lbl+'</button>';
+    }).join('');
+    var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
+      '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
+      '</div>',
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
@@ -3017,6 +3069,9 @@
       document.querySelectorAll('[data-histfilter]').forEach(function(b){
         b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
       });
+      document.querySelectorAll('[data-historigem]').forEach(function(b){
+        b.addEventListener('click',function(){HIST_ORIGEM=b.getAttribute('data-historigem'); go('cr-hist');});
+      });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
       });
@@ -3321,12 +3376,19 @@
     var visRes=RECURSOS.filter(function(r){return HIST_FILTER==='todos'||r.tipo===HIST_FILTER;});
     var legEl=document.getElementById('histLeg');
     if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
+    // HIST_ORIGEM decompõe direto (serviços) × indireto (apoio administrativo). O previsto já
+    // vem separado (byResourceDireto/byResourceIndireto); o realizado apontado por recurso não
+    // é separado por origem, então rateia proporcional ao previsto de cada lado naquela semana —
+    // mesma lógica de computeServicePR, só que aqui por tipo de recurso filtrado (visRes).
     var prevWeek=[], realWeek=[];
     for(var w=0;w<tw;w++){
       var d=mondayOf(w+1).toISOString().slice(0,10), p=0, r=0;
       visRes.forEach(function(res){
-        p+=(hist.byResource[res.id]||[])[w]||0;
-        r+=REALIZADO_REC[res.id+'::'+d]||0;
+        var pd=(hist.byResourceDireto[res.id]||[])[w]||0, pi=(hist.byResourceIndireto[res.id]||[])[w]||0;
+        var rvTotal=REALIZADO_REC[res.id+'::'+d]||0;
+        if(HIST_ORIGEM==='direto'){ p+=pd; if(pd+pi>0)r+=rvTotal*(pd/(pd+pi)); }
+        else if(HIST_ORIGEM==='indireto'){ p+=pi; if(pd+pi>0)r+=rvTotal*(pi/(pd+pi)); }
+        else { p+=pd+pi; r+=rvTotal; }
       });
       prevWeek.push(p); realWeek.push(r);
     }
@@ -3898,10 +3960,18 @@
     });
     return {teamsByService:out,tw:tw};
   }
-  /** Demanda de recursos por semana = equipes ativas do serviço × qtd/equipe cadastrada. */
+  /** Demanda de recursos por semana = equipes ativas do serviço × qtd/equipe cadastrada (direto)
+   * + composição de Apoio Administrativo, constante em todas as semanas do cronograma já que
+   * esses itens não têm equipes/cronograma próprio (indireto). byResource é a soma dos dois —
+   * byResourceDireto/byResourceIndireto ficam disponíveis à parte pra quem quiser decompor
+   * (gráfico, filtro por origem). */
   function computeHistogram(){
     var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
-    var byResource={}; RECURSOS.forEach(function(r){byResource[r.id]=[];for(var w=0;w<tw;w++)byResource[r.id].push(0);});
+    var byResource={}, byResourceDireto={}, byResourceIndireto={};
+    RECURSOS.forEach(function(r){
+      byResource[r.id]=[]; byResourceDireto[r.id]=[]; byResourceIndireto[r.id]=[];
+      for(var w=0;w<tw;w++){ byResource[r.id].push(0); byResourceDireto[r.id].push(0); byResourceIndireto[r.id].push(0); }
+    });
     var totalByService={}, totalByServiceResource={}, grandTotal=0;
     SERV.forEach(function(s,si){
       var crew=(s.cfg&&s.cfg.crew)||[], svcTotal=0, perRes={};
@@ -3910,14 +3980,30 @@
         var mobilized=(item.qtyPerTeam||0)*(s.eq||0);
         perRes[item.resourceId]=(perRes[item.resourceId]||0)+mobilized;
         svcTotal+=mobilized;
-        var arr=byResource[item.resourceId], teams=teamsByService[si]||[];
-        for(var i=0;i<arr.length;i++)arr[i]+=(teams[i]||0)*(item.qtyPerTeam||0);
+        var arr=byResource[item.resourceId], arrD=byResourceDireto[item.resourceId], teams=teamsByService[si]||[];
+        for(var i=0;i<arr.length;i++){ var v=(teams[i]||0)*(item.qtyPerTeam||0); arr[i]+=v; arrD[i]+=v; }
       });
       totalByServiceResource[si]=perRes; totalByService[si]=svcTotal; grandTotal+=svcTotal;
     });
+    var totalByApoio={}, totalByApoioResource={}, grandTotalIndireto=0;
+    APOIO.forEach(function(a){
+      var crew=(a.cfg&&a.cfg.crew)||[], apoTotal=0, perRes={};
+      crew.forEach(function(item){
+        if(!byResource[item.resourceId])return;
+        var qty=item.qtyPerTeam||0; // sem "equipes" pro apoio — a quantidade já é o total mobilizado
+        perRes[item.resourceId]=(perRes[item.resourceId]||0)+qty;
+        apoTotal+=qty;
+        var arr=byResource[item.resourceId], arrI=byResourceIndireto[item.resourceId];
+        for(var i=0;i<arr.length;i++){ arr[i]+=qty; arrI[i]+=qty; }
+      });
+      totalByApoioResource[a.id]=perRes; totalByApoio[a.id]=apoTotal; grandTotalIndireto+=apoTotal;
+    });
     var peakByResource={};
     RECURSOS.forEach(function(r){ var arr=byResource[r.id]||[]; peakByResource[r.id]=arr.reduce(function(m,v){return Math.max(m,v);},0); });
-    return {byResource:byResource,totalByService:totalByService,totalByServiceResource:totalByServiceResource,peakByResource:peakByResource,grandTotal:grandTotal,tw:tw};
+    return {byResource:byResource,byResourceDireto:byResourceDireto,byResourceIndireto:byResourceIndireto,
+      totalByService:totalByService,totalByServiceResource:totalByServiceResource,
+      totalByApoio:totalByApoio,totalByApoioResource:totalByApoioResource,
+      peakByResource:peakByResource,grandTotal:grandTotal+grandTotalIndireto,grandTotalDireto:grandTotal,grandTotalIndireto:grandTotalIndireto,tw:tw};
   }
   function saveRecursoField(ri,inp){
     var r=RECURSOS[ri]; if(!r)return;
@@ -4359,7 +4445,17 @@
       });
       summary.push([s.n,s.eq,'TOTAL DO SERVIÇO','',hist.totalByService[si]||0]);
     });
-    summary.push(['TOTAL GERAL DA OBRA','','','',hist.grandTotal]);
+    if(APOIO.length){
+      APOIO.forEach(function(a){
+        var nome=[a.n1,a.n2,a.n3].filter(Boolean).join(' > ');
+        ((a.cfg&&a.cfg.crew)||[]).forEach(function(item){
+          var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return;
+          summary.push(['[Apoio] '+nome,'',r.n,item.qtyPerTeam,item.qtyPerTeam]);
+        });
+      });
+      summary.push(['TOTAL APOIO ADMINISTRATIVO (INDIRETO)','','','',hist.grandTotalIndireto||0]);
+    }
+    summary.push(['TOTAL GERAL DA OBRA (DIRETO + INDIRETO)','','','',hist.grandTotal]);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(summary),'Equipes tipicas');
     XLSX.writeFile(wb,'histograma-recursos.xlsx');
     toast('Histograma exportado.');
