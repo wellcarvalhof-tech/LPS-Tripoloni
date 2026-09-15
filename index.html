@@ -3990,15 +3990,24 @@
     var header=(aoa[0]||[]).map(function(h){return String(h||'').trim().toLowerCase();});
     // Formato "FuncaoObra" do ERP: só codNatureza + descricao — tudo função, sem categoria/unidade.
     var isFuncaoObra=header.length<=2&&(header.indexOf('descricao')>=0||header.indexOf('descrição')>=0||header.indexOf('codnatureza')>=0);
+    // Formato "Taxonomia" de equipamentos: FAMILIA (categoria, em células mescladas — só a
+    // primeira linha do grupo vem preenchida) + EQUIPAMENTO ("CÓD - Descrição") — tudo
+    // equipamento, sem unidade. Como a célula é mesclada, a família "desce" pras linhas
+    // seguintes até aparecer a próxima.
+    var isTaxonomia=header.length<=2&&(header.indexOf('familia')>=0||header.indexOf('família')>=0)&&header.indexOf('equipamento')>=0;
     var rows=aoa.slice(1);
     var existing={}; RECURSOS.forEach(function(r){existing[(r.n.trim().toLowerCase())+'::'+r.tipo]=true;});
-    var created=0;
+    var created=0, lastFamilia='';
     for(var i=0;i<rows.length;i++){
       var r=rows[i]; if(!r)continue;
       var nome,categoria,tipo,unidade;
       if(isFuncaoObra){
         nome=String(r[1]||'').trim(); if(!nome)continue;
         categoria=''; tipo='funcao'; unidade='un';
+      }else if(isTaxonomia){
+        var fam=String(r[0]||'').trim(); if(fam)lastFamilia=fam;
+        nome=String(r[1]||'').trim(); if(!nome)continue;
+        categoria=lastFamilia; tipo='equipamento'; unidade='un';
       }else{
         nome=String(r[0]||'').trim(); if(!nome)continue;
         categoria=String(r[1]||'').trim();
