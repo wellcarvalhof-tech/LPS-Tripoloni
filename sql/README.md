@@ -15,6 +15,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `09_add_pacote_contratual_lote.sql` | Coluna `lotes.pacote_contratual` (obra com vários contratos/lotes, cronograma integrado mas relatório separado) | ⚠️ novo — rodar |
 | `10_add_estacas.sql` | Estaqueamento por lote (`lote_estacas`, `estaca_quantidades`, `estaca_apontamentos`) — controle de produção por estaca (corte/aterro/CFT/base…), sem mexer no cronograma | ⚠️ novo — rodar |
 | `11_add_apoio_administrativo.sql` | Tabela `apoio_admin` — catálogo de mão de obra/recursos indiretos em 3 níveis (Apoio Administrativo) | ⚠️ novo — rodar |
-| `12_add_apoio_alocacao.sql` | Tabela `apoio_alocacao` — quantidade e período de mobilização de cada item do Apoio Administrativo, no Histograma | ⚠️ novo — rodar |
+| `12_add_apoio_alocacao.sql` | Tabela `apoio_alocacao` (quantidade + período por item) | ❌ substituída pela 13 — não precisa rodar |
+| `13_add_apoio_config.sql` | Coluna `apoio_admin.config` — composição de funções/equipamentos por item (igual à equipe típica de serviço) | ⚠️ novo — rodar |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.

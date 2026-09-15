@@ -609,11 +609,6 @@
     var r=await SB.from('apoio_admin').delete().eq('id',id);
     if(r.error)throw r.error;
   }
-  async function sbUpsertApoioAlocacao(obraId,apoioId,patch){
-    await sbRequireSession();
-    var r=await SB.from('apoio_alocacao').upsert(Object.assign({obra_id:obraId,apoio_id:apoioId},patch),{onConflict:'apoio_id'});
-    if(r.error)throw r.error;
-  }
   async function sbUpsertApontamentoRecurso(obraId,recursoId,dataSemana,quantidade){
     await sbRequireSession();
     var r=await SB.from('apontamento_recursos').upsert({obra_id:obraId,recurso_id:recursoId,data_semana:dataSemana,quantidade:quantidade},{onConflict:'recurso_id,data_semana'});
@@ -658,11 +653,10 @@
       SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId),
       SB.from('cenarios').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('producao_diaria').select('*').eq('obra_id',obraId).order('data',{ascending:false}),
-      SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
-      SB.from('apoio_alocacao').select('*').eq('obra_id',obraId)
+      SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true})
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
-    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[], rec=res[4].data||[], apr=res[5].data||[], cen=res[6].data||[], prod=res[7].data||[], apo=res[8].data||[], apoAloc=res[9].data||[];
+    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[], rec=res[4].data||[], apr=res[5].data||[], cen=res[6].data||[], prod=res[7].data||[], apo=res[8].data||[];
     SERV=svc.map(function(r,i){return {id:r.id,n:r.nome,u:r.unidade||'un',c:PALVARS[i%6],hex:r.cor||'#64748b',eq:r.teams||1,p:String(r.produtividade||0),lag:r.lag_semanas||0,cfg:r.config||{}};});
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
@@ -674,8 +668,7 @@
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
-    APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||''};});
-    APOIO_ALOC={}; apoAloc.forEach(function(r){APOIO_ALOC[r.apoio_id]={qty:Number(r.quantidade)||0,inicio:r.data_inicio||'',fim:r.data_fim||''};});
+    APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; EST_OPEN={};
@@ -861,9 +854,8 @@
   var ESTACA_QTY_DIRTY={}; // {"estacaId::servicoId": quantidade} — pendente de salvar na tela de Quantidades por estaca
   var ESTACA_AVANCO={}; // {loteId: {"estacaId::servicoId": {inicio,fim,prodId}}}
   var RECURSOS=[]; // catálogo de recursos (funções/equipamentos) da obra: {id,n,tipo,u}
-  var APOIO=[]; // Apoio Administrativo — mão de obra/recursos indiretos em 3 níveis: {id,n1,n2,n3}
+  var APOIO=[]; // Apoio Administrativo — mão de obra/recursos indiretos em 3 níveis: {id,n1,n2,n3,cfg:{crew:[{resourceId,qtyPerTeam}]}}
   var APOIO_DIRTY={}, APOIO_SELECTED={};
-  var APOIO_ALOC={}; // {apoioId: {qty,inicio,fim}} — alocação (quantidade + período) de cada item, no Histograma
   var REALIZADO_REC={}; // {"recursoId::data_semana(ISO)": quantidade}
   var CENARIOS=[]; // {id,nome,tipo:'rascunho'|'baseline',revisao,ativo,ovr,ordem,congeladoEm}
   var REC_DIRTY={}; // {ri: true} — recursos com edição pendente
@@ -1307,19 +1299,52 @@
         +addCrewCtl)
     );
 
-    var apoioRows=APOIO.map(function(a){
-      var al=APOIO_ALOC[a.id]||{qty:0,inicio:'',fim:''};
-      return '<tr><td class="note">'+escAttr(a.n1)+'</td><td class="note">'+escAttr(a.n2)+'</td><td>'+escAttr(a.n3)+'</td>'+
-        '<td><input class="einp" type="number" min="0" step="0.5" data-apoioalocqty="'+a.id+'" value="'+(al.qty||'')+'" style="width:80px"></td>'+
-        '<td><input class="einp" type="date" data-apoioalocstart="'+a.id+'" value="'+escAttr(al.inicio)+'"></td>'+
-        '<td><input class="einp" type="date" data-apoioalocend="'+a.id+'" value="'+escAttr(al.fim)+'"></td></tr>';
+    // Mesma lógica da "Equipe típica do serviço" acima, só que selecionando um item de Nível 3
+    // do Apoio Administrativo em vez de um serviço — pra cada item, monta a composição de
+    // funções/equipamentos igual se faz pra equipe de um serviço.
+    var apoSel=window._histApoioSel==null?(APOIO.length?0:null):window._histApoioSel;
+    if(apoSel!=null&&apoSel>=APOIO.length)apoSel=APOIO.length?0:null;
+    var apo=apoSel!=null?APOIO[apoSel]:null;
+    var apoCrew=apo?((apo.cfg&&apo.cfg.crew)||[]):[];
+    var apoCrewRows=apoCrew.map(function(item){
+      var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return '';
+      return '<tr><td>'+r.n+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
+        '<td><input class="einp" type="number" step="0.5" min="0" data-apoiocrewres="'+r.id+'" value="'+(item.qtyPerTeam||0)+'" style="width:80px"></td>'+
+        '<td><button class="iconbtn" data-apoiocrewdel="'+r.id+'">✕</button></td></tr>';
     }).join('');
-    var apoioTotalQty=APOIO.reduce(function(t,a){return t+((APOIO_ALOC[a.id]&&APOIO_ALOC[a.id].qty)||0);},0);
-    var apoioAloc=sectionCard('apoioaloc','Alocação de Apoio Administrativo',
-      'Mão de obra e recursos indiretos (gerência, QSMS, engenharia, produção, unidade industrial...) — quantidade e período de mobilização de cada item cadastrado.'+(apoioTotalQty?' Total alocado: '+fmtBR(apoioTotalQty)+'.':''),
+    var apoCrewOptionsFuncao=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!apoCrew.some(function(c){return c.resourceId===r.id;});})
+      .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+    var apoCrewOptionsEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!apoCrew.some(function(c){return c.resourceId===r.id;});})
+      .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+    var apoioSelHtml='<select class="esel" id="histApoioSel">'+APOIO.map(function(a,ai){
+      var label=[a.n1,a.n2,a.n3].filter(Boolean).join(' > ');
+      return '<option value="'+ai+'"'+(ai===apoSel?' selected':'')+'>'+escAttr(label)+'</option>';
+    }).join('')+'</select>';
+    var addApoioCrewCtl=(apo&&RECURSOS.length)?(
+      '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+          '<span class="note" style="margin:0;font-weight:600;min-width:82px">+ Função</span>'+
+          '<input class="einp" id="apoioCrewAddInputFuncao" list="apoioCrewDatalistFuncao" placeholder="Buscar função..." style="width:200px">'+
+          '<datalist id="apoioCrewDatalistFuncao">'+apoCrewOptionsFuncao+'</datalist>'+
+          '<input class="einp" id="apoioCrewAddQtyFuncao" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Quantidade">'+
+          '<button class="btn primary" id="apoioCrewAddBtnFuncao">+ Adicionar</button>'+
+        '</div>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+          '<span class="note" style="margin:0;font-weight:600;min-width:104px">+ Equipamento</span>'+
+          '<input class="einp" id="apoioCrewAddInputEquip" list="apoioCrewDatalistEquip" placeholder="Buscar equipamento..." style="width:200px">'+
+          '<datalist id="apoioCrewDatalistEquip">'+apoCrewOptionsEquip+'</datalist>'+
+          '<input class="einp" id="apoioCrewAddQtyEquip" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Quantidade">'+
+          '<button class="btn primary" id="apoioCrewAddBtnEquip">+ Adicionar</button>'+
+        '</div>'+
+      '</div>'
+    ):'';
+    var apoioAloc=sectionCard('apoioaloc','Alocação de Apoio Administrativo',null,
       '<button class="btn" id="gotoApoio">Cadastrar itens →</button>',
-      APOIO.length?('<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Nível 1</th><th>Nível 2</th><th>Nível 3</th><th class="r">Quantidade</th><th>Início</th><th>Fim</th></tr></thead><tbody>'+apoioRows+'</tbody></table></div>')
-        :'<div class="note">Nenhum item cadastrado ainda em Apoio Administrativo. Clique em "Cadastrar itens" pra adicionar (manualmente ou importando uma planilha).</div>'
+      (!APOIO.length?'<div class="note">Nenhum item cadastrado ainda em Apoio Administrativo. Clique em "Cadastrar itens" pra adicionar (manualmente ou importando uma planilha).</div>':
+        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+apoioSelHtml+'</div>'+
+        (!apoCrew.length?'<div class="note">Nenhum recurso alocado neste item ainda. Busque abaixo pra adicionar.</div>':
+          '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Quantidade</th><th></th></tr></thead><tbody>'+apoCrewRows+'</tbody></table></div>')
+        +addApoioCrewCtl)
     );
 
     var totRows=SERV.map(function(s,si){
@@ -1651,7 +1676,7 @@
     try{
       for(var i=0;i<idxs.length;i++){
         var a=APOIO[idxs[i]]; if(!a||!a.id)continue;
-        await sbUpdateApoio(a.id,{nivel1:a.n1,nivel2:a.n2||null,nivel3:a.n3});
+        await sbUpdateApoio(a.id,{nivel1:a.n1,nivel2:a.n2||null,nivel3:a.n3,config:a.cfg||{}});
       }
       APOIO_DIRTY={};
       go('cad-apoio'); toast('Apoio administrativo salvo.');
@@ -1661,7 +1686,7 @@
     if(!selectedObra)return;
     try{
       var id=await sbCreateApoio(selectedObra.id,{nivel1:'',nivel2:'',nivel3:'Novo item',ordem:APOIO.length});
-      APOIO.push({id:id,n1:'',n2:'',n3:'Novo item'});
+      APOIO.push({id:id,n1:'',n2:'',n3:'Novo item',cfg:{}});
       go('cad-apoio'); toast('Item adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
@@ -1731,26 +1756,22 @@
       var key=n1.toLowerCase()+'::'+n2.toLowerCase()+'::'+n3.toLowerCase();
       if(existing[key])continue;
       var id=await sbCreateApoio(selectedObra.id,{nivel1:n1,nivel2:n2||null,nivel3:n3,ordem:APOIO.length});
-      APOIO.push({id:id,n1:n1,n2:n2,n3:n3});
+      APOIO.push({id:id,n1:n1,n2:n2,n3:n3,cfg:{}});
       existing[key]=true; created++;
     }
     go('cad-apoio');
     toast(created+' item(ns) importado(s).');
   }
-  /** Salva a alocação (quantidade/início/fim) de um item de Apoio Administrativo — grava direto
-   * no Supabase a cada mudança (como o calendário/avanço por estaca), sem depender do botão
-   * "Salvar alterações" de outra tela. */
-  async function saveApoioAloc(apoioId,field,val){
-    if(!selectedObra)return;
-    var cur=Object.assign({qty:0,inicio:'',fim:''},APOIO_ALOC[apoioId]);
-    if(field==='qty')cur.qty=Math.max(0,parseFloat(val)||0);
-    else if(field==='inicio')cur.inicio=val||'';
-    else if(field==='fim')cur.fim=val||'';
-    try{
-      await sbUpsertApoioAlocacao(selectedObra.id,apoioId,{quantidade:cur.qty,data_inicio:cur.inicio||null,data_fim:cur.fim||null});
-      APOIO_ALOC[apoioId]=cur;
-      go('cr-hist');
-    }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+  /** Composição de função/equipamento de um item de Apoio Administrativo — mesma lógica de
+   * saveCrewQty() (equipe típica do serviço), só que gravando em APOIO[ai].cfg.crew em vez de
+   * SERV[si].cfg.crew. Fica pendente em APOIO_DIRTY até "Salvar alterações". */
+  function saveApoioCrewQty(ai,resourceId,qty){
+    var a=APOIO[ai]; if(!a)return;
+    var crew=((a.cfg&&a.cfg.crew)||[]).filter(function(c){return c.resourceId!==resourceId;});
+    if(qty>0)crew.push({resourceId:resourceId,qtyPerTeam:qty});
+    a.cfg=Object.assign({},a.cfg,{crew:crew});
+    APOIO_DIRTY[ai]=true;
+    go('cr-hist');
   }
   var CAL_DIRTY=false; // true quando obra/calendário tem edição pendente de salvar
   function saveObraSimpleField(field,val){
@@ -2960,15 +2981,39 @@
       if(impEquipes)impEquipes.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importEquipesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       var gotoApoio=document.getElementById('gotoApoio');
       if(gotoApoio)gotoApoio.addEventListener('click',function(){go('cad-apoio');});
-      document.querySelectorAll('[data-apoioalocqty]').forEach(function(inp){
-        inp.addEventListener('change',function(){saveApoioAloc(inp.getAttribute('data-apoioalocqty'),'qty',inp.value);});
+      var apoioSelEl=document.getElementById('histApoioSel');
+      if(apoioSelEl)apoioSelEl.addEventListener('change',function(){window._histApoioSel=+apoioSelEl.value; go('cr-hist');});
+      document.querySelectorAll('[data-apoiocrewres]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var apoSel=window._histApoioSel==null?(APOIO.length?0:null):window._histApoioSel;
+          if(apoSel==null)return;
+          saveApoioCrewQty(apoSel,inp.getAttribute('data-apoiocrewres'),Math.max(0,parseFloat(inp.value)||0));
+        });
       });
-      document.querySelectorAll('[data-apoioalocstart]').forEach(function(inp){
-        inp.addEventListener('change',function(){saveApoioAloc(inp.getAttribute('data-apoioalocstart'),'inicio',inp.value);});
+      document.querySelectorAll('[data-apoiocrewdel]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var apoSel=window._histApoioSel==null?(APOIO.length?0:null):window._histApoioSel;
+          if(apoSel==null)return;
+          saveApoioCrewQty(apoSel,b.getAttribute('data-apoiocrewdel'),0);
+        });
       });
-      document.querySelectorAll('[data-apoioalocend]').forEach(function(inp){
-        inp.addEventListener('change',function(){saveApoioAloc(inp.getAttribute('data-apoioalocend'),'fim',inp.value);});
-      });
+      function wireApoioCrewAdd(tipo,inputId,qtyId,btnId){
+        var btn=document.getElementById(btnId);
+        if(btn)btn.addEventListener('click',function(){
+          var apoSel=window._histApoioSel==null?(APOIO.length?0:null):window._histApoioSel;
+          if(apoSel==null)return;
+          var inp=document.getElementById(inputId), qtyInp=document.getElementById(qtyId);
+          var name=(inp.value||'').trim(); if(!name)return;
+          var r=RECURSOS.filter(function(x){return x.tipo===tipo&&x.n.trim().toLowerCase()===name.toLowerCase();})[0];
+          if(!r){alert((tipo==='funcao'?'Função':'Equipamento')+' não encontrado(a). Selecione um item da lista de sugestões.');return;}
+          var qty=Math.max(0.01,parseFloat(qtyInp.value)||1);
+          saveApoioCrewQty(apoSel,r.id,qty);
+        });
+        var inp=document.getElementById(inputId);
+        if(inp)inp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();if(btn)btn.click();}});
+      }
+      wireApoioCrewAdd('funcao','apoioCrewAddInputFuncao','apoioCrewAddQtyFuncao','apoioCrewAddBtnFuncao');
+      wireApoioCrewAdd('equipamento','apoioCrewAddInputEquip','apoioCrewAddQtyEquip','apoioCrewAddBtnEquip');
       document.querySelectorAll('[data-histfilter]').forEach(function(b){
         b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
       });
