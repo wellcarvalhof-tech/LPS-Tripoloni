@@ -485,6 +485,16 @@
     var r=await SB.from('lotes').update(patch).eq('id',id);
     if(r.error)throw r.error;
   }
+  /** Atualiza a "ordem" de vários lotes numa chamada só (upsert só na coluna ordem, por id) —
+   * em vez de uma requisição sequencial por lote. Reordenar um lote arrastando desloca a ordem
+   * de todos os lotes entre a posição de origem e a de destino; com dezenas/centenas de lotes,
+   * atualizar um por um (esperando cada resposta) parecia travar o app por dezenas de segundos. */
+  async function sbReorderLotes(items){
+    if(!items.length)return;
+    await sbRequireSession();
+    var r=await SB.from('lotes').upsert(items.map(function(it){return {id:it.id,ordem:it.ordem};}),{onConflict:'id'});
+    if(r.error)throw r.error;
+  }
   async function sbDeleteLote(id){
     await sbRequireSession();
     var r=await SB.from('lotes').delete().eq('id',id);
@@ -1500,7 +1510,9 @@
     if(movedId==null)return;
     names.splice(toLi,0,movedName); lotIds.splice(toLi,0,movedId); qtyRows.splice(toLi,0,movedQty); pacotes.splice(toLi,0,movedPac); comprs.splice(toLi,0,movedCompr); espacs.splice(toLi,0,movedEspac);
     try{
-      for(var i=0;i<lotIds.length;i++){ if(lotIds[i]!==origIds[i])await sbUpdateLote(lotIds[i],{ordem:i+1}); }
+      var changed=[];
+      for(var i=0;i<lotIds.length;i++){ if(lotIds[i]!==origIds[i])changed.push({id:lotIds[i],ordem:i+1}); }
+      await sbReorderLotes(changed);
       LOTS=names; window._LOTIDS=lotIds; QTY=qtyRows; LOTE_PACOTE=pacotes; LOTE_COMPR=comprs; LOTE_ESPAC=espacs; LOT_SELECTED={};
       toast('Lote reordenado.');
       (onDone||function(){go('cad-lotes');})();
