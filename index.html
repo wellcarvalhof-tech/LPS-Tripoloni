@@ -1235,7 +1235,9 @@
       '</div>'
     ):'';
     var equipe=sectionCard('equipe','Equipe típica do serviço',null,
-      null,
+      '<button class="btn" id="histModeloEquipes">Modelo equipes</button>'+
+      '<button class="btn" id="histImportarEquipes">↥ Importar equipes</button>'+
+      '<button class="btn" id="histExportarEquipes">↧ Exportar equipes</button>',
       (SERV.length?'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+equipeSel+
         (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+'</div>':'')+
       (!svc?'<div class="note">Cadastre um serviço pra montar a equipe típica.</div>':
@@ -2733,6 +2735,12 @@
       }
       wireCrewAdd('funcao','crewAddInputFuncao','crewAddQtyFuncao','crewAddBtnFuncao');
       wireCrewAdd('equipamento','crewAddInputEquip','crewAddQtyEquip','crewAddBtnEquip');
+      var modeloEquipes=document.getElementById('histModeloEquipes');
+      if(modeloEquipes)modeloEquipes.addEventListener('click',downloadEquipesModelo);
+      var expEquipes=document.getElementById('histExportarEquipes');
+      if(expEquipes)expEquipes.addEventListener('click',exportEquipesWorkbook);
+      var impEquipes=document.getElementById('histImportarEquipes');
+      if(impEquipes)impEquipes.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importEquipesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       document.querySelectorAll('[data-histfilter]').forEach(function(b){
         b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
       });
@@ -4082,6 +4090,73 @@
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(summary),'Equipes tipicas');
     XLSX.writeFile(wb,'histograma-recursos.xlsx');
     toast('Histograma exportado.');
+  }
+  /** Modelo/exportação/importação da composição de equipe (função+qtd, equipamento+qtd) por
+   * serviço, em formato longo (uma linha por recurso) — mais fácil de editar em massa e
+   * reimportar do que a matriz "Equipe típica" célula a célula. */
+  var EQUIPES_HEADER=['Servico','Tipo','Recurso','Quantidade por equipe'];
+  function downloadEquipesModelo(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var wb=XLSX.utils.book_new();
+    var svcNome=SERV.length?SERV[0].n:'Corte';
+    var rows=[EQUIPES_HEADER,[svcNome,'Função','Encarregado',1],[svcNome,'Função','Servente',4],[svcNome,'Equipamento','Escavadeira hidráulica',1]];
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Equipes');
+    XLSX.writeFile(wb,'modelo-equipes.xlsx');
+    toast('Modelo exportado.');
+  }
+  function exportEquipesWorkbook(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var wb=XLSX.utils.book_new();
+    var rows=[EQUIPES_HEADER];
+    SERV.forEach(function(s){
+      ((s.cfg&&s.cfg.crew)||[]).forEach(function(item){
+        var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return;
+        rows.push([s.n,r.tipo==='funcao'?'Função':'Equipamento',r.n,item.qtyPerTeam]);
+      });
+    });
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Equipes');
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    XLSX.writeFile(wb,nome+'_equipes.xlsx');
+    toast('Equipes exportadas.');
+  }
+  async function importEquipesWorkbook(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    var ws=wb.Sheets['Equipes']||wb.Sheets[wb.SheetNames[0]];
+    if(!ws){alert('Planilha vazia.');return;}
+    var aoa=sheetRows(ws);
+    if(aoa.length<2){alert('Planilha vazia.');return;}
+    if(!confirm('Importar essa planilha de equipes? Para cada serviço mencionado na planilha, a composição da equipe é SUBSTITUÍDA pela da planilha (serviços não mencionados na planilha não são tocados). Funções/equipamentos citados que ainda não existem no catálogo são criados automaticamente.'))return;
+    var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+    var recByKey={}; RECURSOS.forEach(function(r){recByKey[r.tipo+'::'+r.n.trim().toLowerCase()]=r;});
+    var rows=aoa.slice(1).filter(function(r){return r&&r[0]!=null&&r[0]!==''&&r[2]!=null&&r[2]!=='';});
+    var touchedSi={}, createdRec=0, appliedRows=0, skippedSvc={};
+    for(var i=0;i<rows.length;i++){
+      var row=rows[i];
+      var svcName=String(row[0]).trim();
+      var si=svcIdxByName[svcName.toLowerCase()];
+      if(si==null){ skippedSvc[svcName]=true; continue; }
+      var tipoRaw=String(row[1]||'').trim().toLowerCase();
+      var tipo=tipoRaw.indexOf('eq')===0?'equipamento':'funcao';
+      var recName=String(row[2]).trim(); if(!recName)continue;
+      var qty=Math.max(0,+row[3]||0); if(qty<=0)continue;
+      var r=recByKey[tipo+'::'+recName.toLowerCase()];
+      if(!r){
+        var id=await sbCreateRecurso(selectedObra.id,{nome:recName,tipo:tipo,unidade:'un',categoria:null,ordem:RECURSOS.length});
+        r={id:id,n:recName,tipo:tipo,u:'un',cat:''};
+        RECURSOS.push(r); recByKey[tipo+'::'+recName.toLowerCase()]=r;
+        createdRec++;
+      }
+      var s=SERV[si];
+      if(!touchedSi[si]){ s.cfg=Object.assign({},s.cfg,{crew:[]}); touchedSi[si]=true; }
+      var crew=s.cfg.crew.filter(function(c){return c.resourceId!==r.id;});
+      crew.push({resourceId:r.id,qtyPerTeam:qty});
+      s.cfg=Object.assign({},s.cfg,{crew:crew});
+      SVC_DIRTY[si]=true;
+      appliedRows++;
+    }
+    var skippedList=Object.keys(skippedSvc);
+    go('cr-hist');
+    toast('Importado: '+appliedRows+' item(ns) de equipe em '+Object.keys(touchedSi).length+' serviço(s)'+(createdRec?', '+createdRec+' recurso(s) novo(s)':'')+'.'+(skippedList.length?' Serviço(s) não encontrado(s): '+skippedList.join(', ')+'.':'')+' Clique em "Salvar alterações" pra confirmar.');
   }
   async function importRealizadoWorkbook(wb){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
