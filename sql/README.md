@@ -14,5 +14,6 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `08_add_producao_diaria.sql` | Confirma colunas usadas em `producao_diaria` (tabela já existia desde o `01`) | ⚠️ rodar (seguro repetir) |
 | `09_add_pacote_contratual_lote.sql` | Coluna `lotes.pacote_contratual` (obra com vários contratos/lotes, cronograma integrado mas relatório separado) | ⚠️ novo — rodar |
 | `10_add_estacas.sql` | Estaqueamento por lote (`lote_estacas`, `estaca_quantidades`, `estaca_apontamentos`) — controle de produção por estaca (corte/aterro/CFT/base…), sem mexer no cronograma | ⚠️ novo — rodar |
+| `11_add_apoio_administrativo.sql` | Tabela `apoio_admin` — catálogo de mão de obra/recursos indiretos em 3 níveis (Apoio Administrativo) | ⚠️ novo — rodar |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.
