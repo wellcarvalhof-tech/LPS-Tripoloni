@@ -1633,8 +1633,8 @@
     var boost='<span class="ed-team"><em>Equipe:</em>'+teamSel+'<em>A partir do lote:</em>'+lotSel+'<em>Nova prod.:</em>'+tinp(pnum(s.p),'82px','number')+'<em>'+s.u+'/sem</em><button class="iconbtn">✕</button></span>';
     var cfg=s.cfg||{};
     var queueOn=!!cfg.pullFromQueue;
-    var minStartVal=cfg.minStartWeek>0?cfg.minStartWeek:'';
-    var targetVal=cfg.targetEndWeek>0?cfg.targetEndWeek:'';
+    var minStartVal=cfg.minStartWeek>0?isoWeek(mondayOf(cfg.minStartWeek)):'';
+    var targetVal=cfg.targetEndWeek>0?isoWeek(mondayOf(cfg.targetEndWeek)):'';
     var targetInfo='';
     if(cfg.targetEndWeek>0){
       var svcSegs=buildSchedule().filter(function(sg){return sg.si===si;});
@@ -1651,8 +1651,8 @@
         '<label><input type="checkbox" data-cfgbool="parallelWithPredecessor" data-si="'+si+'"'+(cfg.parallelWithPredecessor?' checked':'')+'>Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
         '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
         '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua — evita equipe ociosa; chuva ainda reduz produção)</label>'+
-        '<label>Semana de início: <input class="einp" type="number" data-cfgnum="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:70px"> <span style="color:var(--muted)">(não inicia antes desta semana)</span></label>'+
-        '<label>Semana alvo de término: <input class="einp" type="number" data-cfgnum="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:70px"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
+        '<label>Semana do ano de início: <input class="einp" type="number" data-cfgcalweek="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:70px"> <span style="color:var(--muted)">(não inicia antes desta semana, ex.: 37 = S37)</span></label>'+
+        '<label>Semana do ano alvo de término: <input class="einp" type="number" data-cfgcalweek="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:70px"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
       '</div>'+
       (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
       targetInfo;
@@ -2513,10 +2513,12 @@
       document.querySelectorAll('[data-cfgbool]').forEach(function(cb){
         cb.addEventListener('change',function(){saveSvcCfgField(+cb.getAttribute('data-si'),cb.getAttribute('data-cfgbool'),cb.checked);});
       });
-      document.querySelectorAll('[data-cfgnum]').forEach(function(inp){
+      document.querySelectorAll('[data-cfgcalweek]').forEach(function(inp){
         inp.addEventListener('change',function(){
-          var v=inp.value===''?null:Math.max(1,parseInt(inp.value,10)||0);
-          saveSvcCfgField(+inp.getAttribute('data-si'),inp.getAttribute('data-cfgnum'),v);
+          var calWeek=inp.value===''?null:Math.max(1,parseInt(inp.value,10)||0);
+          var projWeek=calWeek?projWeekForCalWeek(calWeek):null;
+          if(calWeek&&!projWeek){alert('Semana do ano inválida.');inp.value='';return;}
+          saveSvcCfgField(+inp.getAttribute('data-si'),inp.getAttribute('data-cfgcalweek'),projWeek);
         });
       });
       var addB=document.getElementById('addServico');
@@ -3088,6 +3090,15 @@
   }
   function fmtDate(d){var p=function(n){return (n<10?'0':'')+n;};return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear();}
   function isoWeek(d){var t=new Date(d.getTime());t.setHours(0,0,0,0);t.setDate(t.getDate()+3-((t.getDay()+6)%7));var w1=new Date(t.getFullYear(),0,4);return 1+Math.round(((t-w1)/864e5-3+((w1.getDay()+6)%7))/7);}
+  /** Converte uma semana do calendário (ex.: "37", igual ao "S37" mostrado na matriz) pra semana
+   * do projeto (1 = primeira semana do cronograma) — procura a primeira semana do projeto cujo
+   * S-do-ano bate com a informada. Usado pra campos como "Semana de início"/"Semana alvo de
+   * término", que o usuário pensa em semana do calendário, não em semana relativa do projeto. */
+  function projWeekForCalWeek(calWeek){
+    if(!(calWeek>0))return 0;
+    for(var w=1;w<=520;w++){ if(isoWeek(mondayOf(w))===calWeek)return w; }
+    return 0;
+  }
 
   /* ---- Quantidades por lote × serviço (saldo) e restrições exemplo ---- */
   var QTY=[
