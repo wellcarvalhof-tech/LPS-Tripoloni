@@ -4483,6 +4483,12 @@
     if(_drag&&_drag.hlCol)_drag.hlCol.classList.remove('tcm-dropcol');
   }
   function wireDragMatrix(){
+    // O cronograma não muda entre o clique (pointerdown) e o soltar (pointerup) dentro do
+    // mesmo arraste — só depois, ao soltar de fato. Calcula uma vez por render e reaproveita
+    // nos dois lugares, em vez de recalcular o cronograma inteiro a cada clique/soltar (ficava
+    // lento/travava em obras com muitos lotes, já que o cálculo é recalculado do zero).
+    var _wdmSegs=null;
+    function wdmSchedule(){ if(!_wdmSegs)_wdmSegs=buildSchedule(); return _wdmSegs; }
     document.querySelectorAll('th[data-lotcol]').forEach(function(th){
       th.addEventListener('dragstart',function(e){ window._lotDragSrc=+th.getAttribute('data-lotcol'); try{e.dataTransfer.effectAllowed='move';}catch(err){} th.style.opacity='.5'; });
       th.addEventListener('dragend',function(){ th.style.opacity=''; });
@@ -4500,7 +4506,7 @@
         e.preventDefault();
         try{el.setPointerCapture(e.pointerId);}catch(err){}
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
-        var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
+        var seg=wdmSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
         if(!seg)return;
         var r=el.getBoundingClientRect();
         _ghost=document.createElement('div');
@@ -4542,7 +4548,7 @@
         if(d.currentLi!==d.li){
           var kDst=ovrKey(d.currentLi,si);
           if(kOrig&&kDst){
-            var segs=buildSchedule();
+            var segs=wdmSchedule();
             var srcSeg=segs.filter(function(sg){return sg.li===d.li&&sg.si===si;})[0];
             var dstSeg=segs.filter(function(sg){return sg.li===d.currentLi&&sg.si===si;})[0];
             if(srcSeg&&dstSeg&&srcSeg.team!==dstSeg.team){
