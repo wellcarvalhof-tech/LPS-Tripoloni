@@ -4500,7 +4500,7 @@
   // Ghost solto (position:fixed) que "salta" pra célula alvo — o .tcm-seg
   // original nunca sai do DOM (só fica esmaecido), então o pointer capture
   // nunca se perde, mesmo re-renderizando a matriz depois de soltar.
-  var _drag=null, _ghost=null;
+  var _drag=null, _ghost=null, _seqDrag=null;
   function dragCleanup(){
     if(_drag&&_drag.el){_drag.el.style.opacity='';}
     if(_ghost){_ghost.remove();_ghost=null;}
@@ -4720,7 +4720,7 @@
     seqItems.sort(function(a,b){return a.seq-b.seq;});
     var seqRows=seqItems.map(function(item,idx){
       var others=lotTeams(item.li).filter(function(t){return t!==team;});
-      return '<div class="seqrow" draggable="true" data-seqli="'+item.li+'" style="cursor:grab" title="Arraste pra reordenar"><span style="opacity:.4;font-weight:700">⋮</span><span class="seqnum">'+(idx+1)+'</span><span class="seqname">'+LOTS[item.li]+(others.length?' <span style="font-size:10px;color:var(--muted)">(dividido c/ eq.'+others.join(', ')+')</span>':'')+'</span>'+
+      return '<div class="seqrow" data-seqli="'+item.li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"><span style="opacity:.4;font-weight:700">⋮</span><span class="seqnum">'+(idx+1)+'</span><span class="seqname">'+LOTS[item.li]+(others.length?' <span style="font-size:10px;color:var(--muted)">(dividido c/ eq.'+others.join(', ')+')</span>':'')+'</span>'+
         '<span class="seqbtns"><button class="iconbtn" data-squp="'+item.li+'" title="Executar antes"'+(idx===0?' disabled':'')+'>↑</button>'+
         '<button class="iconbtn" data-sqdn="'+item.li+'" title="Executar depois"'+(idx===seqItems.length-1?' disabled':'')+'>↓</button></span></div>';
     }).join('');
@@ -4785,20 +4785,46 @@
       ADJ_DIRTY=true;
       renderCrono();
     }
+    // Arraste por pointer events (não drag-and-drop nativo do navegador) — mesmo mecanismo já
+    // usado nos blocos da matriz Tempo-Caminho. O DnD nativo (draggable="true") depende do
+    // navegador reconhecer o gesto de arrastar, e em alguns contextos (ex. touchpad, ou o
+    // elemento estar dentro de containers com scroll/transform) ele simplesmente não inicia — o
+    // item fica "parado" sem erro nenhum. Pointer events funcionam de forma confiável em
+    // qualquer caso, porque o app controla o gesto inteiro (não depende do navegador iniciar
+    // um drag nativo).
     p.querySelectorAll('.seqrow[data-seqli]').forEach(function(row){
-      row.addEventListener('dragstart',function(e){
-        window._seqDragSrc=+row.getAttribute('data-seqli');
-        try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','');}catch(err){}
+      row.addEventListener('pointerdown',function(e){
+        e.preventDefault();
+        try{row.setPointerCapture(e.pointerId);}catch(err){}
+        _seqDrag={li:+row.getAttribute('data-seqli'),el:row,overEl:null,lastX:e.clientX,lastY:e.clientY,rafPending:false};
         row.style.opacity='.5';
       });
-      row.addEventListener('dragend',function(){ row.style.opacity=''; });
-      row.addEventListener('dragover',function(e){ e.preventDefault(); row.style.outline='2px dashed var(--accent)'; });
-      row.addEventListener('dragleave',function(){ row.style.outline=''; });
-      row.addEventListener('drop',function(e){
-        e.preventDefault(); row.style.outline='';
-        var src=window._seqDragSrc; window._seqDragSrc=null;
-        var target=+row.getAttribute('data-seqli');
-        if(src!=null)reorderSeqTo(src,target);
+      row.addEventListener('pointermove',function(e){
+        if(!_seqDrag||_seqDrag.el!==row)return;
+        _seqDrag.lastX=e.clientX; _seqDrag.lastY=e.clientY;
+        if(_seqDrag.rafPending)return;
+        _seqDrag.rafPending=true;
+        requestAnimationFrame(function(){
+          if(!_seqDrag||_seqDrag.el!==row)return;
+          _seqDrag.rafPending=false;
+          var elAt=document.elementFromPoint(_seqDrag.lastX,_seqDrag.lastY);
+          var over=elAt&&elAt.closest('.seqrow[data-seqli]');
+          if(_seqDrag.overEl&&_seqDrag.overEl!==over)_seqDrag.overEl.style.outline='';
+          if(over&&over!==row){ over.style.outline='2px dashed var(--accent)'; _seqDrag.overEl=over; }
+          else { _seqDrag.overEl=null; }
+        });
+      });
+      row.addEventListener('pointerup',function(e){
+        if(!_seqDrag||_seqDrag.el!==row)return;
+        try{row.releasePointerCapture(e.pointerId);}catch(err){}
+        var d=_seqDrag; _seqDrag=null;
+        row.style.opacity=''; if(d.overEl)d.overEl.style.outline='';
+        if(d.overEl){ var target=+d.overEl.getAttribute('data-seqli'); reorderSeqTo(d.li,target); }
+      });
+      row.addEventListener('pointercancel',function(){
+        if(!_seqDrag||_seqDrag.el!==row)return;
+        row.style.opacity=''; if(_seqDrag.overEl)_seqDrag.overEl.style.outline='';
+        _seqDrag=null;
       });
     });
     p.querySelectorAll('[data-squp]').forEach(function(b){b.addEventListener('click',function(){moveSeq(+b.getAttribute('data-squp'),-1);});});
