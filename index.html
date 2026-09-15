@@ -945,8 +945,8 @@
     var th='<th style="width:26px"><input type="checkbox" id="selAllLotes"'+(LOTS.length&&Object.keys(LOT_SELECTED).length===LOTS.length?' checked':'')+'></th><th>#</th><th>Nome</th><th>Pacote contratual</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
     var rows=LOTS.map(function(l,li){
       var qcells=SERV.map(function(s,si){return '<td><input class="einp" data-qty-si="'+si+'" type="number" style="width:96px" value="'+(QTY[li][si]||0)+'"></td>';}).join('');
-      return '<tr data-li="'+li+'" draggable="true"><td><input type="checkbox" data-selrow="'+li+'"'+(LOT_SELECTED[li]?' checked':'')+'></td>'+
-        '<td><div style="display:flex;align-items:center;gap:4px;cursor:grab" title="Arraste pra reordenar"><span style="opacity:.4">⠿</span><span style="width:18px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
+      return '<tr data-li="'+li+'"><td><input type="checkbox" data-selrow="'+li+'"'+(LOT_SELECTED[li]?' checked':'')+'></td>'+
+        '<td><div style="display:flex;align-items:center;gap:4px"><span data-lotgrip="'+li+'" style="opacity:.4;cursor:grab;touch-action:none" title="Arraste pra reordenar">⠿</span><span style="width:18px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
         '<button class="iconbtn" data-up="'+li+'" title="subir"'+(li===0?' disabled':'')+'>↑</button><button class="iconbtn" data-down="'+li+'" title="descer"'+(li===LOTS.length-1?' disabled':'')+'>↓</button></div></td>'+
         '<td><input class="einp" data-lotenome style="width:150px" value="'+escAttr(l)+'"></td>'+
         '<td><input class="einp" data-lotepacote list="pacoteOpts" style="width:130px" placeholder="ex.: Lote 1" value="'+escAttr(LOTE_PACOTE[li]||'')+'"></td>'+
@@ -2558,14 +2558,43 @@
         if(down)down.addEventListener('click',function(){moveLote(li,1);});
         var sel=tr.querySelector('[data-selrow]');
         if(sel)sel.addEventListener('change',function(){ if(sel.checked)LOT_SELECTED[li]=true; else delete LOT_SELECTED[li]; go('cad-lotes'); });
-        tr.addEventListener('dragstart',function(e){ window._lotDragSrc=li; tr.style.opacity='.5'; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(li));}catch(err){} });
-        tr.addEventListener('dragend',function(){ tr.style.opacity=''; });
-        tr.addEventListener('dragover',function(e){ e.preventDefault(); tr.style.background='var(--elev)'; });
-        tr.addEventListener('dragleave',function(){ tr.style.background=''; });
-        tr.addEventListener('drop',function(e){
-          e.preventDefault(); tr.style.background='';
-          var src=window._lotDragSrc; window._lotDragSrc=null;
-          if(src!=null)reorderLote(src,li);
+        // Pointer events em vez de drag-and-drop nativo (o DnD nativo pode simplesmente não
+        // iniciar em certos contextos, sem erro — deixa a linha "presa"). O arraste começa só
+        // pelo ⠿ (data-lotgrip), não pela linha inteira, senão clicar num checkbox/input/botão
+        // dentro dela dispararia um "arraste" em vez do clique normal.
+        var grip=tr.querySelector('[data-lotgrip]');
+        if(grip)grip.addEventListener('pointerdown',function(e){
+          e.preventDefault();
+          try{grip.setPointerCapture(e.pointerId);}catch(err){}
+          _lotRowDrag={li:li,el:grip,overEl:null,lastX:e.clientX,lastY:e.clientY,rafPending:false};
+          tr.style.opacity='.5';
+        });
+        if(grip)grip.addEventListener('pointermove',function(e){
+          if(!_lotRowDrag||_lotRowDrag.el!==grip)return;
+          _lotRowDrag.lastX=e.clientX; _lotRowDrag.lastY=e.clientY;
+          if(_lotRowDrag.rafPending)return;
+          _lotRowDrag.rafPending=true;
+          requestAnimationFrame(function(){
+            if(!_lotRowDrag||_lotRowDrag.el!==grip)return;
+            _lotRowDrag.rafPending=false;
+            var elAt=document.elementFromPoint(_lotRowDrag.lastX,_lotRowDrag.lastY);
+            var over=elAt&&elAt.closest('tr[data-li]');
+            if(_lotRowDrag.overEl&&_lotRowDrag.overEl!==over)_lotRowDrag.overEl.style.background='';
+            if(over&&over!==tr){ over.style.background='var(--elev)'; _lotRowDrag.overEl=over; }
+            else { _lotRowDrag.overEl=null; }
+          });
+        });
+        if(grip)grip.addEventListener('pointerup',function(e){
+          if(!_lotRowDrag||_lotRowDrag.el!==grip)return;
+          try{grip.releasePointerCapture(e.pointerId);}catch(err){}
+          var d=_lotRowDrag; _lotRowDrag=null;
+          tr.style.opacity=''; if(d.overEl)d.overEl.style.background='';
+          if(d.overEl){ var target=+d.overEl.getAttribute('data-li'); reorderLote(d.li,target); }
+        });
+        if(grip)grip.addEventListener('pointercancel',function(){
+          if(!_lotRowDrag||_lotRowDrag.el!==grip)return;
+          tr.style.opacity=''; if(_lotRowDrag.overEl)_lotRowDrag.overEl.style.background='';
+          _lotRowDrag=null;
         });
       });
       var selAll=document.getElementById('selAllLotes');
@@ -4327,7 +4356,7 @@
         (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i],isStart:i===0,isEnd:i===sg.dur-1,w:w});}
     });
     var canDragCols=(window._cronoTab==='ajuste');
-    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l,li){return '<th class="lot"'+(canDragCols?' draggable="true" data-lotcol="'+li+'" style="cursor:grab" title="Arraste pra reordenar"':'')+'>'+l+'</th>';}).join('');
+    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l,li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+l+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
     var calRows=buildCalendarRows(totalWeeks);
     var body='';
@@ -4500,7 +4529,7 @@
   // Ghost solto (position:fixed) que "salta" pra célula alvo — o .tcm-seg
   // original nunca sai do DOM (só fica esmaecido), então o pointer capture
   // nunca se perde, mesmo re-renderizando a matriz depois de soltar.
-  var _drag=null, _ghost=null, _seqDrag=null;
+  var _drag=null, _ghost=null, _seqDrag=null, _colDrag=null, _lotRowDrag=null;
   function dragCleanup(){
     if(_drag&&_drag.el){_drag.el.style.opacity='';}
     if(_ghost){_ghost.remove();_ghost=null;}
@@ -4514,16 +4543,41 @@
     // lento/travava em obras com muitos lotes, já que o cálculo é recalculado do zero).
     var _wdmSegs=null;
     function wdmSchedule(){ if(!_wdmSegs)_wdmSegs=buildSchedule(); return _wdmSegs; }
+    // Pointer events em vez de drag-and-drop nativo (mesmo motivo do seqrow — DnD nativo pode
+    // simplesmente não iniciar em certos contextos, sem erro, deixando a coluna "presa").
     document.querySelectorAll('th[data-lotcol]').forEach(function(th){
-      th.addEventListener('dragstart',function(e){ window._lotDragSrc=+th.getAttribute('data-lotcol'); try{e.dataTransfer.effectAllowed='move';}catch(err){} th.style.opacity='.5'; });
-      th.addEventListener('dragend',function(){ th.style.opacity=''; });
-      th.addEventListener('dragover',function(e){ e.preventDefault(); th.style.outline='2px dashed var(--accent)'; });
-      th.addEventListener('dragleave',function(){ th.style.outline=''; });
-      th.addEventListener('drop',function(e){
-        e.preventDefault(); th.style.outline='';
-        var src=window._lotDragSrc; window._lotDragSrc=null;
-        var target=+th.getAttribute('data-lotcol');
-        if(src!=null)reorderLote(src,target,renderCrono);
+      th.addEventListener('pointerdown',function(e){
+        e.preventDefault();
+        try{th.setPointerCapture(e.pointerId);}catch(err){}
+        _colDrag={li:+th.getAttribute('data-lotcol'),el:th,overEl:null,lastX:e.clientX,lastY:e.clientY,rafPending:false};
+        th.style.opacity='.5';
+      });
+      th.addEventListener('pointermove',function(e){
+        if(!_colDrag||_colDrag.el!==th)return;
+        _colDrag.lastX=e.clientX; _colDrag.lastY=e.clientY;
+        if(_colDrag.rafPending)return;
+        _colDrag.rafPending=true;
+        requestAnimationFrame(function(){
+          if(!_colDrag||_colDrag.el!==th)return;
+          _colDrag.rafPending=false;
+          var elAt=document.elementFromPoint(_colDrag.lastX,_colDrag.lastY);
+          var over=elAt&&elAt.closest('th[data-lotcol]');
+          if(_colDrag.overEl&&_colDrag.overEl!==over)_colDrag.overEl.style.outline='';
+          if(over&&over!==th){ over.style.outline='2px dashed var(--accent)'; _colDrag.overEl=over; }
+          else { _colDrag.overEl=null; }
+        });
+      });
+      th.addEventListener('pointerup',function(e){
+        if(!_colDrag||_colDrag.el!==th)return;
+        try{th.releasePointerCapture(e.pointerId);}catch(err){}
+        var d=_colDrag; _colDrag=null;
+        th.style.opacity=''; if(d.overEl)d.overEl.style.outline='';
+        if(d.overEl){ var target=+d.overEl.getAttribute('data-lotcol'); reorderLote(d.li,target,renderCrono); }
+      });
+      th.addEventListener('pointercancel',function(){
+        if(!_colDrag||_colDrag.el!==th)return;
+        th.style.opacity=''; if(_colDrag.overEl)_colDrag.overEl.style.outline='';
+        _colDrag=null;
       });
     });
     document.querySelectorAll('.tcm-seg[data-li]').forEach(function(el){
@@ -4720,7 +4774,7 @@
     seqItems.sort(function(a,b){return a.seq-b.seq;});
     var seqRows=seqItems.map(function(item,idx){
       var others=lotTeams(item.li).filter(function(t){return t!==team;});
-      return '<div class="seqrow" data-seqli="'+item.li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"><span style="opacity:.4;font-weight:700">⋮</span><span class="seqnum">'+(idx+1)+'</span><span class="seqname">'+LOTS[item.li]+(others.length?' <span style="font-size:10px;color:var(--muted)">(dividido c/ eq.'+others.join(', ')+')</span>':'')+'</span>'+
+      return '<div class="seqrow" data-seqli="'+item.li+'"><span data-seqgrip style="opacity:.4;font-weight:700;cursor:grab;touch-action:none;padding:0 4px" title="Arraste pra reordenar">⋮</span><span class="seqnum">'+(idx+1)+'</span><span class="seqname">'+LOTS[item.li]+(others.length?' <span style="font-size:10px;color:var(--muted)">(dividido c/ eq.'+others.join(', ')+')</span>':'')+'</span>'+
         '<span class="seqbtns"><button class="iconbtn" data-squp="'+item.li+'" title="Executar antes"'+(idx===0?' disabled':'')+'>↑</button>'+
         '<button class="iconbtn" data-sqdn="'+item.li+'" title="Executar depois"'+(idx===seqItems.length-1?' disabled':'')+'>↓</button></span></div>';
     }).join('');
@@ -4793,19 +4847,22 @@
     // qualquer caso, porque o app controla o gesto inteiro (não depende do navegador iniciar
     // um drag nativo).
     p.querySelectorAll('.seqrow[data-seqli]').forEach(function(row){
-      row.addEventListener('pointerdown',function(e){
+      var grip=row.querySelector('[data-seqgrip]'); if(!grip)return;
+      // Arraste só começa pelo ⋮ (grip), não na linha inteira — senão clicar nos botões ↑↓ (que
+      // também ficam dentro da linha) dispararia um "arraste" em vez do clique normal.
+      grip.addEventListener('pointerdown',function(e){
         e.preventDefault();
-        try{row.setPointerCapture(e.pointerId);}catch(err){}
-        _seqDrag={li:+row.getAttribute('data-seqli'),el:row,overEl:null,lastX:e.clientX,lastY:e.clientY,rafPending:false};
+        try{grip.setPointerCapture(e.pointerId);}catch(err){}
+        _seqDrag={li:+row.getAttribute('data-seqli'),el:grip,overEl:null,lastX:e.clientX,lastY:e.clientY,rafPending:false};
         row.style.opacity='.5';
       });
-      row.addEventListener('pointermove',function(e){
-        if(!_seqDrag||_seqDrag.el!==row)return;
+      grip.addEventListener('pointermove',function(e){
+        if(!_seqDrag||_seqDrag.el!==grip)return;
         _seqDrag.lastX=e.clientX; _seqDrag.lastY=e.clientY;
         if(_seqDrag.rafPending)return;
         _seqDrag.rafPending=true;
         requestAnimationFrame(function(){
-          if(!_seqDrag||_seqDrag.el!==row)return;
+          if(!_seqDrag||_seqDrag.el!==grip)return;
           _seqDrag.rafPending=false;
           var elAt=document.elementFromPoint(_seqDrag.lastX,_seqDrag.lastY);
           var over=elAt&&elAt.closest('.seqrow[data-seqli]');
@@ -4814,15 +4871,15 @@
           else { _seqDrag.overEl=null; }
         });
       });
-      row.addEventListener('pointerup',function(e){
-        if(!_seqDrag||_seqDrag.el!==row)return;
-        try{row.releasePointerCapture(e.pointerId);}catch(err){}
+      grip.addEventListener('pointerup',function(e){
+        if(!_seqDrag||_seqDrag.el!==grip)return;
+        try{grip.releasePointerCapture(e.pointerId);}catch(err){}
         var d=_seqDrag; _seqDrag=null;
         row.style.opacity=''; if(d.overEl)d.overEl.style.outline='';
         if(d.overEl){ var target=+d.overEl.getAttribute('data-seqli'); reorderSeqTo(d.li,target); }
       });
-      row.addEventListener('pointercancel',function(){
-        if(!_seqDrag||_seqDrag.el!==row)return;
+      grip.addEventListener('pointercancel',function(){
+        if(!_seqDrag||_seqDrag.el!==grip)return;
         row.style.opacity=''; if(_seqDrag.overEl)_seqDrag.overEl.style.outline='';
         _seqDrag=null;
       });
