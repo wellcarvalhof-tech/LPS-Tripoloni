@@ -4544,21 +4544,34 @@
         _drag={li:li,si:si,startWeek:seg.start,currentStart:seg.start,currentLi:li,el:el,hlRow:null,hlCol:null};
       });
       el.addEventListener('pointermove',function(e){
+        // pointermove dispara muitas vezes por segundo (bem mais que a tela redesenha) — cada
+        // leitura de posição (elementFromPoint/getBoundingClientRect) força o navegador a
+        // recalcular o layout na hora se alguma classe mudou desde a última leitura. Fazer isso
+        // a cada evento, sem agrupar, deixa o arraste lento/travado numa matriz grande (muitos
+        // lotes/semanas). Só guarda a posição mais recente aqui; o trabalho pesado roda no
+        // máximo uma vez por frame (requestAnimationFrame), usando sempre a posição mais nova.
         if(!_drag||_drag.el!==el||!_ghost)return;
-        var elAt=document.elementFromPoint(e.clientX,e.clientY);
-        if(!elAt)return;
-        var rowEl=elAt.closest('[data-week]'), lotEl=elAt.closest('[data-lot]');
-        if(rowEl){var w=+rowEl.getAttribute('data-week'); if(w>0)_drag.currentStart=w;}
-        if(lotEl){
-          var li2=+lotEl.getAttribute('data-lot'); if(!isNaN(li2))_drag.currentLi=li2;
-          var tr=lotEl.getBoundingClientRect();
-          _ghost.style.left=tr.left+'px'; _ghost.style.top=tr.top+'px';
-          _ghost.style.width=tr.width+'px'; _ghost.style.height=tr.height+'px';
-        }
-        if(_drag.hlRow&&_drag.hlRow!==rowEl)_drag.hlRow.classList.remove('tcm-droprow');
-        if(rowEl){rowEl.classList.add('tcm-droprow'); _drag.hlRow=rowEl;}
-        if(_drag.hlCol&&_drag.hlCol!==lotEl)_drag.hlCol.classList.remove('tcm-dropcol');
-        if(lotEl){lotEl.classList.add('tcm-dropcol'); _drag.hlCol=lotEl;}
+        _drag.lastX=e.clientX; _drag.lastY=e.clientY;
+        if(_drag.rafPending)return;
+        _drag.rafPending=true;
+        requestAnimationFrame(function(){
+          if(!_drag||_drag.el!==el||!_ghost)return;
+          _drag.rafPending=false;
+          var elAt=document.elementFromPoint(_drag.lastX,_drag.lastY);
+          if(!elAt)return;
+          var rowEl=elAt.closest('[data-week]'), lotEl=elAt.closest('[data-lot]');
+          if(rowEl){var w=+rowEl.getAttribute('data-week'); if(w>0)_drag.currentStart=w;}
+          if(lotEl){
+            var li2=+lotEl.getAttribute('data-lot'); if(!isNaN(li2))_drag.currentLi=li2;
+            var tr=lotEl.getBoundingClientRect();
+            _ghost.style.left=tr.left+'px'; _ghost.style.top=tr.top+'px';
+            _ghost.style.width=tr.width+'px'; _ghost.style.height=tr.height+'px';
+          }
+          if(_drag.hlRow&&_drag.hlRow!==rowEl)_drag.hlRow.classList.remove('tcm-droprow');
+          if(rowEl){rowEl.classList.add('tcm-droprow'); _drag.hlRow=rowEl;}
+          if(_drag.hlCol&&_drag.hlCol!==lotEl)_drag.hlCol.classList.remove('tcm-dropcol');
+          if(lotEl){lotEl.classList.add('tcm-dropcol'); _drag.hlCol=lotEl;}
+        });
       });
       el.addEventListener('pointerup',function(e){
         if(!_drag||_drag.el!==el)return;
