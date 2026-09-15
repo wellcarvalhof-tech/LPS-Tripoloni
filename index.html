@@ -3256,11 +3256,21 @@
         });
         var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(0);
         var teamLastLi=[]; for(var t0b=0;t0b<teams;t0b++)teamLastLi.push(null);
+        // Cache do "melhor candidato" por equipe — resultado idêntico ao recalcular do zero a
+        // cada rodada (mesma escolha, mesmo desempate), só que sem repetir a varredura completa
+        // de todos os lotes pras equipes cuja posição não mudou nessa rodada. Uma equipe só
+        // refaz a varredura quando ela venceu a rodada anterior (mudou de posição) ou quando o
+        // lote que ela tinha em cache como melhor acabou de ser tomado por outra equipe. Sem
+        // isso, o custo cresce com lotes² × equipes — pesado em obras com muitos lotes.
+        var teamBest=[]; for(var t0c=0;t0c<teams;t0c++)teamBest.push(null);
         while(remaining.length){
           var bestOverall=null, bestTeam=0;
           for(var tt=0;tt<teams;tt++){
-            var teamProdT=teamProds[tt]>0?teamProds[tt]:prod;
-            var cand=bestCandidate(remaining,teamPos[tt],teamProdT,teamLastLi[tt]);
+            if(!teamBest[tt]){
+              var teamProdT=teamProds[tt]>0?teamProds[tt]:prod;
+              teamBest[tt]=bestCandidate(remaining,teamPos[tt],teamProdT,teamLastLi[tt]);
+            }
+            var cand=teamBest[tt];
             if(!bestOverall||cand.endPos<bestOverall.endPos-1e-9||(Math.abs(cand.endPos-bestOverall.endPos)<1e-9&&cand.dist<bestOverall.dist-1e-9)){
               bestOverall=cand; bestTeam=tt;
             }
@@ -3270,7 +3280,10 @@
             color:teamColor(hex,bestTeam+1,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li3,si)&&ADJ_PENDING[ovrKey(li3,si)])});
           startByKey[li3+'::'+si]=packed.start; endByKey[li3+'::'+si]=packed.start+packed.duration-1;
           teamPos[bestTeam]=packed.endPos; teamLastLi[bestTeam]=li3;
-          remaining.splice(bestOverall.idx,1);
+          var removeIdx=-1; for(var ri=0;ri<remaining.length;ri++){ if(remaining[ri].li===li3){removeIdx=ri;break;} }
+          if(removeIdx>=0)remaining.splice(removeIdx,1);
+          teamBest[bestTeam]=null;
+          for(var tt2=0;tt2<teams;tt2++){ if(tt2!==bestTeam&&teamBest[tt2]&&teamBest[tt2].li===li3)teamBest[tt2]=null; }
         }
       } else {
         // Times fixos por lote (manual ou round-robin). Sem paralisações ligado: dentro de
