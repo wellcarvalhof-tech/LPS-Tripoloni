@@ -1186,13 +1186,15 @@
     var catHead='<th style="min-width:260px">Nome</th><th>Categoria</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
     var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria e unidade.',
       '<button class="btn" id="histModelo">Modelo</button>'+
-      '<button class="btn" id="histImportar">↥ Importar lista</button>'+
+      '<button class="btn" id="histImportarFuncoes">↥ Importar Funções</button>'+
       '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
       '<button class="btn primary" id="addFuncao">+ Adicionar função</button>'+
       '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>',
       nFuncoes?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+funcaoRows+'</tbody></table></div>':'<div class="note">Nenhuma função cadastrada ainda.</div>'
     );
     var catalogoEquip=sectionCard('catEquip','Equipamentos ('+nEquip+')','Equipamentos cadastrados — nome, categoria e unidade.',
+      '<button class="btn" id="histModeloEquip">Modelo</button>'+
+      '<button class="btn" id="histImportarEquip">↥ Importar Equipamentos</button>'+
       '<button class="btn primary" id="addEquip">+ Adicionar equipamento</button>',
       nEquip?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+equipRows+'</tbody></table></div>':'<div class="note">Nenhum equipamento cadastrado ainda.</div>'
     );
@@ -1207,15 +1209,29 @@
         '<td class="r mono">'+fmtBR((item.qtyPerTeam||0)*(svc.eq||0))+'</td>'+
         '<td><button class="iconbtn" data-crewdel="'+r.id+'">✕</button></td></tr>';
     }).join('');
-    var crewOptions=RECURSOS.filter(function(r){return !crew.some(function(c){return c.resourceId===r.id;});})
+    var crewOptionsFuncao=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!crew.some(function(c){return c.resourceId===r.id;});})
+      .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+    var crewOptionsEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!crew.some(function(c){return c.resourceId===r.id;});})
       .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
     var equipeSel='<select class="esel" id="histSvcSel">'+SERV.map(function(s,si){return '<option value="'+si+'"'+(si===svcSel?' selected':'')+'>'+s.n+'</option>';}).join('')+'</select>';
+    // Duas buscas separadas — uma só entre funções, outra só entre equipamentos — em vez de uma
+    // busca única misturando os dois tipos.
     var addCrewCtl=(svc&&RECURSOS.length)?(
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
-      '<input class="einp" id="crewAddInput" list="crewDatalist" placeholder="Buscar função ou equipamento..." style="width:240px">'+
-      '<datalist id="crewDatalist">'+crewOptions+'</datalist>'+
-      '<input class="einp" id="crewAddQty" type="number" step="0.5" min="0.5" value="1" style="width:70px" title="Qtd. por equipe">'+
-      '<button class="btn primary" id="crewAddBtn">+ Adicionar à equipe</button>'+
+      '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+          '<span class="note" style="margin:0;font-weight:600;min-width:82px">+ Função</span>'+
+          '<input class="einp" id="crewAddInputFuncao" list="crewDatalistFuncao" placeholder="Buscar função..." style="width:200px">'+
+          '<datalist id="crewDatalistFuncao">'+crewOptionsFuncao+'</datalist>'+
+          '<input class="einp" id="crewAddQtyFuncao" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Qtd. por equipe">'+
+          '<button class="btn primary" id="crewAddBtnFuncao">+ Adicionar</button>'+
+        '</div>'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+          '<span class="note" style="margin:0;font-weight:600;min-width:104px">+ Equipamento</span>'+
+          '<input class="einp" id="crewAddInputEquip" list="crewDatalistEquip" placeholder="Buscar equipamento..." style="width:200px">'+
+          '<datalist id="crewDatalistEquip">'+crewOptionsEquip+'</datalist>'+
+          '<input class="einp" id="crewAddQtyEquip" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Qtd. por equipe">'+
+          '<button class="btn primary" id="crewAddBtnEquip">+ Adicionar</button>'+
+        '</div>'+
       '</div>'
     ):'';
     var equipe=sectionCard('equipe','Equipe típica do serviço',null,
@@ -2676,8 +2692,12 @@
       if(saveRec)saveRec.addEventListener('click',saveRecursosAll);
       var modelo=document.getElementById('histModelo');
       if(modelo)modelo.addEventListener('click',downloadResourcesTemplate);
-      var imp=document.getElementById('histImportar');
-      if(imp)imp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importResourcesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
+      var modeloEquip=document.getElementById('histModeloEquip');
+      if(modeloEquip)modeloEquip.addEventListener('click',downloadEquipTemplate);
+      var impFuncoes=document.getElementById('histImportarFuncoes');
+      if(impFuncoes)impFuncoes.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importFuncoesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
+      var impEquip=document.getElementById('histImportarEquip');
+      if(impEquip)impEquip.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importEquipamentosWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       var exp=document.getElementById('histExportar');
       if(exp)exp.addEventListener('click',exportHistogramWorkbook);
       var svcSelEl=document.getElementById('histSvcSel');
@@ -2696,19 +2716,23 @@
           saveCrewQty(svcSel,b.getAttribute('data-crewdel'),0);
         });
       });
-      var crewAddBtn=document.getElementById('crewAddBtn');
-      if(crewAddBtn)crewAddBtn.addEventListener('click',function(){
-        var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
-        if(svcSel==null)return;
-        var inp=document.getElementById('crewAddInput'), qtyInp=document.getElementById('crewAddQty');
-        var name=(inp.value||'').trim(); if(!name)return;
-        var r=RECURSOS.filter(function(x){return x.n.trim().toLowerCase()===name.toLowerCase();})[0];
-        if(!r){alert('Recurso não encontrado. Selecione um item da lista de sugestões.');return;}
-        var qty=Math.max(0.01,parseFloat(qtyInp.value)||1);
-        saveCrewQty(svcSel,r.id,qty);
-      });
-      var crewAddInput=document.getElementById('crewAddInput');
-      if(crewAddInput)crewAddInput.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();var b=document.getElementById('crewAddBtn');if(b)b.click();}});
+      function wireCrewAdd(tipo,inputId,qtyId,btnId){
+        var btn=document.getElementById(btnId);
+        if(btn)btn.addEventListener('click',function(){
+          var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+          if(svcSel==null)return;
+          var inp=document.getElementById(inputId), qtyInp=document.getElementById(qtyId);
+          var name=(inp.value||'').trim(); if(!name)return;
+          var r=RECURSOS.filter(function(x){return x.tipo===tipo&&x.n.trim().toLowerCase()===name.toLowerCase();})[0];
+          if(!r){alert((tipo==='funcao'?'Função':'Equipamento')+' não encontrado(a). Selecione um item da lista de sugestões.');return;}
+          var qty=Math.max(0.01,parseFloat(qtyInp.value)||1);
+          saveCrewQty(svcSel,r.id,qty);
+        });
+        var inp=document.getElementById(inputId);
+        if(inp)inp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();if(btn)btn.click();}});
+      }
+      wireCrewAdd('funcao','crewAddInputFuncao','crewAddQtyFuncao','crewAddBtnFuncao');
+      wireCrewAdd('equipamento','crewAddInputEquip','crewAddQtyEquip','crewAddBtnEquip');
       document.querySelectorAll('[data-histfilter]').forEach(function(b){
         b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
       });
@@ -3975,53 +3999,65 @@
   function downloadResourcesTemplate(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var wb=XLSX.utils.book_new();
-    var ws=XLSX.utils.aoa_to_sheet([['Nome','Categoria','Tipo','Unidade'],
-      ['Encarregado','M.O.D.','funcao','un'],['Servente','M.O.D.','funcao','un'],['Operador de máquinas','M.O.I.','funcao','un'],
-      ['Escavadeira hidráulica','Equipamentos Pesados','equipamento','un'],['Caminhão basculante','Equipamentos Pesados','equipamento','un']]);
-    XLSX.utils.book_append_sheet(wb,ws,'Recursos');
-    XLSX.writeFile(wb,'modelo-recursos.xlsx');
+    var ws=XLSX.utils.aoa_to_sheet([['Nome','Categoria','Unidade'],
+      ['Encarregado','M.O.D.','un'],['Servente','M.O.D.','un'],['Operador de máquinas','M.O.I.','un']]);
+    XLSX.utils.book_append_sheet(wb,ws,'Funcoes');
+    XLSX.writeFile(wb,'modelo-funcoes.xlsx');
   }
-  async function importResourcesWorkbook(wb){
+  function downloadEquipTemplate(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var wb=XLSX.utils.book_new();
+    var ws=XLSX.utils.aoa_to_sheet([['Nome','Categoria','Unidade'],
+      ['Escavadeira hidráulica','Equipamentos Pesados','un'],['Caminhão basculante','Equipamentos Pesados','un']]);
+    XLSX.utils.book_append_sheet(wb,ws,'Equipamentos');
+    XLSX.writeFile(wb,'modelo-equipamentos.xlsx');
+  }
+  /** Importa recursos (funções OU equipamentos, nunca os dois juntos — o botão clicado já diz
+   * qual é) reconhecendo três formatos de planilha: genérico (Nome/Categoria/Unidade), "FuncaoObra"
+   * do ERP (codNatureza+descricao) e "Taxonomia" de equipamentos (FAMILIA em células mescladas +
+   * EQUIPAMENTO "CÓD - Descrição"). O tipo do recurso vem sempre de forcedTipo, nunca da planilha —
+   * assim a mesma planilha genérica serve tanto pra importar como função quanto como equipamento,
+   * dependendo de qual botão foi clicado. */
+  async function importRecursosTyped(wb,forcedTipo){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
-    var sheetName=wb.SheetNames.filter(function(n){return ['recursos','funcoes','funções','funcaoobra','função obra','equipamentos','resources'].indexOf(n.trim().toLowerCase())>=0;})[0]||wb.SheetNames[0];
+    var sheetName=wb.SheetNames.filter(function(n){return ['recursos','funcoes','funções','funcaoobra','função obra','equipamentos','taxonomia','resources'].indexOf(n.trim().toLowerCase())>=0;})[0]||wb.SheetNames[0];
     if(!sheetName){alert('Planilha vazia.');return;}
     var aoa=sheetRows(wb.Sheets[sheetName]);
     if(!aoa.length){alert('Planilha vazia.');return;}
     var header=(aoa[0]||[]).map(function(h){return String(h||'').trim().toLowerCase();});
-    // Formato "FuncaoObra" do ERP: só codNatureza + descricao — tudo função, sem categoria/unidade.
+    // Formato "FuncaoObra" do ERP: só codNatureza + descricao — sem categoria/unidade.
     var isFuncaoObra=header.length<=2&&(header.indexOf('descricao')>=0||header.indexOf('descrição')>=0||header.indexOf('codnatureza')>=0);
     // Formato "Taxonomia" de equipamentos: FAMILIA (categoria, em células mescladas — só a
-    // primeira linha do grupo vem preenchida) + EQUIPAMENTO ("CÓD - Descrição") — tudo
-    // equipamento, sem unidade. Como a célula é mesclada, a família "desce" pras linhas
-    // seguintes até aparecer a próxima.
+    // primeira linha do grupo vem preenchida) + EQUIPAMENTO ("CÓD - Descrição"). Como a célula é
+    // mesclada, a família "desce" pras linhas seguintes até aparecer a próxima.
     var isTaxonomia=header.length<=2&&(header.indexOf('familia')>=0||header.indexOf('família')>=0)&&header.indexOf('equipamento')>=0;
     var rows=aoa.slice(1);
     var existing={}; RECURSOS.forEach(function(r){existing[(r.n.trim().toLowerCase())+'::'+r.tipo]=true;});
     var created=0, lastFamilia='';
     for(var i=0;i<rows.length;i++){
       var r=rows[i]; if(!r)continue;
-      var nome,categoria,tipo,unidade;
+      var nome,categoria,unidade;
       if(isFuncaoObra){
         nome=String(r[1]||'').trim(); if(!nome)continue;
-        categoria=''; tipo='funcao'; unidade='un';
+        categoria=''; unidade='un';
       }else if(isTaxonomia){
         var fam=String(r[0]||'').trim(); if(fam)lastFamilia=fam;
         nome=String(r[1]||'').trim(); if(!nome)continue;
-        categoria=lastFamilia; tipo='equipamento'; unidade='un';
+        categoria=lastFamilia; unidade='un';
       }else{
         nome=String(r[0]||'').trim(); if(!nome)continue;
         categoria=String(r[1]||'').trim();
-        var tipoRaw=String(r[2]||'').trim().toLowerCase();
-        tipo=(tipoRaw.indexOf('eq')===0||tipoRaw.indexOf('máquina')>=0||tipoRaw.indexOf('maquina')>=0)?'equipamento':'funcao';
-        unidade=String(r[3]||'').trim()||'un';
+        unidade=String(r[2]||'').trim()||'un';
       }
-      var key=nome.toLowerCase()+'::'+tipo; if(existing[key])continue;
-      var id=await sbCreateRecurso(selectedObra.id,{nome:nome,tipo:tipo,unidade:unidade,categoria:categoria||null,ordem:RECURSOS.length});
-      RECURSOS.push({id:id,n:nome,tipo:tipo,u:unidade,cat:categoria});
+      var key=nome.toLowerCase()+'::'+forcedTipo; if(existing[key])continue;
+      var id=await sbCreateRecurso(selectedObra.id,{nome:nome,tipo:forcedTipo,unidade:unidade,categoria:categoria||null,ordem:RECURSOS.length});
+      RECURSOS.push({id:id,n:nome,tipo:forcedTipo,u:unidade,cat:categoria});
       existing[key]=true; created++;
     }
-    go('cr-hist'); toast(created+' recurso(s) importado(s).');
+    go('cr-hist'); toast(created+' '+(forcedTipo==='funcao'?'função(ões)':'equipamento(s)')+' importado(s).');
   }
+  function importFuncoesWorkbook(wb){ return importRecursosTyped(wb,'funcao'); }
+  function importEquipamentosWorkbook(wb){ return importRecursosTyped(wb,'equipamento'); }
   function exportHistogramWorkbook(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var hist=computeHistogram(), tw=hist.tw;
