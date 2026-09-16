@@ -5168,23 +5168,32 @@
         if(!_drag||_drag.el!==el)return;
         try{el.releasePointerCapture(e.pointerId);}catch(err){}
         var d=_drag; dragCleanup(); _drag=null;
-        var si=d.si, kOrig=ovrKey(d.li,si), changed=false;
+        var si=d.si, sv=SERV[si], kOrig=ovrKey(d.li,si), changed=false;
         if(d.currentStart!==d.startWeek&&kOrig){
           OVR[kOrig]=Object.assign({},OVR[kOrig],{startWeek:d.currentStart});
           ADJ_PENDING[kOrig]=true;
           changed=true;
         }
         if(d.currentLi!==d.li){
-          var kDst=ovrKey(d.currentLi,si);
-          if(kOrig&&kDst){
-            var segs=wdmSchedule();
-            var srcSeg=segs.filter(function(sg){return sg.li===d.li&&sg.si===si;})[0];
-            var dstSeg=segs.filter(function(sg){return sg.li===d.currentLi&&sg.si===si;})[0];
-            if(srcSeg&&dstSeg&&srcSeg.team!==dstSeg.team){
-              OVR[kOrig]=Object.assign({},OVR[kOrig],{team:dstSeg.team});
-              OVR[kDst]=Object.assign({},OVR[kDst],{team:srcSeg.team});
-              ADJ_PENDING[kOrig]=true; ADJ_PENDING[kDst]=true;
-              changed=true;
+          if(sv&&sv.cfg&&sv.cfg.pullFromQueue){
+            // Fila dinâmica escolhe a equipe automaticamente (a que termina mais cedo) — um
+            // ajuste manual de equipe aqui seria ignorado no cálculo, então nem tenta: avisa em
+            // vez de mudar o OVR silenciosamente e o usuário achar que "não fez nada".
+            alert('"'+sv.n+'" está com "fila dinâmica" ligada — a equipe de cada lote é escolhida automaticamente pelo cronograma (a que termina mais cedo), então não dá pra fixar arrastando pra outro lote. Desligue "Equipe livre pega o próximo lote vazio (fila dinâmica)" em Serviços se quiser atribuir equipes manualmente.');
+          } else {
+            var kDst=ovrKey(d.currentLi,si);
+            if(kOrig&&kDst){
+              var segs=wdmSchedule();
+              var srcSeg=segs.filter(function(sg){return sg.li===d.li&&sg.si===si;})[0];
+              if(srcSeg){
+                // Move, não troca: o lote de destino passa a ser feito pela equipe arrastada; o
+                // lote de origem perde essa atribuição fixa (volta pro padrão round-robin) em vez
+                // de "roubar" a equipe que estava no destino.
+                OVR[kDst]=Object.assign({},OVR[kDst],{team:srcSeg.team}); delete OVR[kDst].teams;
+                if(OVR[kOrig]){ delete OVR[kOrig].team; delete OVR[kOrig].teams; if(Object.keys(OVR[kOrig]).length===0)delete OVR[kOrig]; }
+                ADJ_PENDING[kOrig]=true; ADJ_PENDING[kDst]=true;
+                changed=true;
+              }
             }
           }
         }
@@ -5286,6 +5295,24 @@
     if(!SERV.length){p.innerHTML='<div class="note">Cadastre um serviço primeiro.</div>';return;}
     var svcOpts=SERV.map(function(s,i){return '<option value="'+i+'">'+s.n+'</option>';}).join('');
     var si=window._tcAssignSvc||0, s=SERV[si]; if(!s){si=0;s=SERV[0];}
+    if(s.cfg&&s.cfg.pullFromQueue){
+      // Fila dinâmica: a equipe de cada lote é escolhida automaticamente (a que termina mais
+      // cedo) — a lista de "sequência por equipe" abaixo (baseada em round-robin) não bate com
+      // isso e confunde. Mostra em vez disso a ordem REAL que o cronograma calculou, só leitura.
+      var svcSelHtml0='<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Serviço: <select id="assignSvc">'+svcOpts+'</select></label>';
+      var segsReal=buildSchedule().filter(function(sg){return sg.si===si;}).sort(function(a,b){return a.start-b.start;});
+      var realRows=segsReal.map(function(sg){
+        return '<div class="seqrow" style="cursor:default"><span class="seqname">'+LOTS[sg.li]+'</span>'+
+          '<span class="note" style="margin-left:auto;white-space:nowrap">Equipe '+sg.team+' · S'+isoWeek(mondayOf(sg.start))+'–S'+isoWeek(mondayOf(sg.start+sg.dur-1))+'</span></div>';
+      }).join('');
+      p.innerHTML='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">'+
+        '<span class="lab">Lotes e sequência de execução por equipe</span>'+svcSelHtml0+'</div>'+
+        '<div class="banner" style="margin:10px 0">⚠ "'+s.n+'" está com <b>fila dinâmica</b> ligada — a equipe de cada lote é escolhida automaticamente pelo cronograma, então não dá pra fixar manualmente aqui (nem arrastando na matriz). Se quiser atribuir equipes na mão, desligue "Equipe livre pega o próximo lote vazio (fila dinâmica)" em Serviços. Abaixo, a ordem que o cronograma calculou de verdade (só consulta):</div>'+
+        (realRows?'<div class="seqlist">'+realRows+'</div>':'<div class="note">Nenhum lote com quantidade pra este serviço ainda.</div>');
+      var selFD=document.getElementById('assignSvc');
+      if(selFD){selFD.value=si;selFD.addEventListener('change',function(){window._tcAssignSvc=+selFD.value;window._tcAssignTeam=1;renderAssignPanel();});}
+      return;
+    }
     var team=window._tcAssignTeam||1; if(team>s.eq)team=1;
     var teamOpts='';for(var t=1;t<=s.eq;t++)teamOpts+='<option value="'+t+'"'+(t===team?' selected':'')+'>Equipe '+t+'</option>';
     function lotTeams(li){
