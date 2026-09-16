@@ -5270,6 +5270,29 @@
       close(); renderCrono();
     });
   }
+  /** Prompt "Incluir ou Substituir" quando o arraste solta num lote que já tem outra equipe
+   *  nesse mesmo serviço. Incluir divide o lote entre as equipes (continua calculado
+   *  automaticamente); Substituir tira quem tava lá e a equipe arrastada fica sozinha, fixada
+   *  onde foi solta. */
+  function openMoveConflictMenu(svcName,loteName,otherTeams,onChoice){
+    var backdrop=document.createElement('div');
+    backdrop.className='segmenu-backdrop';
+    backdrop.innerHTML='<div class="segmenu-panel card">'+
+      '<div class="eyebrow" style="margin-bottom:2px">'+loteName+' já tem equipe em "'+svcName+'"</div>'+
+      '<div class="note" style="margin-bottom:14px">Esse lote já está com a Equipe '+otherTeams.join(', ')+' nesse serviço. O que você quer fazer com a equipe que você arrastou?</div>'+
+      '<div style="display:flex;flex-direction:column;gap:8px">'+
+        '<button class="btn primary" id="mcInclude">Incluir — dividir o lote entre as equipes</button>'+
+        '<button class="btn" id="mcReplace">Substituir — só essa equipe fica</button>'+
+        '<button class="btn" id="mcCancel">Cancelar</button>'+
+      '</div>'+
+    '</div>';
+    document.body.appendChild(backdrop);
+    function close(){ backdrop.remove(); }
+    backdrop.addEventListener('pointerdown',function(e){ if(e.target===backdrop)close(); });
+    document.getElementById('mcCancel').addEventListener('click',close);
+    document.getElementById('mcInclude').addEventListener('click',function(){ close(); onChoice('include'); });
+    document.getElementById('mcReplace').addEventListener('click',function(){ close(); onChoice('replace'); });
+  }
   function dragCleanup(){
     if(_drag&&_drag.el){_drag.el.style.opacity='';}
     if(_ghost){_ghost.remove();_ghost=null;}
@@ -5371,37 +5394,9 @@
         if(!_drag||_drag.el!==el)return;
         try{el.releasePointerCapture(e.pointerId);}catch(err){}
         var d=_drag; dragCleanup(); _drag=null;
-        var si=d.si, sv=SERV[si], kOrig=ovrKey(d.li,si), changed=false;
-        if(d.currentStart!==d.startWeek&&kOrig){
-          OVR[kOrig]=Object.assign({},OVR[kOrig],{startWeek:d.currentStart});
-          ADJ_PENDING[kOrig]=true;
-          changed=true;
-        }
-        if(d.currentLi!==d.li){
-          if(sv&&sv.cfg&&sv.cfg.pullFromQueue){
-            // Fila dinâmica escolhe a equipe automaticamente (a que termina mais cedo) — um
-            // ajuste manual de equipe aqui seria ignorado no cálculo, então nem tenta: avisa em
-            // vez de mudar o OVR silenciosamente e o usuário achar que "não fez nada".
-            alert('"'+sv.n+'" está com "fila dinâmica" ligada — a equipe de cada lote é escolhida automaticamente pelo cronograma (a que termina mais cedo), então não dá pra fixar arrastando pra outro lote. Desligue "Equipe livre pega o próximo lote vazio (fila dinâmica)" em Serviços se quiser atribuir equipes manualmente.');
-          } else {
-            var kDst=ovrKey(d.currentLi,si);
-            if(kOrig&&kDst){
-              var segs=wdmSchedule();
-              var srcSeg=segs.filter(function(sg){return sg.li===d.li&&sg.si===si;})[0];
-              if(srcSeg){
-                // Move, não troca: o lote de destino passa a ser feito pela equipe arrastada; o
-                // lote de origem perde essa atribuição fixa (volta pro padrão round-robin) em vez
-                // de "roubar" a equipe que estava no destino.
-                OVR[kDst]=Object.assign({},OVR[kDst],{team:srcSeg.team}); delete OVR[kDst].teams;
-                if(OVR[kOrig]){ delete OVR[kOrig].team; delete OVR[kOrig].teams; if(Object.keys(OVR[kOrig]).length===0)delete OVR[kOrig]; }
-                ADJ_PENDING[kOrig]=true; ADJ_PENDING[kDst]=true;
-                changed=true;
-              }
-            }
-          }
-        }
-        if(changed){ ADJ_DIRTY=true; renderCrono(); }
-        else if(d.currentStart===d.startWeek&&d.currentLi===d.li){
+        var si=d.si, sv=SERV[si];
+        var noMove=(d.currentStart===d.startWeek&&d.currentLi===d.li);
+        if(noMove){
           // Não arrastou (soltou onde pegou) — pode ser um clique simples (abre o menu de
           // personalizar) ou o primeiro dos dois cliques de um dblclick (reseta o ajuste, ver
           // abaixo). Espera um pouco pra ver se vem um segundo clique antes de abrir o menu.
@@ -5413,6 +5408,61 @@
             clearTimeout(_segClickTimer);
             _segClickTimer=setTimeout(function(){ _segClickEl=null; openSegMenu(liC,siC); },380);
           }
+          return;
+        }
+        if(sv&&sv.cfg&&sv.cfg.pullFromQueue){
+          // Fila dinâmica escolhe a equipe automaticamente (a que termina mais cedo) — um
+          // ajuste manual aqui seria ignorado no cálculo, então nem tenta: avisa em vez de
+          // mudar o OVR silenciosamente e o usuário achar que "não fez nada". Dá pra
+          // personalizar um lote específico mesmo assim clicando nele (sem arrastar).
+          alert('"'+sv.n+'" está com "fila dinâmica" ligada — a equipe de cada lote é escolhida automaticamente pelo cronograma (a que termina mais cedo), então arrastar não funciona. Clique (sem arrastar) no bloco pra personalizar só esse lote, ou desligue "Equipe livre pega o próximo lote vazio (fila dinâmica)" em Serviços pra mover livremente.');
+          return;
+        }
+        var segs=wdmSchedule();
+        var srcSeg=segs.filter(function(sg){return sg.li===d.li&&sg.si===si;})[0];
+        if(!srcSeg)return;
+        var destLi=d.currentLi, destWeek=d.currentStart;
+        var others=segs.filter(function(sg){return sg.li===destLi&&sg.si===si&&sg.team!==srcSeg.team;});
+        var otherTeams=[]; others.forEach(function(sg){ if(otherTeams.indexOf(sg.team)<0)otherTeams.push(sg.team); });
+        function cleanupOrigin(kOrig){
+          if(!kOrig)return;
+          if(OVR[kOrig]&&Array.isArray(OVR[kOrig].teams)){
+            OVR[kOrig].teams=OVR[kOrig].teams.filter(function(t){return t!==srcSeg.team;});
+            if(!OVR[kOrig].teams.length)delete OVR[kOrig];
+            return;
+          }
+          // Tira a equipe arrastada desse lote. Sem isso, se esse lote nunca teve ajuste manual
+          // (seguia o rodízio padrão lote%equipes), ele continuaria caindo pra essa mesma equipe
+          // de novo — ela ficaria "roubando" dois lotes ao mesmo tempo. Fixa explicitamente a
+          // próxima equipe da rotação nesse lote em vez de deixar ambíguo.
+          delete OVR[kOrig];
+          if(sv.eq>1){
+            var nextTeam=(srcSeg.team%sv.eq)+1;
+            OVR[kOrig]={team:nextTeam};
+          }
+        }
+        function doMove(mode){
+          var kOrig=ovrKey(d.li,si), kDst=ovrKey(destLi,si);
+          if(!kDst)return;
+          if(mode==='replace'){
+            // Move livre: essa equipe fica sozinha nesse lote, exatamente onde foi solta (início
+            // e duração fixados) — sai do cálculo automático só pra esse lote, igual o menu
+            // "Personalizar". Qualquer equipe que já estivesse lá é substituída.
+            OVR[kDst]={team:srcSeg.team,startWeek:destWeek,duration:srcSeg.dur,pinned:true};
+          } else if(mode==='include'){
+            // Divide o lote entre a equipe arrastada e quem já estava — continua no cálculo
+            // automático (cada equipe com sua parte da quantidade), só com a semana mínima fixada.
+            var teamsArr=otherTeams.slice(); if(teamsArr.indexOf(srcSeg.team)<0)teamsArr.push(srcSeg.team);
+            OVR[kDst]={teams:teamsArr,startWeek:destWeek};
+          }
+          if(kOrig&&kOrig!==kDst)cleanupOrigin(kOrig);
+          ADJ_PENDING[kDst]=true; if(kOrig)ADJ_PENDING[kOrig]=true;
+          ADJ_DIRTY=true; renderCrono();
+        }
+        if(otherTeams.length){
+          openMoveConflictMenu(sv.n,LOTS[destLi],otherTeams,doMove);
+        } else {
+          doMove('replace');
         }
       });
       el.addEventListener('pointercancel',function(){
