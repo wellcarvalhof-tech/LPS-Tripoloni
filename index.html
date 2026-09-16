@@ -3637,6 +3637,28 @@
 
   function ovrKey(li,si){var lid=(window._LOTIDS||[])[li],sid=SERV[si]&&SERV[si].id;return lid&&sid?(lid+'::'+sid):null;}
   function ovrGet(li,si){var k=ovrKey(li,si);return k?OVR[k]:null;}
+  /** Reordena a fila de uma equipe (dentro de um serviço) depois de colocar/mover um lote nela
+   *  numa semana escolhida: olha onde os outros lotes dessa equipe estão programados agora,
+   *  encaixa o lote movido na posição que bate com a semana escolhida, e grava um "seq" explícito
+   *  pra cada um nessa nova ordem. Sem isso, a ordem continuava sendo só o índice do lote (li) —
+   *  antecipar um lote não empurrava os outros, só entrava na fila do jeito que já estava. */
+  function computeTeamOrder(si,team,movedLi,desiredWeek){
+    var others=buildSchedule().filter(function(sg){return sg.si===si&&sg.team===team&&sg.li!==movedLi;});
+    var order=others.map(function(sg){return {li:sg.li,pos:sg.start,moved:false};});
+    order.push({li:movedLi,pos:desiredWeek,moved:true});
+    order.sort(function(a,b){
+      if(a.pos!==b.pos)return a.pos-b.pos;
+      if(a.moved!==b.moved)return a.moved?-1:1; // empate na mesma semana: o lote que acabou de ser colocado entra antes
+      return a.li-b.li;
+    });
+    return order;
+  }
+  function reorderTeamQueue(si,team,movedLi,desiredWeek){
+    computeTeamOrder(si,team,movedLi,desiredWeek).forEach(function(item,idx){
+      var k=ovrKey(item.li,si); if(!k)return;
+      OVR[k]=Object.assign({},OVR[k],{seq:idx});
+    });
+  }
   function topoSortServices(){
     var idToSi={}; SERV.forEach(function(s,i){idToSi[s.id]=i;});
     var visited={},temp={},order=[];
@@ -5231,10 +5253,18 @@
     function previewSeg(newLi,newTeam,projWeek){
       if(!projWeek)return null;
       var kNew=ovrKey(newLi,si); if(!kNew)return null;
-      var had=Object.prototype.hasOwnProperty.call(OVR,kNew), saved=OVR[kNew];
-      OVR[kNew]={team:newTeam,startWeek:projWeek};
+      var stashed={};
+      function stash(k){ if(!(k in stashed))stashed[k]={had:Object.prototype.hasOwnProperty.call(OVR,k),val:OVR[k]}; }
+      stash(kNew);
+      OVR[kNew]=Object.assign({},OVR[kNew],{team:newTeam,startWeek:projWeek});
+      // Simula o mesmo reordenamento da fila que o "Aplicar" faz de verdade, senão o número
+      // mostrado aqui podia divergir do que aparece depois de aplicar.
+      computeTeamOrder(si,newTeam,newLi,projWeek).forEach(function(item,idx){
+        var k=ovrKey(item.li,si); if(!k)return;
+        stash(k); OVR[k]=Object.assign({},OVR[k],{seq:idx});
+      });
       var result=buildSchedule().filter(function(sg){return sg.li===newLi&&sg.si===si&&sg.team===newTeam;})[0]||null;
-      if(had)OVR[kNew]=saved; else delete OVR[kNew];
+      Object.keys(stashed).forEach(function(k){ if(stashed[k].had)OVR[k]=stashed[k].val; else delete OVR[k]; });
       return result;
     }
     function refreshPreview(){
@@ -5268,6 +5298,7 @@
       if(!kNew)return;
       if(kOld&&kOld!==kNew)delete OVR[kOld];
       OVR[kNew]={team:newTeam,startWeek:projWeek};
+      reorderTeamQueue(si,newTeam,newLi,projWeek);
       ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
       ADJ_DIRTY=true;
       close(); renderCrono();
@@ -5450,6 +5481,7 @@
           if(!kDst)return;
           if(mode==='replace'){
             OVR[kDst]={team:srcSeg.team,startWeek:destWeek};
+            reorderTeamQueue(si,srcSeg.team,destLi,destWeek);
           } else if(mode==='include'){
             // Divide o lote entre a equipe arrastada e quem já estava — cada equipe segue com
             // sua parte da quantidade, timing calculado normalmente.
