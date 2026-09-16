@@ -1451,6 +1451,7 @@
       var isActive=ACTIVE_CENARIO&&ACTIVE_CENARIO.id===c.id;
       var estado=c.tipo==='baseline'?('<span class="pill '+(c.ativo?'good':'mut')+'">'+c.revisao+(c.ativo?' · ativa':'')+'</span>'):'<span class="pill '+(isActive?'warn':'mut')+'">'+(isActive?'✏ editando agora':'rascunho')+'</span>';
       var acoes='<button class="btn" data-cnload="'+c.id+'">Carregar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
+        '<button class="btn" style="color:var(--crit)" data-cnapply="'+c.id+'" title="Substitui o cronograma ao vivo da obra por este cenário">⬆ Aplicar ao cronograma ao vivo</button>'+
         (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button><button class="iconbtn" data-cndel="'+c.id+'">✕</button>':'');
       return '<tr'+(isActive?' style="outline:2px solid var(--accent);outline-offset:-2px"':'')+'><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
     }).join('');
@@ -2760,6 +2761,18 @@
           go('cr-matriz');
         });
       });
+      document.querySelectorAll('[data-cnapply]').forEach(function(b){
+        b.addEventListener('click',async function(){
+          var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnapply');})[0]; if(!c)return;
+          if(!confirm('Isso vai SUBSTITUIR o cronograma ao vivo da obra (ajustes manuais, calendário e configuração de equipes/produtividade de cada serviço) pelo cenário "'+c.nome+'". O que está ao vivo agora será perdido (a menos que você tenha salvo em outro cenário antes). Quer continuar?'))return;
+          b.disabled=true; b.textContent='Aplicando…';
+          try{
+            await applyCenarioToLive(c);
+            toast('Cenário "'+c.nome+'" aplicado ao cronograma ao vivo.');
+            go('cr-cenarios');
+          }catch(e){ alert('Falha ao aplicar: '+((e&&e.message)||e)); b.disabled=false; b.textContent='⬆ Aplicar ao cronograma ao vivo'; }
+        });
+      });
       document.querySelectorAll('[data-cndup]').forEach(function(b){
         b.addEventListener('click',async function(){
           var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cndup');})[0]; if(!c||!selectedObra)return;
@@ -3869,6 +3882,33 @@
   async function saveOverrides(){
     if(!selectedObra)return;
     await sbUpdateObra(selectedObra.id,{ajustes_manuais:OVR});
+  }
+  /** Substitui o cronograma ao vivo da obra (ajustes manuais, calendário e parâmetros de cada
+   *  serviço — equipes/produtividade/config) pelo snapshot guardado num cenário. Diferente de
+   *  "Carregar" (que abre o cenário num modo de edição à parte, sem tocar na obra): isso grava
+   *  direto nas tabelas reais (servicos, obras), igual "Salvar ajustes" faria. */
+  async function applyCenarioToLive(c){
+    if(!c||!selectedObra)return;
+    var snap=c.snap||{ovr:{},feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
+    ACTIVE_CENARIO=null;
+    OVR=JSON.parse(JSON.stringify(snap.ovr||{}));
+    if(snap.servicos&&snap.servicos.length){
+      for(var i=0;i<snap.servicos.length;i++){
+        var sc=snap.servicos[i];
+        var live=SERV.filter(function(x){return x.id===sc.id;})[0];
+        if(!live)continue; // serviço do cenário não existe mais na obra — ignora
+        var patch={teams:Math.max(1,parseInt(sc.eq,10)||1),produtividade:pnum(sc.produtividade),lag_semanas:parseInt(sc.lag,10)||0,config:sc.config||{}};
+        if(sc.cor)patch.cor=sc.cor;
+        await sbUpdateServico(sc.id,patch);
+        live.eq=patch.teams; live.p=String(patch.produtividade); live.lag=patch.lag_semanas;
+        live.cfg=JSON.parse(JSON.stringify(sc.config||{}));
+        if(sc.cor)live.hex=sc.cor;
+      }
+    }
+    var feriados=snap.feriados||{holidayWeeks:[],rainPeriods:[]};
+    await saveCalendarObj(feriados.holidayWeeks||[],feriados.rainPeriods||[]);
+    await saveOverrides();
+    ADJ_DIRTY=false; ADJ_PENDING={};
   }
   /** Snapshot completo do estado ao vivo: ajustes manuais, calendário (feriados/chuvas) e os
    *  parâmetros de cada serviço (produtividade, nº de equipes, predecessoras, etc). */
