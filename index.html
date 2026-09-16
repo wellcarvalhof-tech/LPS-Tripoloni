@@ -5271,12 +5271,67 @@
       if(!(QTY[newLi][si]>0)){alert('O lote "'+LOTS[newLi]+'" não tem quantidade cadastrada pra "'+s.n+'".');return;}
       var kOld=ovrKey(li,si), kNew=ovrKey(newLi,si);
       if(!kNew)return;
-      if(kOld&&kOld!==kNew)delete OVR[kOld];
-      OVR[kNew]={team:newTeam,startWeek:projWeek,duration:dur,pinned:true};
-      ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
-      ADJ_DIRTY=true;
-      close(); renderCrono();
+      var overlapEnd=projWeek+dur-1;
+      var conflicts=buildSchedule().filter(function(sg){
+        if(sg.si!==si||sg.team!==newTeam||sg.li===newLi||sg.li===li)return false;
+        var sgEnd=sg.start+sg.dur-1;
+        return sg.start<=overlapEnd&&sgEnd>=projWeek;
+      });
+      var commit=function(){
+        if(kOld&&kOld!==kNew){
+          // Mesma lógica do arraste: se o lote de origem nunca teve ajuste manual, ele voltaria
+          // pro rodízio padrão e podia cair de novo na mesma equipe que acabou de sair de lá.
+          // Fixa explicitamente a próxima equipe da rotação em vez de deixar ambíguo.
+          delete OVR[kOld];
+          if(s.eq>1)OVR[kOld]={team:(seg.team%s.eq)+1};
+        }
+        OVR[kNew]={team:newTeam,startWeek:projWeek,duration:dur,pinned:true};
+        ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
+        ADJ_DIRTY=true;
+        close(); renderCrono();
+      };
+      if(conflicts.length){
+        openTeamConflictMenu(s.n,newTeam,conflicts,function(choice){
+          if(choice==='cancel')return;
+          commit();
+          if(choice==='push'){
+            conflicts.forEach(function(c){
+              var kc=ovrKey(c.li,si); if(!kc)return;
+              OVR[kc]=Object.assign({},OVR[kc],{startWeek:overlapEnd+1});
+              ADJ_PENDING[kc]=true;
+            });
+            ADJ_DIRTY=true; renderCrono();
+          }
+        });
+      } else { commit(); }
     });
+  }
+  /** Avisa quando fixar uma equipe (arraste livre ou menu Personalizar) faz ela ficar em dois
+   *  lotes no mesmo período, no mesmo serviço — "Empurrar" adia o(s) lote(s) conflitante(s) pra
+   *  logo depois do que acabou de ser fixado; "Deixar sobreposto" aplica mesmo assim; "Cancelar"
+   *  desiste do ajuste. */
+  function openTeamConflictMenu(svcName,team,conflicts,onChoice){
+    var list=conflicts.map(function(c){
+      return '<li>'+LOTS[c.li]+' — S'+isoWeek(mondayOf(c.start))+' a S'+isoWeek(mondayOf(c.start+c.dur-1))+'</li>';
+    }).join('');
+    var backdrop=document.createElement('div');
+    backdrop.className='segmenu-backdrop';
+    backdrop.innerHTML='<div class="segmenu-panel card">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Equipe '+team+' já está em outro lote nesse período</div>'+
+      '<div class="note" style="margin-bottom:8px">Em "'+svcName+'", a Equipe '+team+' também está escalada em:</div>'+
+      '<ul style="margin:0 0 14px 18px;padding:0;font-size:12.5px;color:var(--muted)">'+list+'</ul>'+
+      '<div style="display:flex;flex-direction:column;gap:8px">'+
+        '<button class="btn primary" id="tcPush">Empurrar esse(s) lote(s) pra depois</button>'+
+        '<button class="btn" id="tcKeep">Deixar sobreposto mesmo assim</button>'+
+        '<button class="btn" id="tcCancel">Cancelar esse ajuste</button>'+
+      '</div>'+
+    '</div>';
+    document.body.appendChild(backdrop);
+    function close(){ backdrop.remove(); }
+    backdrop.addEventListener('pointerdown',function(e){ if(e.target===backdrop)close(); });
+    document.getElementById('tcCancel').addEventListener('click',function(){ close(); onChoice('cancel'); });
+    document.getElementById('tcKeep').addEventListener('click',function(){ close(); onChoice('keep'); });
+    document.getElementById('tcPush').addEventListener('click',function(){ close(); onChoice('push'); });
   }
   /** Prompt "Incluir ou Substituir" quando o arraste solta num lote que já tem outra equipe
    *  nesse mesmo serviço. Incluir divide o lote entre as equipes (continua calculado
@@ -5473,7 +5528,36 @@
               var effProd=(teamProdsArr[srcSeg.team-1]>0)?teamProdsArr[srcSeg.team-1]:pnum(sv.p);
               dur=effProd>0?Math.max(1,Math.ceil(destQty/effProd)):srcSeg.dur;
             }
-            OVR[kDst]={team:srcSeg.team,startWeek:destWeek,duration:dur,pinned:true};
+            var newVal={team:srcSeg.team,startWeek:destWeek,duration:dur,pinned:true};
+            var overlapEnd=destWeek+dur-1;
+            // Checa se essa equipe já está em OUTRO lote desse serviço num período que bate com
+            // esse novo (a origem não conta — ela tá saindo de lá).
+            var conflicts=segs.filter(function(sg){
+              if(sg.si!==si||sg.team!==srcSeg.team||sg.li===destLi||sg.li===d.li)return false;
+              var sgEnd=sg.start+sg.dur-1;
+              return sg.start<=overlapEnd&&sgEnd>=destWeek;
+            });
+            var commit=function(){
+              OVR[kDst]=newVal;
+              if(kOrig&&kOrig!==kDst)cleanupOrigin(kOrig);
+              ADJ_PENDING[kDst]=true; if(kOrig)ADJ_PENDING[kOrig]=true;
+              ADJ_DIRTY=true; renderCrono();
+            };
+            if(conflicts.length){
+              openTeamConflictMenu(sv.n,srcSeg.team,conflicts,function(choice){
+                if(choice==='cancel')return;
+                commit();
+                if(choice==='push'){
+                  conflicts.forEach(function(c){
+                    var kc=ovrKey(c.li,si); if(!kc)return;
+                    OVR[kc]=Object.assign({},OVR[kc],{startWeek:overlapEnd+1});
+                    ADJ_PENDING[kc]=true;
+                  });
+                  ADJ_DIRTY=true; renderCrono();
+                }
+              });
+            } else { commit(); }
+            return;
           } else if(mode==='include'){
             // Divide o lote entre a equipe arrastada e quem já estava — continua no cálculo
             // automático (cada equipe com sua parte da quantidade), só com a semana mínima fixada.
