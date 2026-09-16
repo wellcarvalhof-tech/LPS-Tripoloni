@@ -1081,6 +1081,9 @@
   var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
   var HIST_OPEN={};
   var REAL_FILTER='todos';
+  var REAL_CAT_OPEN={};
+  var TOT_FILTER='todos', TOT_OPEN={};
+  var SVCPR_FILTER='todos', SVCPR_OPEN={};
   function sectionCard(key,title,note,actionsHtml,bodyHtml){
     var open=HIST_OPEN[key]!==false;
     return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;'+(open?'margin-bottom:10px':'')+'">'+
@@ -1095,13 +1098,19 @@
    * cadastrados — constante em todas as semanas do cronograma, já que não tem equipes próprias).
    * O realizado apontado por recurso é rateado entre TODAS as linhas que o usam naquela semana
    * (serviços e apoio juntos), proporcional ao previsto de cada uma. */
-  function computeServicePR(hist){
+  function computeServicePR(hist,tipoFilter){
+    tipoFilter=tipoFilter||'todos';
+    function crewMatch(item){
+      if(tipoFilter==='todos')return true;
+      var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0];
+      return !!(r&&r.tipo===tipoFilter);
+    }
     var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
     var previsto={}, realizado={};
     SERV.forEach(function(s,si){
       var arr=[]; for(var w=0;w<tw;w++)arr.push(0);
       previsto['s'+si]=arr;
-      var crew=(s.cfg&&s.cfg.crew)||[], teams=teamsByService[si]||[];
+      var crew=((s.cfg&&s.cfg.crew)||[]).filter(crewMatch), teams=teamsByService[si]||[];
       crew.forEach(function(item){
         for(var w2=0;w2<tw;w2++) arr[w2]+=(teams[w2]||0)*(item.qtyPerTeam||0);
       });
@@ -1109,7 +1118,7 @@
     });
     var arrApoio=[]; for(var wA=0;wA<tw;wA++)arrApoio.push(0);
     APOIO.forEach(function(a){
-      ((a.cfg&&a.cfg.crew)||[]).forEach(function(item){
+      ((a.cfg&&a.cfg.crew)||[]).filter(crewMatch).forEach(function(item){
         for(var w4=0;w4<tw;w4++) arrApoio[w4]+=(item.qtyPerTeam||0);
       });
     });
@@ -1119,10 +1128,11 @@
     for(var w=1;w<=tw;w++){
       var d=mondayOf(w).toISOString().slice(0,10);
       RECURSOS.forEach(function(r){
+        if(tipoFilter!=='todos'&&r.tipo!==tipoFilter)return;
         var rv=REALIZADO_REC[r.id+'::'+d]||0; if(!rv)return;
         var totalPrev=0, shares=[];
         SERV.forEach(function(s,si){
-          var crew=(s.cfg&&s.cfg.crew)||[];
+          var crew=((s.cfg&&s.cfg.crew)||[]).filter(crewMatch);
           var item=crew.filter(function(c){return c.resourceId===r.id;})[0];
           if(!item)return;
           var teams=(teamsByService[si]||[])[w-1]||0, p=teams*item.qtyPerTeam;
@@ -1130,7 +1140,7 @@
         });
         var apoioP=0;
         APOIO.forEach(function(a){
-          var item=((a.cfg&&a.cfg.crew)||[]).filter(function(c){return c.resourceId===r.id;})[0];
+          var item=((a.cfg&&a.cfg.crew)||[]).filter(crewMatch).filter(function(c){return c.resourceId===r.id;})[0];
           if(item)apoioP+=item.qtyPerTeam||0;
         });
         if(apoioP>0){shares.push({key:'apoio',p:apoioP}); totalPrev+=apoioP;}
@@ -1155,6 +1165,15 @@
     for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
+    function crewDetail(crew){
+      var filtered=(crew||[]).filter(function(c){
+        if(SVCPR_FILTER==='todos')return true;
+        var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];
+        return r&&r.tipo===SVCPR_FILTER;
+      });
+      return filtered.map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ')||'—';
+    }
+    var colspanAll=1+tw*2;
     var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
     var rows=visible.map(function(si){
       var s=SERV[si], cells='';
@@ -1167,7 +1186,10 @@
         cells+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(p>0?fmtBR(p):'—')+'</td>'+
           '<td class="r mono" style="background:'+bg+';color:'+fg+';font-size:10.5px">'+(rv>0?fmtBR(rv):'—')+'</td>';
       }
-      return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td>'+cells+'</tr>';
+      var key='s'+si, open=!!SVCPR_OPEN[key];
+      var r='<tr><td><button class="iconbtn" data-svcprtoggle="'+key+'" style="margin-right:4px">'+(open?'▾':'▸')+'</button><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td>'+cells+'</tr>';
+      if(open)r+='<tr><td colspan="'+colspanAll+'" style="padding:2px 8px 10px 32px;font-size:10.5px;color:var(--muted)">Composição (por equipe): '+crewDetail((s.cfg&&s.cfg.crew)||[])+'</td></tr>';
+      return r;
     }).join('');
     if(apoioHas){
       var cellsA='';
@@ -1180,7 +1202,12 @@
         cellsA+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(pA>0?fmtBR(pA):'—')+'</td>'+
           '<td class="r mono" style="background:'+bgA+';color:'+fgA+';font-size:10.5px">'+(rvA>0?fmtBR(rvA):'—')+'</td>';
       }
-      rows+='<tr><td><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td>'+cellsA+'</tr>';
+      var apoOpen=!!SVCPR_OPEN.apoio;
+      rows+='<tr><td><button class="iconbtn" data-svcprtoggle="apoio" style="margin-right:4px">'+(apoOpen?'▾':'▸')+'</button><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td>'+cellsA+'</tr>';
+      if(apoOpen){
+        var compAAll=APOIO.map(function(a){return crewDetail((a.cfg&&a.cfg.crew)||[]);}).filter(function(x){return x&&x!=='—';}).join(', ')||'—';
+        rows+='<tr><td colspan="'+colspanAll+'" style="padding:2px 8px 10px 32px;font-size:10.5px;color:var(--muted)">Composição: '+compAAll+'</td></tr>';
+      }
     }
     if(visible.length||apoioHas){
       var totCells='';
@@ -1193,9 +1220,13 @@
       }
       rows+='<tr style="background:var(--elev)"><td style="font-weight:700">Total geral</td>'+totCells+'</tr>';
     }
+    var svcprFiltBtns=['todos','funcao','equipamento'].map(function(f){
+      var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
+      return '<button class="subtab'+(SVCPR_FILTER===f?' active':'')+'" data-svcprfilter="'+f+'">'+lbl+'</button>';
+    }).join('');
     return sectionCard('servicopr','Previsto × Realizado por serviço',
-      'Mostra só serviços (e Apoio Administrativo) com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre todos os consumidores (serviços + apoio) que o utilizam naquela semana, proporcional ao previsto.',
-      null,
+      'Mostra só serviços (e Apoio Administrativo) com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre todos os consumidores (serviços + apoio) que o utilizam naquela semana, proporcional ao previsto. Filtro Mão de obra/Equipamentos limita o previsto/realizado só aos recursos desse tipo.',
+      svcprFiltBtns,
       (visible.length||apoioHas)?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço ou item de apoio com previsto ou realizado apontado ainda.</div>'
     );
   }
@@ -1226,7 +1257,9 @@
     var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
     var rows='';
     order.forEach(function(cat){
-      rows+='<tr><td colspan="'+(1+tw*2)+'" style="background:var(--elev);font-weight:700;padding:6px 8px">'+cat+'</td></tr>';
+      var catOpen=REAL_CAT_OPEN[cat]!==false;
+      var catP=[],catR=[]; for(var wc=0;wc<tw;wc++){catP.push(0);catR.push(0);}
+      var rowsInner='';
       groups[cat].forEach(function(r){
         var cells='';
         for(var w2=1;w2<=tw;w2++){
@@ -1234,13 +1267,24 @@
           var p=(hist.byResource[r.id]||[])[w2-1]||0;
           var rv=REALIZADO_REC[r.id+'::'+d]||0;
           totP[w2-1]+=p; totR[w2-1]+=rv;
+          catP[w2-1]+=p; catR[w2-1]+=rv;
           var bg=rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)');
           var fg=rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)');
           cells+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(p>0?fmtBR(p):'—')+'</td>'+
             '<td style="background:'+bg+'"><input class="einp" type="number" data-realres="'+r.id+'" data-realdate="'+d+'" value="'+(rv||0)+'" style="width:52px;background:transparent;border-color:transparent;color:'+fg+';font-weight:700;text-align:right;padding:2px 4px"></td>';
         }
-        rows+='<tr><td>'+r.n+'</td>'+cells+'</tr>';
+        rowsInner+='<tr><td>'+r.n+'</td>'+cells+'</tr>';
       });
+      var catCells='';
+      for(var wc2=1;wc2<=tw;wc2++){
+        var pC=catP[wc2-1], rC=catR[wc2-1];
+        var bgC=rC>pC?'var(--crit-bg)':(rC<pC?'var(--warn-bg)':'var(--good-bg)');
+        var fgC=rC>pC?'var(--crit)':(rC<pC?'var(--warn)':'var(--good)');
+        catCells+='<td class="r mono" style="font-weight:700">'+(pC>0?fmtBR(pC):'—')+'</td>'+
+          '<td class="r mono" style="background:'+bgC+';color:'+fgC+';font-weight:700">'+(rC>0?fmtBR(rC):'—')+'</td>';
+      }
+      rows+='<tr style="background:var(--elev)"><td style="font-weight:700"><button class="iconbtn" data-realcat="'+escAttr(cat)+'" style="margin-right:4px">'+(catOpen?'▾':'▸')+'</button>'+cat+'</td>'+catCells+'</tr>';
+      if(catOpen)rows+=rowsInner;
     });
     if(list.length){
       var totCells='';
@@ -1392,23 +1436,36 @@
         +addApoioCrewCtl)
     );
 
+    function totCrewDetail(crew){
+      var filtered=(crew||[]).filter(function(c){
+        if(TOT_FILTER==='todos')return true;
+        var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];
+        return r&&r.tipo===TOT_FILTER;
+      });
+      return filtered.map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ')||'—';
+    }
     var totRows=SERV.map(function(s,si){
-      var comp=((s.cfg&&s.cfg.crew)||[]).map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ')||'—';
-      return '<tr><td><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td><td class="mono">'+s.eq+'</td><td class="note">'+comp+'</td><td class="r mono">'+fmtBR(hist.totalByService[si]||0)+'</td></tr>';
+      var key='s'+si, open=TOT_OPEN[key]!==false;
+      var toggle='<button class="iconbtn" data-tottoggle="'+key+'" style="margin-right:4px">'+(open?'▾':'▸')+'</button>';
+      var comp=open?totCrewDetail((s.cfg&&s.cfg.crew)||[]):'<span style="opacity:.6">clique pra ver</span>';
+      return '<tr><td>'+toggle+'<span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td><td class="mono">'+s.eq+'</td><td class="note">'+comp+'</td><td class="r mono">'+fmtBR(hist.totalByService[si]||0)+'</td></tr>';
     }).join('');
     if(hist.grandTotalIndireto>0){
-      var compA=APOIO.map(function(a){
-        var comp=((a.cfg&&a.cfg.crew)||[]).map(function(c){var r=RECURSOS.filter(function(x){return x.id===c.resourceId;})[0];return r?(c.qtyPerTeam+'× '+r.n):null;}).filter(Boolean).join(', ');
-        return comp;
-      }).filter(Boolean).join(', ')||'—';
-      totRows+='<tr><td><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td><td class="mono">—</td><td class="note">'+compA+'</td><td class="r mono">'+fmtBR(hist.grandTotalIndireto)+'</td></tr>';
+      var apoOpenT=TOT_OPEN.apoio!==false;
+      var toggleA='<button class="iconbtn" data-tottoggle="apoio" style="margin-right:4px">'+(apoOpenT?'▾':'▸')+'</button>';
+      var compA=apoOpenT?(APOIO.map(function(a){return totCrewDetail((a.cfg&&a.cfg.crew)||[]);}).filter(function(x){return x&&x!=='—';}).join(', ')||'—'):'<span style="opacity:.6">clique pra ver</span>';
+      totRows+='<tr><td>'+toggleA+'<span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td><td class="mono">—</td><td class="note">'+compA+'</td><td class="r mono">'+fmtBR(hist.grandTotalIndireto)+'</td></tr>';
     }
-    var totais=sectionCard('totais','Quantidades totais',null,null,
+    var totFiltBtns=['todos','funcao','equipamento'].map(function(f){
+      var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
+      return '<button class="subtab'+(TOT_FILTER===f?' active':'')+'" data-totfilter="'+f+'">'+lbl+'</button>';
+    }).join('');
+    var totais=sectionCard('totais','Quantidades totais',null,totFiltBtns,
       (SERV.length||APOIO.length)?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipes</th><th>Composição da equipe típica</th><th class="r">Total</th></tr></thead><tbody>'+totRows+
         '<tr style="font-weight:700;background:var(--elev)"><td colspan="3">Total geral da obra (direto + indireto)</td><td class="r mono">'+fmtBR(hist.grandTotal)+'</td></tr></tbody></table></div>':'<div class="note">Nenhum serviço cadastrado.</div>'
     );
 
-    var servicoPR=servicoPRHTML(computeServicePR(hist));
+    var servicoPR=servicoPRHTML(computeServicePR(hist,SVCPR_FILTER));
 
     var filtroBtns=['todos','funcao','equipamento'].map(function(f){
       var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
@@ -3095,6 +3152,21 @@
       });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-realcat]').forEach(function(b){
+        b.addEventListener('click',function(){var k=b.getAttribute('data-realcat'); REAL_CAT_OPEN[k]=!(REAL_CAT_OPEN[k]!==false); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-totfilter]').forEach(function(b){
+        b.addEventListener('click',function(){TOT_FILTER=b.getAttribute('data-totfilter'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-tottoggle]').forEach(function(b){
+        b.addEventListener('click',function(){var k=b.getAttribute('data-tottoggle'); TOT_OPEN[k]=!(TOT_OPEN[k]!==false); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-svcprfilter]').forEach(function(b){
+        b.addEventListener('click',function(){SVCPR_FILTER=b.getAttribute('data-svcprfilter'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-svcprtoggle]').forEach(function(b){
+        b.addEventListener('click',function(){var k=b.getAttribute('data-svcprtoggle'); SVCPR_OPEN[k]=!SVCPR_OPEN[k]; go('cr-hist');});
       });
       document.querySelectorAll('[data-realres]').forEach(function(inp){
         inp.addEventListener('change',function(){saveRealizadoField(inp.getAttribute('data-realres'),inp.getAttribute('data-realdate'),inp.value);});
