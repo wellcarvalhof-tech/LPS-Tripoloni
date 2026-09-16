@@ -3767,23 +3767,6 @@
         }
         return best;
       }
-      // Ajuste livre: lote+serviço com início, duração E equipe fixados manualmente (os três
-      // juntos — só acontece através do menu "Personalizar", nunca do arraste normal) sai do
-      // cálculo automático por completo. Fica exatamente onde foi colocado, sem ser adiado por
-      // predecessora, fila da equipe ou fila dinâmica — a chuva ainda reduz a produção semanal,
-      // mas o total (início+duração) não muda por causa dela.
-      var pinnedLis={};
-      LOTS.forEach(function(l,li){
-        if(QTY[li][si]<=0)return;
-        var o=ovrGet(li,si);
-        if(!(o&&o.pinned&&o.startWeek>0&&o.duration>0&&o.team>0&&o.team<=teams))return;
-        pinnedLis[li]=true;
-        var qty=QTY[li][si];
-        var packed=packSegment(o.startWeek-1,o.duration,qty/o.duration,qty,periods,wfCache,o.duration);
-        segs.push({li:li,si:si,team:o.team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
-          color:teamColor(hex,o.team,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
-        startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
-      });
       if(s.cfg&&s.cfg.pullFromQueue){
         // Fila dinâmica: ignora a equipe fixa por lote. A cada passo, entre todas as
         // combinações (lote pronto × equipe), escolhe a que termina mais cedo — considerando
@@ -3791,7 +3774,7 @@
         // que a equipe fez).
         var remaining=[];
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0||pinnedLis[li])return;
+          if(QTY[li][si]<=0)return;
           var o=ovrGet(li,si);
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
@@ -3835,7 +3818,7 @@
         // partes iguais entre elas, cada uma trabalhando em paralelo com sua própria produtividade.
         var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0||pinnedLis[li])return;
+          if(QTY[li][si]<=0)return;
           var o=ovrGet(li,si);
           var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
           if(!teamsArr||!teamsArr.length)teamsArr=[(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1)];
@@ -5218,18 +5201,16 @@
     var teams=[]; for(var t=1;t<=s.eq;t++)teams.push(t);
     var lotOpts=LOTS.map(function(l,li2){return '<option value="'+li2+'"'+(li2===li?' selected':'')+'>'+l+'</option>';}).join('');
     var teamOpts=teams.map(function(t){return '<option value="'+t+'"'+(t===seg.team?' selected':'')+'>Equipe '+t+'</option>';}).join('');
-    var qty0=QTY[li][si]||0;
     var backdrop=document.createElement('div');
     backdrop.className='segmenu-backdrop';
     backdrop.innerHTML='<div class="segmenu-panel card">'+
       '<div class="eyebrow" style="margin-bottom:2px">Personalizar — '+s.n+'</div>'+
-      '<div class="note" style="margin-bottom:12px">Fixa esse lote fora do cálculo automático (início, duração e equipe ficam exatamente como definido aqui, mesmo com fila dinâmica/sem paralisações/predecessora — a chuva ainda reduz a produção semana a semana, mas o total não muda).</div>'+
+      '<div class="note" style="margin-bottom:12px">Fixa qual equipe faz esse lote e a partir de qual semana. A duração continua calculada automaticamente (quantidade do lote ÷ produtividade da equipe, considerando a chuva e a fila da própria equipe) — não dá pra digitar uma duração fixa.</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+
         '<label>Lote<select class="esel" id="smLote">'+lotOpts+'</select></label>'+
         '<label>Equipe<select class="esel" id="smTeam">'+teamOpts+'</select></label>'+
-        '<label>Semana do ano de início<input class="einp" type="number" id="smStart" value="'+calStart+'"></label>'+
-        '<label>Duração (semanas)<input class="einp" type="number" id="smDur" min="1" value="'+seg.dur+'"></label>'+
-        '<div class="note">Quantidade do lote: <b id="smQtyLabel">'+fmtBR(qty0)+' '+s.u+'</b> — produtividade resultante: <b id="smProdOut">'+fmtBR(seg.dur>0?qty0/seg.dur:0)+'</b> '+s.u+'/sem</div>'+
+        '<label>Semana do ano de início (mínima)<input class="einp" type="number" id="smStart" value="'+calStart+'"></label>'+
+        '<div class="note" id="smPreview" style="min-height:1.4em"></div>'+
       '</div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
         (ovrGet(li,si)?'<button class="btn" id="smClear">Remover ajuste</button>':'')+
@@ -5241,97 +5222,56 @@
     function close(){ backdrop.remove(); }
     backdrop.addEventListener('pointerdown',function(e){ if(e.target===backdrop)close(); });
     document.getElementById('smCancel').addEventListener('click',close);
-    var loteSel=document.getElementById('smLote'), durInp=document.getElementById('smDur'),
-      qtyLabel=document.getElementById('smQtyLabel'), prodOut=document.getElementById('smProdOut');
-    var origRate=seg.dur>0?qty0/seg.dur:0; // produtividade original — referência pra sugerir duração ao trocar de lote
-    function refreshProd(){
-      var q=QTY[+loteSel.value][si]||0, d=Math.max(1,parseInt(durInp.value,10)||1);
-      qtyLabel.textContent=fmtBR(q)+' '+s.u; prodOut.textContent=fmtBR(q/d);
+    var loteSel=document.getElementById('smLote'), teamSel=document.getElementById('smTeam'),
+      startInp=document.getElementById('smStart'), preview=document.getElementById('smPreview');
+    // Roda o cálculo de verdade (buildSchedule) com o ajuste proposto, só pra mostrar o
+    // resultado — não deixa nada gravado. Assim o número mostrado aqui é sempre exatamente o
+    // que vai aparecer na matriz depois de aplicar, nunca uma conta feita à parte que possa
+    // divergir do motor real.
+    function previewSeg(newLi,newTeam,projWeek){
+      if(!projWeek)return null;
+      var kNew=ovrKey(newLi,si); if(!kNew)return null;
+      var had=Object.prototype.hasOwnProperty.call(OVR,kNew), saved=OVR[kNew];
+      OVR[kNew]={team:newTeam,startWeek:projWeek};
+      var result=buildSchedule().filter(function(sg){return sg.li===newLi&&sg.si===si&&sg.team===newTeam;})[0]||null;
+      if(had)OVR[kNew]=saved; else delete OVR[kNew];
+      return result;
     }
-    loteSel.addEventListener('change',function(){
-      // Trocar de lote muda a quantidade — sugere uma duração nova mantendo a mesma
-      // produtividade (em vez de manter a duração e deixar a produtividade resultante virar um
-      // número sem sentido, ex.: lote grande espremido na duração de um lote pequeno).
-      var q=QTY[+loteSel.value][si]||0;
-      if(origRate>0)durInp.value=Math.max(1,Math.round(q/origRate));
-      refreshProd();
-    });
-    durInp.addEventListener('input',refreshProd);
+    function refreshPreview(){
+      var newLi=+loteSel.value, newTeam=+teamSel.value;
+      var calWeek=Math.max(1,parseInt(startInp.value,10)||calStart);
+      var projWeek=projWeekForCalWeek(calWeek);
+      var qty=QTY[newLi][si]||0;
+      if(!projWeek){ preview.textContent='Semana do ano inválida.'; return; }
+      if(!(qty>0)){ preview.textContent='Esse lote não tem quantidade cadastrada pra "'+s.n+'".'; return; }
+      var result=previewSeg(newLi,newTeam,projWeek);
+      if(!result){ preview.textContent='Não deu pra calcular — confira os dados.'; return; }
+      preview.innerHTML='Quantidade: <b>'+fmtBR(qty)+' '+s.u+'</b> — duração calculada: <b>'+result.dur+' semana(s)</b>'+
+        ' (S'+isoWeek(mondayOf(result.start))+' a S'+isoWeek(mondayOf(result.start+result.dur-1))+')';
+    }
+    loteSel.addEventListener('change',refreshPreview);
+    teamSel.addEventListener('change',refreshPreview);
+    startInp.addEventListener('input',refreshPreview);
+    refreshPreview();
     var clearB=document.getElementById('smClear');
     if(clearB)clearB.addEventListener('click',function(){
       var k=ovrKey(li,si); if(k){delete OVR[k]; delete ADJ_PENDING[k]; ADJ_DIRTY=true;}
       close(); renderCrono();
     });
     document.getElementById('smApply').addEventListener('click',function(){
-      var newLi=+loteSel.value, newTeam=+document.getElementById('smTeam').value;
-      var calWeek=Math.max(1,parseInt(document.getElementById('smStart').value,10)||calStart);
-      var dur=Math.max(1,parseInt(durInp.value,10)||1);
+      var newLi=+loteSel.value, newTeam=+teamSel.value;
+      var calWeek=Math.max(1,parseInt(startInp.value,10)||calStart);
       var projWeek=projWeekForCalWeek(calWeek);
       if(!projWeek){alert('Semana do ano inválida.');return;}
       if(!(QTY[newLi][si]>0)){alert('O lote "'+LOTS[newLi]+'" não tem quantidade cadastrada pra "'+s.n+'".');return;}
       var kOld=ovrKey(li,si), kNew=ovrKey(newLi,si);
       if(!kNew)return;
-      var overlapEnd=projWeek+dur-1;
-      var conflicts=buildSchedule().filter(function(sg){
-        if(sg.si!==si||sg.team!==newTeam||sg.li===newLi||sg.li===li)return false;
-        var sgEnd=sg.start+sg.dur-1;
-        return sg.start<=overlapEnd&&sgEnd>=projWeek;
-      });
-      var commit=function(){
-        if(kOld&&kOld!==kNew){
-          // Mesma lógica do arraste: se o lote de origem nunca teve ajuste manual, ele voltaria
-          // pro rodízio padrão e podia cair de novo na mesma equipe que acabou de sair de lá.
-          // Fixa explicitamente a próxima equipe da rotação em vez de deixar ambíguo.
-          delete OVR[kOld];
-          if(s.eq>1)OVR[kOld]={team:(seg.team%s.eq)+1};
-        }
-        OVR[kNew]={team:newTeam,startWeek:projWeek,duration:dur,pinned:true};
-        ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
-        ADJ_DIRTY=true;
-        close(); renderCrono();
-      };
-      if(conflicts.length){
-        openTeamConflictMenu(s.n,newTeam,conflicts,function(choice){
-          if(choice==='cancel')return;
-          commit();
-          if(choice==='push'){
-            conflicts.forEach(function(c){
-              var kc=ovrKey(c.li,si); if(!kc)return;
-              OVR[kc]=Object.assign({},OVR[kc],{startWeek:overlapEnd+1});
-              ADJ_PENDING[kc]=true;
-            });
-            ADJ_DIRTY=true; renderCrono();
-          }
-        });
-      } else { commit(); }
+      if(kOld&&kOld!==kNew)delete OVR[kOld];
+      OVR[kNew]={team:newTeam,startWeek:projWeek};
+      ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
+      ADJ_DIRTY=true;
+      close(); renderCrono();
     });
-  }
-  /** Avisa quando fixar uma equipe (arraste livre ou menu Personalizar) faz ela ficar em dois
-   *  lotes no mesmo período, no mesmo serviço — "Empurrar" adia o(s) lote(s) conflitante(s) pra
-   *  logo depois do que acabou de ser fixado; "Deixar sobreposto" aplica mesmo assim; "Cancelar"
-   *  desiste do ajuste. */
-  function openTeamConflictMenu(svcName,team,conflicts,onChoice){
-    var list=conflicts.map(function(c){
-      return '<li>'+LOTS[c.li]+' — S'+isoWeek(mondayOf(c.start))+' a S'+isoWeek(mondayOf(c.start+c.dur-1))+'</li>';
-    }).join('');
-    var backdrop=document.createElement('div');
-    backdrop.className='segmenu-backdrop';
-    backdrop.innerHTML='<div class="segmenu-panel card">'+
-      '<div class="eyebrow" style="margin-bottom:2px">Equipe '+team+' já está em outro lote nesse período</div>'+
-      '<div class="note" style="margin-bottom:8px">Em "'+svcName+'", a Equipe '+team+' também está escalada em:</div>'+
-      '<ul style="margin:0 0 14px 18px;padding:0;font-size:12.5px;color:var(--muted)">'+list+'</ul>'+
-      '<div style="display:flex;flex-direction:column;gap:8px">'+
-        '<button class="btn primary" id="tcPush">Empurrar esse(s) lote(s) pra depois</button>'+
-        '<button class="btn" id="tcKeep">Deixar sobreposto mesmo assim</button>'+
-        '<button class="btn" id="tcCancel">Cancelar esse ajuste</button>'+
-      '</div>'+
-    '</div>';
-    document.body.appendChild(backdrop);
-    function close(){ backdrop.remove(); }
-    backdrop.addEventListener('pointerdown',function(e){ if(e.target===backdrop)close(); });
-    document.getElementById('tcCancel').addEventListener('click',function(){ close(); onChoice('cancel'); });
-    document.getElementById('tcKeep').addEventListener('click',function(){ close(); onChoice('keep'); });
-    document.getElementById('tcPush').addEventListener('click',function(){ close(); onChoice('push'); });
   }
   /** Prompt "Incluir ou Substituir" quando o arraste solta num lote que já tem outra equipe
    *  nesse mesmo serviço. Incluir divide o lote entre as equipes (continua calculado
@@ -5493,74 +5433,26 @@
         var others=segs.filter(function(sg){return sg.li===destLi&&sg.si===si&&sg.team!==srcSeg.team;});
         var otherTeams=[]; others.forEach(function(sg){ if(otherTeams.indexOf(sg.team)<0)otherTeams.push(sg.team); });
         function cleanupOrigin(kOrig){
-          if(!kOrig)return;
-          if(OVR[kOrig]&&Array.isArray(OVR[kOrig].teams)){
+          if(!kOrig||!OVR[kOrig])return;
+          if(Array.isArray(OVR[kOrig].teams)){
             OVR[kOrig].teams=OVR[kOrig].teams.filter(function(t){return t!==srcSeg.team;});
             if(!OVR[kOrig].teams.length)delete OVR[kOrig];
-            return;
-          }
-          // Tira a equipe arrastada desse lote. Sem isso, se esse lote nunca teve ajuste manual
-          // (seguia o rodízio padrão lote%equipes), ele continuaria caindo pra essa mesma equipe
-          // de novo — ela ficaria "roubando" dois lotes ao mesmo tempo. Fixa explicitamente a
-          // próxima equipe da rotação nesse lote em vez de deixar ambíguo.
-          delete OVR[kOrig];
-          if(sv.eq>1){
-            var nextTeam=(srcSeg.team%sv.eq)+1;
-            OVR[kOrig]={team:nextTeam};
-          }
+          } else { delete OVR[kOrig]; }
         }
         function doMove(mode){
+          // Fixa só a equipe e a semana mínima — a duração continua sendo sempre calculada pelo
+          // motor normal (produtividade da equipe × praticabilidade/chuva daquela semana),
+          // igual qualquer outro lote. Isso também é o que evita duplicar produção: o lote entra
+          // na MESMA fila da equipe que os outros, então se ele começar antes de um lote anterior
+          // da equipe terminar, essa semana de transição é dividida entre os dois automaticamente
+          // (não é uma "sobra" contada duas vezes).
           var kOrig=ovrKey(d.li,si), kDst=ovrKey(destLi,si);
           if(!kDst)return;
           if(mode==='replace'){
-            // Move livre: essa equipe fica sozinha nesse lote, exatamente onde foi solta (início
-            // e duração fixados) — sai do cálculo automático só pra esse lote, igual o menu
-            // "Personalizar". Qualquer equipe que já estivesse lá é substituída.
-            // A duração não pode vir "herdada" do lote de origem (destLi===d.li é o único caso
-            // em que faz sentido reaproveitar srcSeg.dur) — lotes diferentes quase sempre têm
-            // quantidades diferentes, e forçar a duração de um lote pequeno num lote grande (ou
-            // vice-versa) faz a produção semanal implícita ficar um número sem sentido. Recalcula
-            // a duração a partir da quantidade real do lote de destino e da produtividade da
-            // equipe arrastada (a mesma conta que o cálculo automático faria).
-            var dur=srcSeg.dur;
-            if(destLi!==d.li){
-              var teamProdsArr=(sv.cfg&&sv.cfg.teamProductivities)||[];
-              var effProd=(teamProdsArr[srcSeg.team-1]>0)?teamProdsArr[srcSeg.team-1]:pnum(sv.p);
-              dur=effProd>0?Math.max(1,Math.ceil(destQty/effProd)):srcSeg.dur;
-            }
-            var newVal={team:srcSeg.team,startWeek:destWeek,duration:dur,pinned:true};
-            var overlapEnd=destWeek+dur-1;
-            // Checa se essa equipe já está em OUTRO lote desse serviço num período que bate com
-            // esse novo (a origem não conta — ela tá saindo de lá).
-            var conflicts=segs.filter(function(sg){
-              if(sg.si!==si||sg.team!==srcSeg.team||sg.li===destLi||sg.li===d.li)return false;
-              var sgEnd=sg.start+sg.dur-1;
-              return sg.start<=overlapEnd&&sgEnd>=destWeek;
-            });
-            var commit=function(){
-              OVR[kDst]=newVal;
-              if(kOrig&&kOrig!==kDst)cleanupOrigin(kOrig);
-              ADJ_PENDING[kDst]=true; if(kOrig)ADJ_PENDING[kOrig]=true;
-              ADJ_DIRTY=true; renderCrono();
-            };
-            if(conflicts.length){
-              openTeamConflictMenu(sv.n,srcSeg.team,conflicts,function(choice){
-                if(choice==='cancel')return;
-                commit();
-                if(choice==='push'){
-                  conflicts.forEach(function(c){
-                    var kc=ovrKey(c.li,si); if(!kc)return;
-                    OVR[kc]=Object.assign({},OVR[kc],{startWeek:overlapEnd+1});
-                    ADJ_PENDING[kc]=true;
-                  });
-                  ADJ_DIRTY=true; renderCrono();
-                }
-              });
-            } else { commit(); }
-            return;
+            OVR[kDst]={team:srcSeg.team,startWeek:destWeek};
           } else if(mode==='include'){
-            // Divide o lote entre a equipe arrastada e quem já estava — continua no cálculo
-            // automático (cada equipe com sua parte da quantidade), só com a semana mínima fixada.
+            // Divide o lote entre a equipe arrastada e quem já estava — cada equipe segue com
+            // sua parte da quantidade, timing calculado normalmente.
             var teamsArr=otherTeams.slice(); if(teamsArr.indexOf(srcSeg.team)<0)teamsArr.push(srcSeg.team);
             OVR[kDst]={teams:teamsArr,startWeek:destWeek};
           }
