@@ -787,6 +787,14 @@
     if(sameView){
       document.getElementById('content').scrollTop=keepContentScroll;
       window.scrollTo(0,keepPageScroll);
+      // innerHTML destrói o campo que estava com foco (o que disparou o "change" que levou até
+      // aqui) — o navegador então tenta focar outra coisa e, ao fazer isso, pode rolar a página
+      // de novo por conta própria, num passo seguinte ao script (depois do scrollTo acima). Reaplica
+      // no próximo frame pra vencer esse ajuste do navegador.
+      requestAnimationFrame(function(){
+        var ce=document.getElementById('content'); if(ce)ce.scrollTop=keepContentScroll;
+        window.scrollTo(0,keepPageScroll);
+      });
     }else{
       document.getElementById('content').scrollTop=0; window.scrollTo(0,0);
     }
