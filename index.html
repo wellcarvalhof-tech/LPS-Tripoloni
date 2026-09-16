@@ -506,8 +506,13 @@
   async function sbReorderLotes(items){
     if(!items.length)return;
     await sbRequireSession();
-    var r=await SB.from('lotes').upsert(items.map(function(it){return {id:it.id,ordem:it.ordem};}),{onConflict:'id'});
-    if(r.error)throw r.error;
+    // update em paralelo (não upsert): upsert roda a policy de INSERT mesmo quando o conflito
+    // resolve pra update, e como só mandamos {id,ordem} (sem obra_id), a checagem de RLS do
+    // insert rejeitava. update() de cada linha usa a policy de UPDATE (baseada na obra_id que já
+    // está na linha), e continua tudo numa única leva em paralelo — não trava como o loop sequencial antigo.
+    var results=await Promise.all(items.map(function(it){return SB.from('lotes').update({ordem:it.ordem}).eq('id',it.id);}));
+    var failed=results.filter(function(r){return r.error;})[0];
+    if(failed)throw failed.error;
   }
   async function sbDeleteLote(id){
     await sbRequireSession();
