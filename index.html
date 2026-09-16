@@ -250,6 +250,10 @@
   table.tcm td.sumname{text-align:center;font-weight:700;font-size:11.5px}
   table.tcm td.sumq{text-align:center;font-family:"IBM Plex Mono",monospace;color:var(--ink)}
   .apptoast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(10px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:9px;font-size:13px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:90;box-shadow:0 8px 24px rgba(0,0,0,.32)}
+  .segmenu-backdrop{position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px}
+  .segmenu-panel{max-width:380px;width:100%;max-height:90vh;overflow-y:auto}
+  .segmenu-panel label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}
+  .segmenu-panel .einp,.segmenu-panel .esel{width:100%;box-sizing:border-box}
   .apptoast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
   /* ---------- Editores de cadastro ---------- */
@@ -3763,6 +3767,23 @@
         }
         return best;
       }
+      // Ajuste livre: lote+serviço com início, duração E equipe fixados manualmente (os três
+      // juntos — só acontece através do menu "Personalizar", nunca do arraste normal) sai do
+      // cálculo automático por completo. Fica exatamente onde foi colocado, sem ser adiado por
+      // predecessora, fila da equipe ou fila dinâmica — a chuva ainda reduz a produção semanal,
+      // mas o total (início+duração) não muda por causa dela.
+      var pinnedLis={};
+      LOTS.forEach(function(l,li){
+        if(QTY[li][si]<=0)return;
+        var o=ovrGet(li,si);
+        if(!(o&&o.pinned&&o.startWeek>0&&o.duration>0&&o.team>0&&o.team<=teams))return;
+        pinnedLis[li]=true;
+        var qty=QTY[li][si];
+        var packed=packSegment(o.startWeek-1,o.duration,qty/o.duration,qty,periods,wfCache,o.duration);
+        segs.push({li:li,si:si,team:o.team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
+          color:teamColor(hex,o.team,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
+        startByKey[li+'::'+si]=packed.start; endByKey[li+'::'+si]=packed.start+packed.duration-1;
+      });
       if(s.cfg&&s.cfg.pullFromQueue){
         // Fila dinâmica: ignora a equipe fixa por lote. A cada passo, entre todas as
         // combinações (lote pronto × equipe), escolhe a que termina mais cedo — considerando
@@ -3770,7 +3791,7 @@
         // que a equipe fez).
         var remaining=[];
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0)return;
+          if(QTY[li][si]<=0||pinnedLis[li])return;
           var o=ovrGet(li,si);
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
@@ -3814,7 +3835,7 @@
         // partes iguais entre elas, cada uma trabalhando em paralelo com sua própria produtividade.
         var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0)return;
+          if(QTY[li][si]<=0||pinnedLis[li])return;
           var o=ovrGet(li,si);
           var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
           if(!teamsArr||!teamsArr.length)teamsArr=[(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1)];
@@ -5184,6 +5205,71 @@
   // original nunca sai do DOM (só fica esmaecido), então o pointer capture
   // nunca se perde, mesmo re-renderizando a matriz depois de soltar.
   var _drag=null, _ghost=null, _seqDrag=null, _colDrag=null, _lotRowDrag=null;
+  var _segClickTimer=null, _segClickEl=null, _segClickAt=0;
+  /** Menu "Personalizar" de um segmento da matriz (clique simples, sem arrastar): fixa
+   *  início + duração + equipe exatamente como definido aqui, pra qualquer lote — sai do
+   *  cálculo automático (fila dinâmica, sem paralisações, predecessoras) só pra esse lote
+   *  específico. "Remover ajuste" volta ao cálculo automático normal. */
+  function openSegMenu(li,si){
+    var s=SERV[si]; if(!s)return;
+    var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
+    if(!seg)return;
+    var calStart=isoWeek(mondayOf(seg.start));
+    var teams=[]; for(var t=1;t<=s.eq;t++)teams.push(t);
+    var lotOpts=LOTS.map(function(l,li2){return '<option value="'+li2+'"'+(li2===li?' selected':'')+'>'+l+'</option>';}).join('');
+    var teamOpts=teams.map(function(t){return '<option value="'+t+'"'+(t===seg.team?' selected':'')+'>Equipe '+t+'</option>';}).join('');
+    var qty0=QTY[li][si]||0;
+    var backdrop=document.createElement('div');
+    backdrop.className='segmenu-backdrop';
+    backdrop.innerHTML='<div class="segmenu-panel card">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Personalizar — '+s.n+'</div>'+
+      '<div class="note" style="margin-bottom:12px">Fixa esse lote fora do cálculo automático (início, duração e equipe ficam exatamente como definido aqui, mesmo com fila dinâmica/sem paralisações/predecessora — a chuva ainda reduz a produção semana a semana, mas o total não muda).</div>'+
+      '<div style="display:flex;flex-direction:column;gap:10px">'+
+        '<label>Lote<select class="esel" id="smLote">'+lotOpts+'</select></label>'+
+        '<label>Equipe<select class="esel" id="smTeam">'+teamOpts+'</select></label>'+
+        '<label>Semana do ano de início<input class="einp" type="number" id="smStart" value="'+calStart+'"></label>'+
+        '<label>Duração (semanas)<input class="einp" type="number" id="smDur" min="1" value="'+seg.dur+'"></label>'+
+        '<div class="note">Quantidade do lote: <b id="smQtyLabel">'+fmtBR(qty0)+' '+s.u+'</b> — produtividade resultante: <b id="smProdOut">'+fmtBR(seg.dur>0?qty0/seg.dur:0)+'</b> '+s.u+'/sem</div>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
+        (ovrGet(li,si)?'<button class="btn" id="smClear">Remover ajuste</button>':'')+
+        '<button class="btn" id="smCancel">Cancelar</button>'+
+        '<button class="btn primary" id="smApply">Aplicar</button>'+
+      '</div>'+
+    '</div>';
+    document.body.appendChild(backdrop);
+    function close(){ backdrop.remove(); }
+    backdrop.addEventListener('pointerdown',function(e){ if(e.target===backdrop)close(); });
+    document.getElementById('smCancel').addEventListener('click',close);
+    var loteSel=document.getElementById('smLote'), durInp=document.getElementById('smDur'),
+      qtyLabel=document.getElementById('smQtyLabel'), prodOut=document.getElementById('smProdOut');
+    function refreshProd(){
+      var q=QTY[+loteSel.value][si]||0, d=Math.max(1,parseInt(durInp.value,10)||1);
+      qtyLabel.textContent=fmtBR(q)+' '+s.u; prodOut.textContent=fmtBR(q/d);
+    }
+    loteSel.addEventListener('change',refreshProd);
+    durInp.addEventListener('input',refreshProd);
+    var clearB=document.getElementById('smClear');
+    if(clearB)clearB.addEventListener('click',function(){
+      var k=ovrKey(li,si); if(k){delete OVR[k]; delete ADJ_PENDING[k]; ADJ_DIRTY=true;}
+      close(); renderCrono();
+    });
+    document.getElementById('smApply').addEventListener('click',function(){
+      var newLi=+loteSel.value, newTeam=+document.getElementById('smTeam').value;
+      var calWeek=Math.max(1,parseInt(document.getElementById('smStart').value,10)||calStart);
+      var dur=Math.max(1,parseInt(durInp.value,10)||1);
+      var projWeek=projWeekForCalWeek(calWeek);
+      if(!projWeek){alert('Semana do ano inválida.');return;}
+      if(!(QTY[newLi][si]>0)){alert('O lote "'+LOTS[newLi]+'" não tem quantidade cadastrada pra "'+s.n+'".');return;}
+      var kOld=ovrKey(li,si), kNew=ovrKey(newLi,si);
+      if(!kNew)return;
+      if(kOld&&kOld!==kNew)delete OVR[kOld];
+      OVR[kNew]={team:newTeam,startWeek:projWeek,duration:dur,pinned:true};
+      ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
+      ADJ_DIRTY=true;
+      close(); renderCrono();
+    });
+  }
   function dragCleanup(){
     if(_drag&&_drag.el){_drag.el.style.opacity='';}
     if(_ghost){_ghost.remove();_ghost=null;}
@@ -5315,12 +5401,26 @@
           }
         }
         if(changed){ ADJ_DIRTY=true; renderCrono(); }
+        else if(d.currentStart===d.startWeek&&d.currentLi===d.li){
+          // Não arrastou (soltou onde pegou) — pode ser um clique simples (abre o menu de
+          // personalizar) ou o primeiro dos dois cliques de um dblclick (reseta o ajuste, ver
+          // abaixo). Espera um pouco pra ver se vem um segundo clique antes de abrir o menu.
+          var liC=d.li, siC=si;
+          if(_segClickEl===el&&(Date.now()-_segClickAt)<400){
+            clearTimeout(_segClickTimer); _segClickTimer=null; _segClickEl=null;
+          } else {
+            _segClickEl=el; _segClickAt=Date.now();
+            clearTimeout(_segClickTimer);
+            _segClickTimer=setTimeout(function(){ _segClickEl=null; openSegMenu(liC,siC); },380);
+          }
+        }
       });
       el.addEventListener('pointercancel',function(){
         if(!_drag||_drag.el!==el)return;
         dragCleanup(); _drag=null;
       });
       el.addEventListener('dblclick',function(){
+        clearTimeout(_segClickTimer); _segClickTimer=null; _segClickEl=null;
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
         var k=ovrKey(li,si); if(!k||!OVR[k])return;
         delete OVR[k]; delete ADJ_PENDING[k]; ADJ_DIRTY=true; renderCrono();
