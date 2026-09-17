@@ -337,6 +337,21 @@
   @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
   .print-only{display:none}
+  /* Matriz compacta nas folhas do PDF (.print-page): linhas mais baixas, fonte menor, sem grip
+     de arraste nem etiqueta de equipe (o tom da cor já distingue as equipes), nada sticky. Fica
+     fora do @media print de propósito — a impressão mede a matriz nesse formato antes de
+     escalar, e #printMat é display:none na tela, então isso não afeta a matriz normal. */
+  .print-page .print-zoom{width:max-content} /* tabela no tamanho do conteúdo, igual à medição — nunca espremida pelo container */
+  .print-page table.tcm{width:auto;min-width:0;font-size:9px}
+  .print-page table.tcm thead th{position:static;padding:2px 4px;font-size:8.5px}
+  .print-page table.tcm td.dt,.print-page table.tcm td.wk,.print-page table.tcm th:nth-child(1),.print-page table.tcm th:nth-child(2){position:static;width:auto;min-width:0;max-width:none}
+  .print-page table.tcm td.dt,.print-page table.tcm td.wk{padding:1px 4px;font-size:8.5px;white-space:nowrap}
+  .print-page .tcm-row{min-height:17px;max-width:120px} /* uma semana com muitos segmentos lado a lado não pode alargar a coluna inteira — encolhem, como na tela */
+  .print-page .tcm-seg{padding:0 2px;font-size:8.5px;line-height:1.1;cursor:default}
+  .print-page .tcm-grip,.print-page .tcm-team{display:none}
+  .print-page .tcm-rain{font-size:7px}
+  .print-page table.tcm td.sumname,.print-page table.tcm td.sumq{padding:1px 4px;font-size:8.5px}
+  .print-page .tcm-badge{font-size:7px}
   @media print{
     @page{size:landscape;margin:10mm}
     *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
@@ -4676,35 +4691,54 @@
     // na horizontal — cada folha mostra uma faixa de lotes com TODAS as semanas. Antes ela era
     // encolhida pra caber a largura inteira numa folha só, e com muitos lotes ficava ilegível.
     var mat=document.getElementById('printMat');
-    var wrap=document.getElementById('tcWrap');
-    var table=wrap?wrap.querySelector('table'):null;
-    if(mat&&table&&LOTS.length){
+    if(mat&&LOTS.length){
       var pxPerMm=96/25.4;
       var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
       var headH=30, slack=14; // cabeçalho por folha + folga fixa
-      var naturalH=table.scrollHeight;
-      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
-      // de semanas isso soma — sem a folga a última linha pode escorregar pra uma folha vazia.
-      var scale=Math.max(0.12,Math.min(1.6,+((pageH-headH-slack)/naturalH*0.97).toFixed(3)));
-      // Largura das colunas fixas (data + semana) e de cada coluna de lote, na escala 1 — usadas
-      // pra decidir quantos lotes cabem em cada folha (acumula coluna a coluna até estourar).
-      var ths=table.querySelectorAll('thead th');
+      var segsAll=buildSchedule();
+      var allIdxs=LOTS.map(function(l,li){return li;});
+      // Mede a matriz no formato COMPACTO de impressão (linhas mais baixas, sem grips/etiquetas
+      // de equipe — estilos de .print-page), num elemento fora da tela. Medir a matriz da tela
+      // daria uma altura maior que a real e a escala sairia menor do que podia.
+      var probe=document.createElement('div');
+      probe.className='print-page';
+      probe.style.cssText='position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content';
+      probe.innerHTML=matrixTableCore(true,allIdxs,segsAll);
+      document.body.appendChild(probe);
+      var ptable=probe.querySelector('table');
+      var naturalH=ptable.offsetHeight;
+      var ths=ptable.querySelectorAll('thead th');
       var fixedW=(ths[0]?ths[0].offsetWidth:0)+(ths[1]?ths[1].offsetWidth:0);
       var lotWs=[]; for(var ti=2;ti<ths.length;ti++)lotWs.push(ths[ti].offsetWidth||60);
+      probe.remove();
+      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
+      // de semanas isso soma — sem a folga a última linha pode escorregar pra uma folha vazia.
+      var scale=Math.max(0.12,Math.min(1.6,+((pageH-headH-slack)/Math.max(1,naturalH)*0.97).toFixed(3)));
+      // Quantos lotes cabem em cada folha: acumula a largura real de cada coluna até estourar.
+      // Primeiro descobre quantas folhas são necessárias (guloso), depois redistribui os lotes
+      // em fatias de largura parecida — senão a última folha podia ficar com um lote sozinho.
       var availW=pageW/scale*0.97-fixedW;
-      var chunks=[], cur=[], curW=0;
-      for(var li=0;li<LOTS.length;li++){
-        var wcol=lotWs[li]||60;
-        if(cur.length&&curW+wcol>availW){ chunks.push(cur); cur=[]; curW=0; }
-        cur.push(li); curW+=wcol;
+      function splitLots(target){
+        var out=[], cur=[], curW=0;
+        for(var li=0;li<LOTS.length;li++){
+          var wcol=lotWs[li]||60;
+          if(cur.length&&(curW+wcol>availW||curW>=target)){ out.push(cur); cur=[]; curW=0; }
+          cur.push(li); curW+=wcol;
+        }
+        if(cur.length)out.push(cur);
+        return out;
       }
-      if(cur.length)chunks.push(cur);
-      var segsAll=buildSchedule();
+      var chunks=splitLots(Infinity);
+      if(chunks.length>1){
+        var totalW=lotWs.reduce(function(a,b){return a+b;},0);
+        var balanced=splitLots(totalW/chunks.length);
+        if(balanced.length===chunks.length)chunks=balanced;
+      }
       mat.innerHTML=chunks.map(function(chunk,pi){
         var faixa=chunks.length>1?(' — Lotes '+LOTS[chunk[0]]+' a '+LOTS[chunk[chunk.length-1]]+' — folha '+(pi+1)+'/'+chunks.length):'';
         return '<div class="print-page'+(pi<chunks.length-1?' brk':'')+'">'+
           '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+faixa+'</span></div>'+
-          '<div style="zoom:'+scale+'">'+matrixTableCore(true,chunk,segsAll)+'</div></div>';
+          '<div class="print-zoom" style="zoom:'+scale+'">'+matrixTableCore(true,chunk,segsAll)+'</div></div>';
       }).join('');
     }
   }
