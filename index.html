@@ -3804,6 +3804,11 @@
       // desviar os outros lotes automáticos da mesma equipe pra não bater nesse horário — quem
       // decide isso é o usuário, ajustando manualmente o que for preciso.
       var pinnedLis={};
+      // Primeiro só coleta os pins de todos os lotes (sem calcular nada ainda) — precisa saber
+      // TODOS antes de processar, porque dois pins da MESMA equipe em lotes diferentes que
+      // caem na mesma semana de transição têm que dividir a capacidade daquela semana entre
+      // si, não cada um contar como se tivesse a semana inteira pra si.
+      var allPins=[];
       LOTS.forEach(function(l,li){
         if(QTY[li][si]<=0)return;
         var o=ovrGet(li,si);
@@ -3821,15 +3826,34 @@
         if(!pins.length)return;
         pinnedLis[li]=true;
         var qtyEach=QTY[li][si]/pins.length;
-        var minStart=Infinity, maxEnd=-Infinity;
-        pins.forEach(function(p){
-          var effProd=teamProds[p.team-1]>0?teamProds[p.team-1]:prod;
-          var packed=packSegment(p.startWeek-1,qtyEach/effProd,effProd,qtyEach,periods,wfCache);
-          segs.push({li:li,si:si,team:p.team,teams:teams,start:packed.start,dur:packed.duration,qty:qtyEach,wq:packed.wq,
-            color:teamColor(hex,p.team,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
-          minStart=Math.min(minStart,packed.start); maxEnd=Math.max(maxEnd,packed.start+packed.duration-1);
+        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:qtyEach}); });
+      });
+      // Agrupa por equipe, ordena por semana de início e processa em sequência (posição
+      // contínua, igual o cálculo automático) — assim, se um lote termina no meio de uma
+      // semana e o próximo (fixado pra começar naquela mesma semana) continua dali, a semana é
+      // dividida entre os dois em vez de cada um contar como se tivesse 100% da capacidade.
+      // Se não houver essa proximidade (não é uma transição), a posição do pin vale como está.
+      var byTeamPins={};
+      allPins.forEach(function(p){ (byTeamPins[p.team]=byTeamPins[p.team]||[]).push(p); });
+      var loteRange={};
+      Object.keys(byTeamPins).forEach(function(teamKey){
+        var t2=+teamKey;
+        var effProd=teamProds[t2-1]>0?teamProds[t2-1]:prod;
+        var list=byTeamPins[teamKey].slice().sort(function(a,b){return a.startWeek-b.startWeek;});
+        var tPos=0;
+        list.forEach(function(p){
+          var startPos=Math.max(p.startWeek-1,tPos);
+          var packed=packSegment(startPos,p.qty/effProd,effProd,p.qty,periods,wfCache);
+          segs.push({li:p.li,si:si,team:t2,teams:teams,start:packed.start,dur:packed.duration,qty:p.qty,wq:packed.wq,
+            color:teamColor(hex,t2,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
+          if(!loteRange[p.li])loteRange[p.li]={min:Infinity,max:-Infinity};
+          loteRange[p.li].min=Math.min(loteRange[p.li].min,packed.start);
+          loteRange[p.li].max=Math.max(loteRange[p.li].max,packed.start+packed.duration-1);
+          tPos=packed.endPos;
         });
-        startByKey[li+'::'+si]=minStart; endByKey[li+'::'+si]=maxEnd;
+      });
+      Object.keys(loteRange).forEach(function(liKey){
+        startByKey[liKey+'::'+si]=loteRange[liKey].min; endByKey[liKey+'::'+si]=loteRange[liKey].max;
       });
       if(s.cfg&&s.cfg.pullFromQueue){
         // Fila dinâmica: ignora a equipe fixa por lote. A cada passo, entre todas as
@@ -5301,7 +5325,12 @@
       var dryRun=buildSchedule();
       if(had)OVR[kNew]=saved; else delete OVR[kNew];
       var result=dryRun.filter(function(sg){return sg.li===newLi&&sg.si===si&&sg.team===newTeam;})[0]||null;
-      var conflicts=result?dryRun.filter(function(sg){return sg.si===si&&sg.team===newTeam&&sg.li!==newLi&&segsGenuinelyOverlap(result,sg);}):[];
+      // O motor já divide sozinho a semana de transição entre lotes vizinhos da mesma equipe —
+      // só é conflito de verdade se a equipe nem conseguiu começar na semana pedida porque já
+      // está comprometida em outro lote (o resultado "atrasou" em relação ao pedido).
+      var conflicts=(result&&result.start>projWeek)?dryRun.filter(function(sg){
+        return sg.si===si&&sg.team===newTeam&&sg.li!==newLi&&(sg.start+sg.dur-1)>=projWeek&&sg.start<=result.start;
+      }):[];
       return {result:result,conflicts:conflicts};
     }
     function refreshPreview(){
@@ -5352,12 +5381,13 @@
       if(p.conflicts.length){
         openOverlapWarning(s.n,newTeam,p.conflicts,function(choice){
           if(choice==='cancel')return;
-          finalize();
           if(choice==='push'){
-            var pushTo=p.result.start+p.result.dur;
+            // Usa a duração calculada (que não muda com a posição) a partir da semana PEDIDA,
+            // não da semana onde tinha ficado atrasado — senão sobra um vão ocioso sem necessidade.
+            var pushTo=projWeek+p.result.dur;
             p.conflicts.forEach(function(c){ pinSegmentTeam(c.li,si,newTeam,pushTo); });
-            ADJ_DIRTY=true; renderCrono();
           }
+          finalize();
         });
       } else { finalize(); }
     });
@@ -5565,22 +5595,22 @@
           delete OVR[kOrig];
           if(sv.eq>1)OVR[kOrig]={team:(srcSeg.team%sv.eq)+1};
         }
-        // Testa a colocação ANTES de gravar de verdade: se deixar a equipe em dois lotes na
-        // mesma semana (fora a semana de transição, que é permitida), avisa — só isso o ajuste
-        // manual não pode sobrepor. "Empurrar" resolve adiando o lote conflitante; "Cancelar"
-        // desiste, nada é gravado.
-        function commitWithOverlapCheck(kOrig,kDst,newVal,team){
+        // Testa a colocação ANTES de gravar de verdade: o motor agora divide sozinho a semana de
+        // transição entre lotes vizinhos da mesma equipe (empurra pra depois quando não cabe) —
+        // mas se a equipe pedida não conseguiu nem começar na semana que o usuário escolheu
+        // porque já está comprometida em outro lote naquele período, avisa e deixa escolher:
+        // "Empurrar" o lote que tava no caminho, ou "Cancelar" (nada é gravado). Isso é a única
+        // coisa que o ajuste manual não sobrepõe — a impossibilidade física de produzir em dois
+        // lugares ao mesmo tempo.
+        function commitWithOverlapCheck(kOrig,kDst,newVal,team,requestedWeek){
           var hadDst=Object.prototype.hasOwnProperty.call(OVR,kDst), savedDst=OVR[kDst];
           OVR[kDst]=newVal;
           var dryRun=buildSchedule();
           if(hadDst)OVR[kDst]=savedDst; else delete OVR[kDst];
-          var placed=dryRun.filter(function(sg){return sg.si===si&&sg.team===team&&sg.li===destLi;});
-          var conflicts=[];
-          placed.forEach(function(ps){
-            dryRun.forEach(function(sg){
-              if(sg.si===si&&sg.team===team&&sg.li!==destLi&&segsGenuinelyOverlap(ps,sg)&&conflicts.indexOf(sg)<0)conflicts.push(sg);
-            });
-          });
+          var placed=dryRun.filter(function(sg){return sg.si===si&&sg.team===team&&sg.li===destLi;})[0];
+          var conflicts=(placed&&placed.start>requestedWeek)?dryRun.filter(function(sg){
+            return sg.si===si&&sg.team===team&&sg.li!==destLi&&(sg.start+sg.dur-1)>=requestedWeek&&sg.start<=placed.start;
+          }):[];
           function finalize(){
             OVR[kDst]=newVal;
             if(kOrig&&kOrig!==kDst)cleanupOrigin(kOrig);
@@ -5590,12 +5620,13 @@
           if(conflicts.length){
             openOverlapWarning(sv.n,team,conflicts,function(choice){
               if(choice==='cancel')return;
-              finalize();
               if(choice==='push'){
-                var pushTo=Math.max.apply(null,placed.map(function(ps){return ps.start+ps.dur;}));
+                // Usa a duração calculada (não muda com a posição) a partir da semana PEDIDA,
+                // não de onde tinha ficado atrasado — senão sobra um vão ocioso sem necessidade.
+                var pushTo=requestedWeek+placed.dur;
                 conflicts.forEach(function(c){ pinSegmentTeam(c.li,si,team,pushTo); });
-                ADJ_DIRTY=true; renderCrono();
               }
+              finalize();
             });
           } else { finalize(); }
         }
@@ -5607,7 +5638,7 @@
           var kOrig=ovrKey(d.li,si), kDst=ovrKey(destLi,si);
           if(!kDst)return;
           if(mode==='replace'){
-            commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:[{team:srcSeg.team,startWeek:destWeek}]},srcSeg.team);
+            commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:[{team:srcSeg.team,startWeek:destWeek}]},srcSeg.team,destWeek);
           } else if(mode==='include'){
             // Divide o lote entre a equipe arrastada e quem já estava. As equipes que já
             // estavam ali mantêm a semana onde já se encontravam (não pula porque uma nova
@@ -5617,7 +5648,7 @@
               return {team:t,startWeek:seg?seg.start:destWeek};
             });
             pins.push({team:srcSeg.team,startWeek:destWeek});
-            commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:pins},srcSeg.team);
+            commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:pins},srcSeg.team,destWeek);
           }
         }
         if(otherTeams.length){
