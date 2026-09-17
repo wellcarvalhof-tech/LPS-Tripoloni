@@ -374,11 +374,12 @@
     .print-page-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:11px;color:#444;margin-bottom:4px;height:22px;font-family:"Archivo",sans-serif}
     .print-page-head b{font-size:13px;color:#000}
     #printMat .tcm{border-collapse:collapse}
-    .print-leg{display:flex;flex-wrap:wrap;gap:3px 14px;font-size:9.5px;line-height:1.3}
-    .print-leg span{white-space:nowrap}
-    .print-leg em{color:#666;font-style:normal}
-    .print-leg .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:-1px}
-    .print-notes{margin-top:4px;font-size:8.5px;color:#666}
+    .print-sum{border-collapse:collapse;font-size:8.5px;line-height:1.2;break-inside:avoid;page-break-inside:avoid}
+    .print-sum th,.print-sum td{border:1px solid #bbb;padding:1px 5px;white-space:nowrap}
+    .print-sum th{background:#f0f0f0;font-weight:600;text-align:center;font-size:8px}
+    .print-sum td.r,.print-sum th.r{text-align:right;font-family:"IBM Plex Mono",monospace}
+    .print-sum .swatch{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:4px;vertical-align:-1px}
+    .print-notes{margin-top:4px;font-size:8px;color:#666}
   }
 </style>
 
@@ -4682,10 +4683,31 @@
     // comia boa parte da folha e deixava a matriz minúscula.
     var foot=document.getElementById('printFoot');
     if(foot){
-      foot.innerHTML='<div class="print-leg">'+SERV.map(function(sv){
-        return '<span><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <em>('+sv.u+' · '+fmtBR(pnum(sv.p))+'/eq/sem · '+sv.eq+' eq)</em></span>';
-      }).join('')+'</div>'+
-        '<div class="print-notes">Tons mais escuros lado a lado no mesmo serviço = equipes diferentes · sub-células lado a lado na mesma semana = atividades em paralelo no mesmo lote · a última semana de uma atividade mostra o saldo.</div>';
+      // Tabela-resumo por serviço: nº de equipes e produção total (todas as equipes) por dia,
+      // semana e mês — normal e reduzida pela praticabilidade. O fator de redução é o pior
+      // (menor) entre os períodos chuvosos cadastrados: (1 − %produção) × (1 − %dias), o mesmo
+      // que o cronograma usa em weekFactor. Dia = semana ÷ 5 dias úteis; mês = semana × 52/12.
+      var DIAS_SEMANA=5, SEM_MES=52/12;
+      var fator=1;
+      calRainPeriods().forEach(function(rp){
+        if(!rp.start||!rp.end)return;
+        var f=(1-Math.min(100,Math.max(0,+rp.producao||0))/100)*(1-Math.min(100,Math.max(0,+rp.dias||0))/100);
+        fator=Math.min(fator,f);
+      });
+      var temChuva=fator<0.999;
+      var rows=SERV.map(function(sv){
+        var semanal=pnum(sv.p)*(sv.eq||0);
+        var cel=function(v){return '<td class="r">'+fmtBR(v)+'</td>';};
+        return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</td><td>'+sv.u+'</td><td class="r">'+sv.eq+'</td><td class="r">'+fmtBR(pnum(sv.p))+'</td>'+
+          cel(semanal/DIAS_SEMANA)+cel(semanal)+cel(semanal*SEM_MES)+
+          (temChuva?cel(semanal*fator/DIAS_SEMANA)+cel(semanal*fator)+cel(semanal*fator*SEM_MES):'')+'</tr>';
+      }).join('');
+      foot.innerHTML='<table class="print-sum"><thead>'+
+        '<tr><th rowspan="2" style="text-align:left">Serviço</th><th rowspan="2">Un.</th><th rowspan="2">Equipes</th><th rowspan="2">Prod./equipe<br>/semana</th>'+
+          '<th colspan="3">Produção normal (todas as equipes)</th>'+(temChuva?'<th colspan="3">Produção reduzida — praticabilidade '+Math.round(fator*100)+'%</th>':'')+'</tr>'+
+        '<tr><th>Dia</th><th>Semana</th><th>Mês</th>'+(temChuva?'<th>Dia</th><th>Semana</th><th>Mês</th>':'')+'</tr></thead><tbody>'+rows+'</tbody></table>'+
+        '<div class="print-notes">Dia = semana ÷ '+DIAS_SEMANA+' dias úteis · mês = semana × 52/12'+(temChuva?' · produção reduzida = pior fator entre os períodos chuvosos cadastrados':' · nenhum período chuvoso cadastrado')+'. '+
+          'Tons mais escuros lado a lado no mesmo serviço = equipes diferentes · sub-células lado a lado na mesma semana = atividades em paralelo no mesmo lote · a última semana de uma atividade mostra o saldo.</div>';
     }
     // A matriz é escalada pra preencher a ALTURA da folha (paisagem) e fatiada em várias folhas
     // na horizontal — cada folha mostra uma faixa de lotes com TODAS as semanas. Antes ela era
