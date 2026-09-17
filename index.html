@@ -881,6 +881,8 @@
   var ADJ_DIRTY=false; // true quando há ajustes ainda não salvos no Supabase
   var ADJ_PENDING={}; // {"loteId::servicoId": true} — ajustes feitos nesta sessão, ainda não salvos
   var ACTIVE_CENARIO=null; // {id,nome} do cenário carregado no editor agora, ou null = cronograma ao vivo da obra
+  var CMP_SEL={}; // aba Cenários: quais linhas entram nos gráficos comparativos ('live' ou id do cenário → false pra esconder; ausente = mostra)
+  var CMP_HIST_TIPO='todos'; // aba Cenários, histograma comparativo: 'todos'|'funcao'|'equipamento'
 
   /* ================= VIEWS ================= */
   var VIEWS={};
@@ -1527,7 +1529,23 @@
       liveRow+rows+'</tbody></table></div>'+
       (CENARIOS.length?'':'<div class="note" style="margin-top:8px">Nenhum cenário salvo ainda. Clique em "+ Cenário" pra guardar um snapshot do cronograma atual, ou em "❄ Gerar linha de base" na linha acima pra criar a primeira revisão (REV00).</div>')+
     '</div>'+
-    '<div class="card"><div class="eyebrow">Comparação — Curvas S sobrepostas (total da obra)</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária).</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div></div>';
+    // Seleção de quais linhas entram nos gráficos — vale pra Curva S e pro histograma comparativo.
+    '<div class="card" style="margin-bottom:14px"><div class="eyebrow" style="margin-bottom:6px">O que comparar</div>'+
+      '<div style="display:flex;gap:14px;flex-wrap:wrap">'+cmpLines().map(function(l){
+        return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" data-cmpsel="'+escAttr(l.key)+'"'+(l.on?' checked':'')+'><span class="swatch" style="background:'+l.color+'"></span>'+l.nome+'</label>';
+      }).join('')+'</div></div>'+
+    '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Comparação — Curvas S sobrepostas (total da obra)</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária).</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div></div>'+
+    '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">'+
+      '<div><div class="eyebrow" style="margin:0">Comparação — Histograma de recursos</div><div class="note">Total de recursos mobilizados em cada semana, por cenário. Esquerda: evolução semanal. Direita: acumulado (recurso × semana).</div></div>'+
+      '<div style="display:flex;gap:6px">'+['todos','funcao','equipamento'].map(function(f){
+        var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
+        return '<button class="subtab'+(CMP_HIST_TIPO===f?' active':'')+'" data-cmphisttipo="'+f+'">'+lbl+'</button>';
+      }).join('')+'</div></div>'+
+      '<div class="grid g2" style="gap:14px">'+
+        '<div><div class="note" style="margin-bottom:4px;font-weight:600">Evolução semanal</div><svg class="chart" id="cmpHistW" viewBox="0 0 620 220"></svg></div>'+
+        '<div><div class="note" style="margin-bottom:4px;font-weight:600">Acumulado</div><svg class="chart" id="cmpHistA" viewBox="0 0 620 220"></svg></div>'+
+      '</div>'+
+      '<div class="legend" id="cmpHistLeg" style="margin-top:8px"></div></div>';
   };
 
   VIEWS['ac-curvas']=function(){
@@ -2788,7 +2806,22 @@
     }
     if(view==='cr-matriz'){setupCrono();}
     if(view==='cr-cenarios'){
-      cmpCurves();
+      cmpCurves(); cmpHist();
+      // Marcar/desmarcar uma linha redesenha só os gráficos (sem recarregar a aba inteira, que
+      // recalcularia todos os cenários de novo pra montar a tabela).
+      document.querySelectorAll('[data-cmpsel]').forEach(function(cb){
+        cb.addEventListener('change',function(){
+          CMP_SEL[cb.getAttribute('data-cmpsel')]=cb.checked;
+          cmpCurves(); cmpHist();
+        });
+      });
+      document.querySelectorAll('[data-cmphisttipo]').forEach(function(b){
+        b.addEventListener('click',function(){
+          CMP_HIST_TIPO=b.getAttribute('data-cmphisttipo');
+          document.querySelectorAll('[data-cmphisttipo]').forEach(function(x){x.classList.toggle('active',x===b);});
+          cmpHist();
+        });
+      });
       var novoCn=document.getElementById('cnNovo');
       if(novoCn)novoCn.addEventListener('click',async function(){
         if(!selectedObra)return;
@@ -3537,6 +3570,58 @@
     el.innerHTML=d.map(function(c){return '<div class="barrow" style="grid-template-columns:150px 1fr 30px"><span class="note">'+c[0]+'</span><div class="track"><div class="fill" style="width:'+(c[1]/31*100)+'%;background:var(--crit)"></div></div><span class="num" style="text-align:right">'+c[1]+'%</span></div>';}).join('');
   }
 
+  /** Linhas dos gráficos comparativos da aba Cenários: cronograma ao vivo + cada cenário, com
+   *  cor fixa por posição e a marcação de "entra ou não" (CMP_SEL) — a mesma lista alimenta a
+   *  Curva S e o histograma comparativo, pra que a seleção valha pros dois. */
+  function cmpLines(){
+    var palette=['#1e3a8a','#0ea5e9','#65a30d','#f97316','#7c3aed','#dc2626','#14b8a6','#a855f7'];
+    var lines=[{key:'live',nome:'Cronograma atual',snap:null,color:'var(--muted)',on:CMP_SEL.live!==false}];
+    CENARIOS.forEach(function(c,ci){
+      lines.push({key:c.id,nome:c.nome+(c.tipo==='baseline'?(' — '+c.revisao):''),snap:c.snap,color:palette[ci%palette.length],on:CMP_SEL[c.id]!==false});
+    });
+    return lines;
+  }
+  /** Gráfico de linhas simples (usado pelo histograma comparativo): cada série é um array
+   *  indexado pela semana (índice 0 = semana 1). Eixo Y começa no zero e vai até o maior valor. */
+  function lineChartSVG(el,series,opts){
+    opts=opts||{};
+    var W=620,H=220,pl=44,pr=10,pt=10,pb=22,iw=W-pl-pr,ih=H-pt-pb;
+    var n=1, ymax=0;
+    series.forEach(function(sr){ n=Math.max(n,sr.values.length); sr.values.forEach(function(v){ymax=Math.max(ymax,v||0);}); });
+    if(ymax<=0)ymax=1;
+    var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/ymax;};
+    function path(a){var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]||0).toFixed(1)+' ';}return d;}
+    var s='';
+    for(var g=0;g<=4;g++){ var v=ymax*g/4; s+='<line x1="'+pl+'" y1="'+yy(v)+'" x2="'+(W-pr)+'" y2="'+yy(v)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(v)+3)+'" text-anchor="end">'+fmtBR(v)+'</text>'; }
+    var step=Math.max(1,Math.ceil(n/8));
+    for(var i=0;i<n;i+=step){ s+='<text class="axm" x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(i+1))+'</text>'; }
+    series.forEach(function(sr){ s+='<path d="'+path(sr.values)+'" fill="none" stroke="'+sr.color+'" stroke-width="2"'+(sr.dashed?' stroke-dasharray="6 4"':'')+'/>'; });
+    el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+  }
+  /** Histograma comparativo entre cenários (aba Cenários): total de recursos mobilizados por
+   *  semana (mão de obra, equipamentos ou os dois) em cada cenário selecionado — uma curva
+   *  semanal e outra acumulada (recurso × semana). */
+  function cmpHist(){
+    var elW=document.getElementById('cmpHistW'), elA=document.getElementById('cmpHistA');
+    if(!elW||!elA)return;
+    var legEl=document.getElementById('cmpHistLeg');
+    var lines=cmpLines().filter(function(l){return l.on;});
+    if(!SERV.length||!RECURSOS.length||!lines.length){ elW.innerHTML=''; elA.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
+    var recIds=RECURSOS.filter(function(r){return CMP_HIST_TIPO==='todos'||r.tipo===CMP_HIST_TIPO;}).map(function(r){return r.id;});
+    var computed=lines.map(function(l){
+      var h=histogramWithSnapshot(l.snap);
+      var weekly=[]; for(var w=0;w<h.tw;w++)weekly.push(0);
+      recIds.forEach(function(id){ var arr=h.byResource[id]||[]; for(var w2=0;w2<arr.length;w2++)weekly[w2]+=arr[w2]||0; });
+      var acc=[], sum=0; weekly.forEach(function(v){ sum+=v; acc.push(sum); });
+      return {nome:l.nome,color:l.color,weekly:weekly,acc:acc};
+    });
+    lineChartSVG(elW,computed.map(function(c){return {values:c.weekly,color:c.color};}));
+    lineChartSVG(elA,computed.map(function(c){return {values:c.acc,color:c.color};}));
+    if(legEl)legEl.innerHTML=computed.map(function(c){
+      var peak=c.weekly.reduce(function(m,v){return Math.max(m,v);},0);
+      return '<span><span class="swatch" style="background:'+c.color+'"></span>'+c.nome+' — pico '+fmtBR(peak)+' · total '+fmtBR(c.acc[c.acc.length-1]||0)+'</span>';
+    }).join('');
+  }
   function cmpCurves(){
     var el=document.getElementById('cmpc');if(!el)return;
     var legEl=document.getElementById('cmpcLeg');
@@ -3551,9 +3636,7 @@
       for(var w2=1;w2<=tw;w2++){ acc+=weekly[w2]||0; out.push(grandTotal>0?(acc/grandTotal*100):0); }
       return {tw:tw,series:out};
     }
-    var palette=['#1e3a8a','#0ea5e9','#65a30d','#f97316','#7c3aed','#dc2626','#14b8a6','#a855f7'];
-    var lines=[{nome:'Cronograma atual',snap:null,color:'var(--muted)'}];
-    CENARIOS.forEach(function(c,ci){ lines.push({nome:c.nome+(c.tipo==='baseline'?(' — '+c.revisao):''),snap:c.snap,color:palette[ci%palette.length]}); });
+    var lines=cmpLines().filter(function(l){return l.on;});
     if(!SERV.length||!lines.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
     var computed=lines.map(function(l){return Object.assign({},l,totalSeriesFor(l.snap));});
     var maxTw=1; computed.forEach(function(c){maxTw=Math.max(maxTw,c.tw);});
@@ -4107,8 +4190,12 @@
   /** Roda buildSchedule() com um snapshot completo (ajustes + calendário + serviços) em vez do
    *  estado ao vivo, sem alterar o estado global (restaura tudo no finally). snap=null usa o
    *  cronograma ao vivo normalmente. */
-  function scheduleWithSnapshot(snap){
-    if(!snap)return buildSchedule();
+  /** Roda fn() com o estado de um cenário (ajustes + calendário + serviços) no lugar do estado
+   *  ao vivo, sem alterar nada de forma permanente (restaura tudo no finally). snap=null roda
+   *  com o cronograma ao vivo normalmente. Serve tanto pro cronograma (buildSchedule) quanto
+   *  pro histograma (computeHistogram), que leem SERV/OVR/feriados por baixo. */
+  function withSnapshot(snap,fn){
+    if(!snap)return fn();
     var savedOVR=OVR, savedSERV=SERV, savedFeriados=window._OBRA?window._OBRA.feriados:null;
     OVR=snap.ovr||{};
     if(snap.servicos&&snap.servicos.length){
@@ -4118,14 +4205,14 @@
       });
     }
     if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:snap.feriados||savedFeriados});
-    var segs;
-    try{ segs=buildSchedule(); }
+    try{ return fn(); }
     finally{
       OVR=savedOVR; SERV=savedSERV;
       if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:savedFeriados});
     }
-    return segs;
   }
+  function scheduleWithSnapshot(snap){ return withSnapshot(snap,buildSchedule); }
+  function histogramWithSnapshot(snap){ return withSnapshot(snap,computeHistogram); }
   function activeBaseline(){
     return CENARIOS.filter(function(c){return c.tipo==='baseline'&&c.ativo;})[0]||null;
   }
