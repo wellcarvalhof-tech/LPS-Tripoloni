@@ -3661,7 +3661,7 @@
       pins=legacyTeams.map(function(t){return {team:t,startWeek:o.startWeek||startWeek};});
     }
     var found=false;
-    pins=pins.map(function(p){ if(p.team===team){found=true;return {team:team,startWeek:startWeek};} return p; });
+    pins=pins.map(function(p){ if(p.team===team){found=true;return {team:team,startWeek:startWeek,qty:p.qty};} return p; });
     if(!found)pins.push({team:team,startWeek:startWeek});
     OVR[k]={pinned:true,pins:pins};
   }
@@ -3813,9 +3813,11 @@
         if(QTY[li][si]<=0)return;
         var o=ovrGet(li,si);
         if(!(o&&o.pinned))return;
-        // "pins" = uma semana de início por equipe (cada equipe que trabalha nesse lote pode
-        // começar num dia diferente). Formato antigo (team/teams + um único startWeek pra todo
-        // mundo) ainda é lido, pra não perder ajuste já salvo.
+        // "pins" = uma semana de início (e, opcionalmente, uma quantidade própria) por entrada —
+        // uma equipe pode ter mais de um pin no mesmo lote (ex.: uma parte "antes", sozinha, e
+        // outra "depois", dividida com outra equipe que entrou). Sem "qty" explícita, divide a
+        // quantidade do lote igualmente entre os pins (formato antigo, ainda lido pra não perder
+        // ajuste já salvo — inclusive team/teams + um único startWeek pra todo mundo).
         var pins;
         if(Array.isArray(o.pins)&&o.pins.length){
           pins=o.pins.filter(function(p){return p.team>0&&p.team<=teams&&p.startWeek>0;});
@@ -3825,8 +3827,8 @@
         } else { pins=[]; }
         if(!pins.length)return;
         pinnedLis[li]=true;
-        var qtyEach=QTY[li][si]/pins.length;
-        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:qtyEach}); });
+        var qtyEachFallback=QTY[li][si]/pins.length;
+        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:p.qty>0?p.qty:qtyEachFallback}); });
       });
       // Agrupa por equipe, ordena por semana de início e processa em sequência (posição
       // contínua, igual o cálculo automático) — assim, se um lote termina no meio de uma
@@ -5640,11 +5642,23 @@
           if(mode==='replace'){
             commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:[{team:srcSeg.team,startWeek:destWeek}]},srcSeg.team,destWeek);
           } else if(mode==='include'){
-            // Divide o lote entre a equipe arrastada e quem já estava — as duas passam a
-            // trabalhar juntas ali a partir da MESMA semana selecionada agora (não fica cada
-            // equipe numa semana diferente).
-            var pins=otherTeams.map(function(t){ return {team:t,startWeek:destWeek}; });
-            pins.push({team:srcSeg.team,startWeek:destWeek});
+            // Divide o lote entre a equipe arrastada e quem já estava, a partir da semana
+            // escolhida: o que cada equipe que já tava lá já tinha planejado ANTES dessa semana
+            // fica intocado (vira um pin "história", só dela); o que sobra do lote a partir
+            // dali (quantidade total menos o que já ia ser feito antes) é dividido em partes
+            // iguais entre todas as equipes que passam a trabalhar juntas dali em diante.
+            var totalQty=QTY[destLi][si], sumBefore=0, pins=[];
+            otherTeams.forEach(function(t){
+              var cur=others.filter(function(sg){return sg.team===t;})[0];
+              if(!cur)return;
+              var beforeQty=0;
+              cur.wq.forEach(function(q,i){ if(cur.start+i<destWeek)beforeQty+=q; });
+              if(beforeQty>0){ pins.push({team:t,startWeek:cur.start,qty:beforeQty}); sumBefore+=beforeQty; }
+            });
+            var remaining=Math.max(0,totalQty-sumBefore);
+            var allTeamsAfter=otherTeams.slice(); if(allTeamsAfter.indexOf(srcSeg.team)<0)allTeamsAfter.push(srcSeg.team);
+            var qtyEachFromX=allTeamsAfter.length?remaining/allTeamsAfter.length:0;
+            allTeamsAfter.forEach(function(t){ pins.push({team:t,startWeek:destWeek,qty:qtyEachFromX}); });
             commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:pins},srcSeg.team,destWeek);
           }
         }
