@@ -347,12 +347,23 @@
     .card{box-shadow:none;border:1px solid #ccc}
     .tc-wrap{max-height:none!important;overflow:visible!important}
     .print-only{display:block}
+    /* No PDF, a matriz vem de #printMat (fatiada em folhas); a matriz da tela e o cabeçalho
+       global saem do fluxo. Se #printMat estiver vazio (outra aba), volta ao comportamento
+       normal via :empty. */
     .print-head{margin-bottom:8px}
     .print-head h2{font-family:"Archivo",sans-serif;font-size:16px;margin:0}
-    #printFoot table{border-collapse:collapse;font-size:10.5px;margin-top:6px}
-    #printFoot td{padding:3px 8px;border:1px solid #ccc}
-    #printFoot .swatch{width:11px;height:11px;border-radius:3px;display:inline-block}
-    #printFoot ul{margin:8px 0 0;padding-left:16px;font-size:10px;color:#444}
+    body.printing-mat .print-head,
+    body.printing-mat #cronoContent{display:none!important}
+    .print-page{break-inside:avoid;page-break-inside:avoid}
+    .print-page.brk{break-after:page;page-break-after:always}
+    .print-page-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:11px;color:#444;margin-bottom:4px;height:22px;font-family:"Archivo",sans-serif}
+    .print-page-head b{font-size:13px;color:#000}
+    #printMat .tcm{border-collapse:collapse}
+    .print-leg{display:flex;flex-wrap:wrap;gap:3px 14px;font-size:9.5px;line-height:1.3}
+    .print-leg span{white-space:nowrap}
+    .print-leg em{color:#666;font-style:normal}
+    .print-leg .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:-1px}
+    .print-notes{margin-top:4px;font-size:8.5px;color:#666}
   }
 </style>
 
@@ -933,7 +944,8 @@
       '<div class="legend" id="matLeg" style="margin:12px 0"></div>'+
       '<div class="print-only print-head"><h2 id="printTitle"></h2><div class="note" id="printSub"></div></div>'+
       '<div id="cronoContent"></div>'+
-      '<div class="print-only" id="printFoot" style="margin-top:12px"></div>'+
+      '<div class="print-only" id="printMat"></div>'+
+      '<div class="print-only" id="printFoot" style="margin-top:8px"></div>'+
       '<div style="margin-top:10px">'+wip()+'</div>'+
     '</div>';
   };
@@ -4638,35 +4650,63 @@
     // (o carimbo de data/hora do lado esquerdo é do navegador — só some desmarcando
     // "Cabeçalhos e rodapés" no diálogo de impressão, não dá pra remover via código).
     document.title='Tempo Caminho - '+nome;
+    buildPrintPages(nome,gerado,tw);
+    document.body.classList.add('printing-mat');
+    window.onafterprint=function(){
+      document.body.classList.remove('printing-mat');
+      window._matrixZoom=prevZoom; document.title=prevTitle;
+      var m=document.getElementById('printMat'); if(m)m.innerHTML='';
+      renderCrono(); window.onafterprint=null;
+    };
+    window.print();
+  }
+  /** Monta o conteúdo do PDF em #printMat/#printFoot a partir da matriz já renderizada na tela
+   *  (zoom 1, aba "tc"). Separado de exportPdf pra dar pra testar sem abrir o diálogo de impressão. */
+  function buildPrintPages(nome,gerado,tw){
+    // Legenda de serviços compacta (lista em linha, fonte pequena) — antes era uma tabela que
+    // comia boa parte da folha e deixava a matriz minúscula.
     var foot=document.getElementById('printFoot');
     if(foot){
-      var legRows=SERV.map(function(sv){
-        return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span></td><td>'+sv.n+'</td><td>'+sv.u+'</td><td class="r">'+fmtBR(pnum(sv.p))+'</td><td class="r">'+sv.eq+'</td></tr>';
-      }).join('');
-      foot.innerHTML='<table><thead><tr><th></th><th>Serviço</th><th>Unidade</th><th class="r">Prod. (un/equipe/sem.)</th><th class="r">Equipes</th></tr></thead><tbody>'+legRows+'</tbody></table>'+
-        '<ul><li>Tons mais escuros lado a lado no mesmo serviço identificam diferentes equipes.</li>'+
-        '<li>Sub-células lado a lado numa mesma semana = atividades em paralelo no mesmo lote.</li>'+
-        '<li>A última semana de uma atividade mostra o saldo (qtd. &lt; produção semanal cheia).</li></ul>';
+      foot.innerHTML='<div class="print-leg">'+SERV.map(function(sv){
+        return '<span><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <em>('+sv.u+' · '+fmtBR(pnum(sv.p))+'/eq/sem · '+sv.eq+' eq)</em></span>';
+      }).join('')+'</div>'+
+        '<div class="print-notes">Tons mais escuros lado a lado no mesmo serviço = equipes diferentes · sub-células lado a lado na mesma semana = atividades em paralelo no mesmo lote · a última semana de uma atividade mostra o saldo.</div>';
     }
-    // Encolhe a matriz (zoom) pra caber título + matriz + legenda numa única folha paisagem.
-    // Reserva espaço extra pro cabeçalho/rodapé que o navegador injeta na impressão (fora do
-    // nosso controle) — desmarcar "Cabeçalhos e rodapés" no diálogo de impressão dá mais folga.
+    // A matriz é escalada pra preencher a ALTURA da folha (paisagem) e fatiada em várias folhas
+    // na horizontal — cada folha mostra uma faixa de lotes com TODAS as semanas. Antes ela era
+    // encolhida pra caber a largura inteira numa folha só, e com muitos lotes ficava ilegível.
+    var mat=document.getElementById('printMat');
     var wrap=document.getElementById('tcWrap');
     var table=wrap?wrap.querySelector('table'):null;
-    var head=document.querySelector('.print-head');
-    if(table){
-      var naturalW=table.scrollWidth, naturalH=table.scrollHeight;
+    if(mat&&table&&LOTS.length){
       var pxPerMm=96/25.4;
       var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
-      var reserved=(head?head.scrollHeight:40)+(foot?foot.scrollHeight:0)+110;
-      if(naturalW>0&&naturalH>0){
-        var fitScale=Math.min(1,(pageW-4)/naturalW,(pageH-reserved)/naturalH);
-        window._matrixZoom=Math.max(0.12,+fitScale.toFixed(3));
-        renderCrono();
+      var headH=30, slack=14; // cabeçalho por folha + folga fixa
+      var naturalH=table.scrollHeight;
+      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
+      // de semanas isso soma — sem a folga a última linha pode escorregar pra uma folha vazia.
+      var scale=Math.max(0.12,Math.min(1.6,+((pageH-headH-slack)/naturalH*0.97).toFixed(3)));
+      // Largura das colunas fixas (data + semana) e de cada coluna de lote, na escala 1 — usadas
+      // pra decidir quantos lotes cabem em cada folha (acumula coluna a coluna até estourar).
+      var ths=table.querySelectorAll('thead th');
+      var fixedW=(ths[0]?ths[0].offsetWidth:0)+(ths[1]?ths[1].offsetWidth:0);
+      var lotWs=[]; for(var ti=2;ti<ths.length;ti++)lotWs.push(ths[ti].offsetWidth||60);
+      var availW=pageW/scale*0.97-fixedW;
+      var chunks=[], cur=[], curW=0;
+      for(var li=0;li<LOTS.length;li++){
+        var wcol=lotWs[li]||60;
+        if(cur.length&&curW+wcol>availW){ chunks.push(cur); cur=[]; curW=0; }
+        cur.push(li); curW+=wcol;
       }
+      if(cur.length)chunks.push(cur);
+      var segsAll=buildSchedule();
+      mat.innerHTML=chunks.map(function(chunk,pi){
+        var faixa=chunks.length>1?(' — Lotes '+LOTS[chunk[0]]+' a '+LOTS[chunk[chunk.length-1]]+' — folha '+(pi+1)+'/'+chunks.length):'';
+        return '<div class="print-page'+(pi<chunks.length-1?' brk':'')+'">'+
+          '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+faixa+'</span></div>'+
+          '<div style="zoom:'+scale+'">'+matrixTableCore(true,chunk,segsAll)+'</div></div>';
+      }).join('');
     }
-    window.onafterprint=function(){ window._matrixZoom=prevZoom; document.title=prevTitle; renderCrono(); window.onafterprint=null; };
-    window.print();
   }
 
   function downloadResourcesTemplate(){
@@ -5175,8 +5215,11 @@
     return rows;
   }
   var TC_HIDDEN_SVC={}; // {si:true} — serviços ocultos na matriz Tempo-Caminho (só visual, não muda o cronograma)
-  function matrixTableHTML(withSummary){
-    var segs=buildSchedule();
+  /** Só a <table> da matriz (sem toggles/zoom/wrapper). lotIdxs = quais lotes entram (índices)
+   *  — a impressão em PDF usa isso pra fatiar a matriz em várias folhas, uma faixa de lotes por
+   *  folha, cada uma com todas as semanas. segs é passado de fora pra não recalcular o cronograma
+   *  a cada fatia. */
+  function matrixTableCore(withSummary,lotIdxs,segs){
     var totalWeeks=1; segs.forEach(function(sg){totalWeeks=Math.max(totalWeeks,sg.start+sg.dur-1);});
     var cell={};
     segs.forEach(function(sg){
@@ -5184,20 +5227,21 @@
         (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i],isStart:i===0,isEnd:i===sg.dur-1,w:w});}
     });
     var canDragCols=(window._cronoTab==='ajuste');
-    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l,li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+l+'</th>';}).join('');
+    var th='<th>Segunda-feira</th><th>Semana</th>'+lotIdxs.map(function(li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+LOTS[li]+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
     var calRows=buildCalendarRows(totalWeeks);
     var body='';
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
       if(entry.isHoliday){
-        body+='<tr class="tcm-holrow"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td><td class="tcm-holcell" colspan="'+Math.max(1,LOTS.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
+        body+='<tr class="tcm-holrow"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td><td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
         continue;
       }
       var w=entry.working, tds='';
       var f=weekFactor(w,periods,wfCache2);
       var rainBadge=f<0.999?' <span class="tcm-rain" title="Capacidade reduzida por período de baixa praticabilidade">🌧 '+Math.round(f*100)+'%</span>':'';
-      for(var li=0;li<LOTS.length;li++){
+      for(var lx=0;lx<lotIdxs.length;lx++){
+        var li=lotIdxs[lx];
         var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0&&!TC_HIDDEN_SVC[sc.sg.si];});
         if(!subs.length){tds+='<td class="cell" data-lot="'+li+'"></td>';continue;}
         var inner=subs.map(function(sc,i){
@@ -5219,10 +5263,15 @@
       body+=SERV.map(function(s,si){
         if(TC_HIDDEN_SVC[si])return '';
         var hex=svcColor(s);
-        var cells=LOTS.map(function(l,li){return '<td class="sumq">'+(QTY[li][si]>0?fmtBR(QTY[li][si]):'—')+'</td>';}).join('');
+        var cells=lotIdxs.map(function(li){return '<td class="sumq">'+(QTY[li][si]>0?fmtBR(QTY[li][si]):'—')+'</td>';}).join('');
         return '<tr class="sumrow"><td class="sumname" colspan="2" style="background:'+hex+';color:'+pickFont(hex)+'">'+s.n+' ('+s.u+')</td>'+cells+'</tr>';
       }).join('');
     }
+    return '<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
+  }
+  function matrixTableHTML(withSummary){
+    var allIdxs=LOTS.map(function(l,li){return li;});
+    var tableHtml=matrixTableCore(withSummary,allIdxs,buildSchedule());
     var anyHidden=SERV.some(function(s,si){return !!TC_HIDDEN_SVC[si];});
     var svcToggles=SERV.length?('<div class="tc-svctoggle">'+
       SERV.map(function(sv,si){
@@ -5235,7 +5284,7 @@
     var zoomBar='<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
       '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
       (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+'</div>';
-    return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap" style="zoom:'+z+'"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap" style="zoom:'+z+'">'+tableHtml+'</div>';
   }
   function wireMatrixZoom(){
     document.querySelectorAll('[data-zoom]').forEach(function(b){
