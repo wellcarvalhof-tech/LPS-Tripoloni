@@ -3637,28 +3637,6 @@
 
   function ovrKey(li,si){var lid=(window._LOTIDS||[])[li],sid=SERV[si]&&SERV[si].id;return lid&&sid?(lid+'::'+sid):null;}
   function ovrGet(li,si){var k=ovrKey(li,si);return k?OVR[k]:null;}
-  /** Reordena a fila de uma equipe (dentro de um serviço) depois de colocar/mover um lote nela
-   *  numa semana escolhida: olha onde os outros lotes dessa equipe estão programados agora,
-   *  encaixa o lote movido na posição que bate com a semana escolhida, e grava um "seq" explícito
-   *  pra cada um nessa nova ordem. Sem isso, a ordem continuava sendo só o índice do lote (li) —
-   *  antecipar um lote não empurrava os outros, só entrava na fila do jeito que já estava. */
-  function computeTeamOrder(si,team,movedLi,desiredWeek){
-    var others=buildSchedule().filter(function(sg){return sg.si===si&&sg.team===team&&sg.li!==movedLi;});
-    var order=others.map(function(sg){return {li:sg.li,pos:sg.start,moved:false};});
-    order.push({li:movedLi,pos:desiredWeek,moved:true});
-    order.sort(function(a,b){
-      if(a.pos!==b.pos)return a.pos-b.pos;
-      if(a.moved!==b.moved)return a.moved?-1:1; // empate na mesma semana: o lote que acabou de ser colocado entra antes
-      return a.li-b.li;
-    });
-    return order;
-  }
-  function reorderTeamQueue(si,team,movedLi,desiredWeek){
-    computeTeamOrder(si,team,movedLi,desiredWeek).forEach(function(item,idx){
-      var k=ovrKey(item.li,si); if(!k)return;
-      OVR[k]=Object.assign({},OVR[k],{seq:idx});
-    });
-  }
   function topoSortServices(){
     var idToSi={}; SERV.forEach(function(s,i){idToSi[s.id]=i;});
     var visited={},temp={},order=[];
@@ -3789,6 +3767,33 @@
         }
         return best;
       }
+      // Ajuste livre (arraste ou menu "Personalizar"): lote+serviço marcado como "pinned" sai do
+      // cálculo automático por completo — fica na semana exata que o usuário escolheu, pra uma
+      // ou mais equipes (o.team, ou o.teams se o lote foi dividido entre equipes ali mesmo). A
+      // duração continua sempre calculada de verdade (quantidade dessa equipe ÷ produtividade
+      // dela, com a chuva/praticabilidade reduzindo a produção semana a semana igual qualquer
+      // lote automático) — só a posição no tempo é que não é mais negociável. O app não tenta
+      // desviar os outros lotes automáticos da mesma equipe pra não bater nesse horário — quem
+      // decide isso é o usuário, ajustando manualmente o que for preciso.
+      var pinnedLis={};
+      LOTS.forEach(function(l,li){
+        if(QTY[li][si]<=0)return;
+        var o=ovrGet(li,si);
+        if(!(o&&o.pinned&&o.startWeek>0))return;
+        var teamsArr=(Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):(o.team>0&&o.team<=teams?[o.team]:null);
+        if(!teamsArr||!teamsArr.length)return;
+        pinnedLis[li]=true;
+        var qtyEach=QTY[li][si]/teamsArr.length;
+        var minStart=Infinity, maxEnd=-Infinity;
+        teamsArr.forEach(function(t2){
+          var effProd=teamProds[t2-1]>0?teamProds[t2-1]:prod;
+          var packed=packSegment(o.startWeek-1,qtyEach/effProd,effProd,qtyEach,periods,wfCache);
+          segs.push({li:li,si:si,team:t2,teams:teams,start:packed.start,dur:packed.duration,qty:qtyEach,wq:packed.wq,
+            color:teamColor(hex,t2,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
+          minStart=Math.min(minStart,packed.start); maxEnd=Math.max(maxEnd,packed.start+packed.duration-1);
+        });
+        startByKey[li+'::'+si]=minStart; endByKey[li+'::'+si]=maxEnd;
+      });
       if(s.cfg&&s.cfg.pullFromQueue){
         // Fila dinâmica: ignora a equipe fixa por lote. A cada passo, entre todas as
         // combinações (lote pronto × equipe), escolhe a que termina mais cedo — considerando
@@ -3796,7 +3801,7 @@
         // que a equipe fez).
         var remaining=[];
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0)return;
+          if(QTY[li][si]<=0||pinnedLis[li])return;
           var o=ovrGet(li,si);
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
@@ -3840,7 +3845,7 @@
         // partes iguais entre elas, cada uma trabalhando em paralelo com sua própria produtividade.
         var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0)return;
+          if(QTY[li][si]<=0||pinnedLis[li])return;
           var o=ovrGet(li,si);
           var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
           if(!teamsArr||!teamsArr.length)teamsArr=[(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1)];
@@ -5211,10 +5216,11 @@
   // nunca se perde, mesmo re-renderizando a matriz depois de soltar.
   var _drag=null, _ghost=null, _seqDrag=null, _colDrag=null, _lotRowDrag=null;
   var _segClickTimer=null, _segClickEl=null, _segClickAt=0;
-  /** Menu "Personalizar" de um segmento da matriz (clique simples, sem arrastar): fixa
-   *  início + duração + equipe exatamente como definido aqui, pra qualquer lote — sai do
-   *  cálculo automático (fila dinâmica, sem paralisações, predecessoras) só pra esse lote
-   *  específico. "Remover ajuste" volta ao cálculo automático normal. */
+  /** Menu "Personalizar" de um segmento da matriz (clique simples, sem arrastar): fixa início
+   *  e equipe exatamente como definido aqui, pra qualquer lote — essa passa a ser a decisão
+   *  final, o cálculo automático (fila dinâmica, sem paralisações, predecessoras, fila da
+   *  equipe) não move mais isso. A duração continua sempre calculada de verdade. "Remover
+   *  ajuste" volta ao cálculo automático normal. */
   function openSegMenu(li,si){
     var s=SERV[si]; if(!s)return;
     var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
@@ -5227,11 +5233,11 @@
     backdrop.className='segmenu-backdrop';
     backdrop.innerHTML='<div class="segmenu-panel card">'+
       '<div class="eyebrow" style="margin-bottom:2px">Personalizar — '+s.n+'</div>'+
-      '<div class="note" style="margin-bottom:12px">Fixa qual equipe faz esse lote e a partir de qual semana. A duração continua calculada automaticamente (quantidade do lote ÷ produtividade da equipe, considerando a chuva e a fila da própria equipe) — não dá pra digitar uma duração fixa.</div>'+
+      '<div class="note" style="margin-bottom:12px">Fixa qual equipe faz esse lote e em que semana — essa é a decisão final, não muda mais por causa de predecessora, fila da equipe ou fila dinâmica. A duração continua sempre calculada de verdade (quantidade do lote ÷ produtividade da equipe, considerando a chuva daquela semana) — não dá pra digitar uma duração fixa.</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+
         '<label>Lote<select class="esel" id="smLote">'+lotOpts+'</select></label>'+
         '<label>Equipe<select class="esel" id="smTeam">'+teamOpts+'</select></label>'+
-        '<label>Semana do ano de início (mínima)<input class="einp" type="number" id="smStart" value="'+calStart+'"></label>'+
+        '<label>Semana do ano de início<input class="einp" type="number" id="smStart" value="'+calStart+'"></label>'+
         '<div class="note" id="smPreview" style="min-height:1.4em"></div>'+
       '</div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
@@ -5253,18 +5259,10 @@
     function previewSeg(newLi,newTeam,projWeek){
       if(!projWeek)return null;
       var kNew=ovrKey(newLi,si); if(!kNew)return null;
-      var stashed={};
-      function stash(k){ if(!(k in stashed))stashed[k]={had:Object.prototype.hasOwnProperty.call(OVR,k),val:OVR[k]}; }
-      stash(kNew);
-      OVR[kNew]=Object.assign({},OVR[kNew],{team:newTeam,startWeek:projWeek});
-      // Simula o mesmo reordenamento da fila que o "Aplicar" faz de verdade, senão o número
-      // mostrado aqui podia divergir do que aparece depois de aplicar.
-      computeTeamOrder(si,newTeam,newLi,projWeek).forEach(function(item,idx){
-        var k=ovrKey(item.li,si); if(!k)return;
-        stash(k); OVR[k]=Object.assign({},OVR[k],{seq:idx});
-      });
+      var had=Object.prototype.hasOwnProperty.call(OVR,kNew), saved=OVR[kNew];
+      OVR[kNew]={team:newTeam,startWeek:projWeek,pinned:true};
       var result=buildSchedule().filter(function(sg){return sg.li===newLi&&sg.si===si&&sg.team===newTeam;})[0]||null;
-      Object.keys(stashed).forEach(function(k){ if(stashed[k].had)OVR[k]=stashed[k].val; else delete OVR[k]; });
+      if(had)OVR[kNew]=saved; else delete OVR[kNew];
       return result;
     }
     function refreshPreview(){
@@ -5296,9 +5294,14 @@
       if(!(QTY[newLi][si]>0)){alert('O lote "'+LOTS[newLi]+'" não tem quantidade cadastrada pra "'+s.n+'".');return;}
       var kOld=ovrKey(li,si), kNew=ovrKey(newLi,si);
       if(!kNew)return;
-      if(kOld&&kOld!==kNew)delete OVR[kOld];
-      OVR[kNew]={team:newTeam,startWeek:projWeek};
-      reorderTeamQueue(si,newTeam,newLi,projWeek);
+      if(kOld&&kOld!==kNew){
+        // Mesma lógica do arraste: se o lote de origem nunca teve ajuste manual, ele voltaria
+        // pro rodízio padrão e podia cair de volta na mesma equipe por coincidência. Fixa
+        // explicitamente a próxima equipe da rotação em vez de deixar ambíguo.
+        delete OVR[kOld];
+        if(s.eq>1)OVR[kOld]={team:(seg.team%s.eq)+1};
+      }
+      OVR[kNew]={team:newTeam,startWeek:projWeek,pinned:true};
       ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
       ADJ_DIRTY=true;
       close(); renderCrono();
@@ -5464,29 +5467,33 @@
         var others=segs.filter(function(sg){return sg.li===destLi&&sg.si===si&&sg.team!==srcSeg.team;});
         var otherTeams=[]; others.forEach(function(sg){ if(otherTeams.indexOf(sg.team)<0)otherTeams.push(sg.team); });
         function cleanupOrigin(kOrig){
-          if(!kOrig||!OVR[kOrig])return;
-          if(Array.isArray(OVR[kOrig].teams)){
+          if(!kOrig)return;
+          if(OVR[kOrig]&&Array.isArray(OVR[kOrig].teams)){
             OVR[kOrig].teams=OVR[kOrig].teams.filter(function(t){return t!==srcSeg.team;});
             if(!OVR[kOrig].teams.length)delete OVR[kOrig];
-          } else { delete OVR[kOrig]; }
+            return;
+          }
+          // Tira a equipe arrastada desse lote. Sem isso, se esse lote nunca teve ajuste manual
+          // (seguia o rodízio padrão lote%equipes), ele continuaria caindo pra essa mesma equipe
+          // de novo por coincidência — ela ficaria "roubada" em dois lugares por um efeito colateral,
+          // não por uma decisão sua. Fixa explicitamente a próxima equipe da rotação nesse lote.
+          delete OVR[kOrig];
+          if(sv.eq>1)OVR[kOrig]={team:(srcSeg.team%sv.eq)+1};
         }
         function doMove(mode){
-          // Fixa só a equipe e a semana mínima — a duração continua sendo sempre calculada pelo
-          // motor normal (produtividade da equipe × praticabilidade/chuva daquela semana),
-          // igual qualquer outro lote. Isso também é o que evita duplicar produção: o lote entra
-          // na MESMA fila da equipe que os outros, então se ele começar antes de um lote anterior
-          // da equipe terminar, essa semana de transição é dividida entre os dois automaticamente
-          // (não é uma "sobra" contada duas vezes).
+          // Fixa a equipe e a semana exata — essa é a decisão final do usuário, o cálculo
+          // automático não move mais isso por causa de predecessora, fila da equipe ou fila
+          // dinâmica. A duração continua sempre calculada de verdade (quantidade × produtividade
+          // × praticabilidade daquela semana), só a posição no tempo é que fica travada.
           var kOrig=ovrKey(d.li,si), kDst=ovrKey(destLi,si);
           if(!kDst)return;
           if(mode==='replace'){
-            OVR[kDst]={team:srcSeg.team,startWeek:destWeek};
-            reorderTeamQueue(si,srcSeg.team,destLi,destWeek);
+            OVR[kDst]={team:srcSeg.team,startWeek:destWeek,pinned:true};
           } else if(mode==='include'){
-            // Divide o lote entre a equipe arrastada e quem já estava — cada equipe segue com
-            // sua parte da quantidade, timing calculado normalmente.
+            // Divide o lote entre a equipe arrastada e quem já estava, exatamente na semana em
+            // que foi solto — cada equipe fica com sua parte da quantidade.
             var teamsArr=otherTeams.slice(); if(teamsArr.indexOf(srcSeg.team)<0)teamsArr.push(srcSeg.team);
-            OVR[kDst]={teams:teamsArr,startWeek:destWeek};
+            OVR[kDst]={teams:teamsArr,startWeek:destWeek,pinned:true};
           }
           if(kOrig&&kOrig!==kDst)cleanupOrigin(kOrig);
           ADJ_PENDING[kDst]=true; if(kOrig)ADJ_PENDING[kOrig]=true;
