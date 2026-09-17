@@ -5248,9 +5248,26 @@
     // e jogaria a tela de volta pro início da matriz a cada edição.
     var prevWrap=document.getElementById('tcWrap');
     var prevScrollLeft=prevWrap?prevWrap.scrollLeft:0, prevScrollTop=prevWrap?prevWrap.scrollTop:0;
+    // A rolagem da PÁGINA também precisa ser guardada: trocar o innerHTML encolhe o conteúdo
+    // por um instante e o navegador joga a janela de volta pro topo (o cabeçalho), tirando a
+    // matriz da tela a cada ajuste.
+    var prevPageScroll=window.scrollY||window.pageYOffset||0;
+    var contentEl=document.getElementById('content');
+    var prevContentScroll=contentEl?contentEl.scrollTop:0;
     c.innerHTML=cronoContent();
     var newWrap=document.getElementById('tcWrap');
     if(newWrap){ newWrap.scrollLeft=prevScrollLeft; newWrap.scrollTop=prevScrollTop; }
+    if(contentEl)contentEl.scrollTop=prevContentScroll;
+    window.scrollTo(0,prevPageScroll);
+    // Reaplica no próximo quadro: o navegador pode reajustar a rolagem sozinho depois do
+    // script, quando o elemento que estava com foco some junto com o innerHTML antigo.
+    requestAnimationFrame(function(){
+      var w2=document.getElementById('tcWrap');
+      if(w2){ w2.scrollLeft=prevScrollLeft; w2.scrollTop=prevScrollTop; }
+      var c2=document.getElementById('content');
+      if(c2)c2.scrollTop=prevContentScroll;
+      window.scrollTo(0,prevPageScroll);
+    });
     wireMatrixZoom();
     refreshTopSaveBtn();
     if((window._cronoTab||'tc')==='ajuste'){
@@ -5606,9 +5623,16 @@
         // lugares ao mesmo tempo.
         function commitWithOverlapCheck(kOrig,kDst,newVal,team,requestedWeek){
           var hadDst=Object.prototype.hasOwnProperty.call(OVR,kDst), savedDst=OVR[kDst];
+          var moveOrig=!!(kOrig&&kOrig!==kDst);
+          var hadOrig=moveOrig&&Object.prototype.hasOwnProperty.call(OVR,kOrig);
+          var savedOrig=hadOrig?JSON.parse(JSON.stringify(OVR[kOrig])):undefined;
           OVR[kDst]=newVal;
+          // O teste tem que considerar que a equipe está SAINDO do lote de origem — senão ela
+          // aparece "ocupada" lá e o app acusa conflito dela com ela mesma.
+          if(moveOrig)cleanupOrigin(kOrig);
           var dryRun=buildSchedule();
           if(hadDst)OVR[kDst]=savedDst; else delete OVR[kDst];
+          if(moveOrig){ if(hadOrig)OVR[kOrig]=savedOrig; else delete OVR[kOrig]; }
           var placed=dryRun.filter(function(sg){return sg.si===si&&sg.team===team&&sg.li===destLi;})[0];
           var conflicts=(placed&&placed.start>requestedWeek)?dryRun.filter(function(sg){
             return sg.si===si&&sg.team===team&&sg.li!==destLi&&(sg.start+sg.dur-1)>=requestedWeek&&sg.start<=placed.start;
@@ -5642,23 +5666,23 @@
           if(mode==='replace'){
             commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:[{team:srcSeg.team,startWeek:destWeek}]},srcSeg.team,destWeek);
           } else if(mode==='include'){
-            // Divide o lote entre a equipe arrastada e quem já estava, a partir da semana
-            // escolhida: o que cada equipe que já tava lá já tinha planejado ANTES dessa semana
-            // fica intocado (vira um pin "história", só dela); o que sobra do lote a partir
-            // dali (quantidade total menos o que já ia ser feito antes) é dividido em partes
-            // iguais entre todas as equipes que passam a trabalhar juntas dali em diante.
-            var totalQty=QTY[destLi][si], sumBefore=0, pins=[];
+            // A equipe que JÁ estava no lote não se mexe: mantém exatamente a semana de início
+            // dela, num bloco só. Ela fica com tudo que já ia fazer sozinha até a semana
+            // escolhida, mais a sua parte do que sobra dali em diante. A equipe arrastada entra
+            // exatamente na semana escolhida, com a outra parte do que sobra.
+            var totalQty=QTY[destLi][si], sumBefore=0, existing=[];
             otherTeams.forEach(function(t){
               var cur=others.filter(function(sg){return sg.team===t;})[0];
               if(!cur)return;
               var beforeQty=0;
               cur.wq.forEach(function(q,i){ if(cur.start+i<destWeek)beforeQty+=q; });
-              if(beforeQty>0){ pins.push({team:t,startWeek:cur.start,qty:beforeQty}); sumBefore+=beforeQty; }
+              existing.push({team:t,startWeek:cur.start,before:beforeQty});
+              sumBefore+=beforeQty;
             });
             var remaining=Math.max(0,totalQty-sumBefore);
-            var allTeamsAfter=otherTeams.slice(); if(allTeamsAfter.indexOf(srcSeg.team)<0)allTeamsAfter.push(srcSeg.team);
-            var qtyEachFromX=allTeamsAfter.length?remaining/allTeamsAfter.length:0;
-            allTeamsAfter.forEach(function(t){ pins.push({team:t,startWeek:destWeek,qty:qtyEachFromX}); });
+            var share=remaining/(existing.length+1);
+            var pins=existing.map(function(e){ return {team:e.team,startWeek:e.startWeek,qty:e.before+share}; });
+            pins.push({team:srcSeg.team,startWeek:destWeek,qty:share});
             commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:pins},srcSeg.team,destWeek);
           }
         }
