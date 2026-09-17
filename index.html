@@ -77,6 +77,7 @@
   .obra-sel{display:flex;align-items:center;gap:8px;background:var(--elev);border:1px solid var(--line);border-radius:9px;padding:6px 12px;font-size:13px;cursor:pointer}
   .obra-sel .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
   .obra-sel b{font-weight:600}
+  .obra-sel.active{border-color:var(--accent);background:var(--accent-soft)}
   .top-right{margin-left:auto;display:flex;align-items:center;gap:9px}
   .icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);display:grid;place-items:center;cursor:pointer}
   .icon-btn:hover{border-color:var(--accent);color:var(--ink)}
@@ -426,6 +427,7 @@
       <div class="crumb" id="crumb"></div>
       <div class="top-right">
         <button class="btn primary" id="topSaveBtn" style="display:none" title="Salvar todas as alterações pendentes nesta obra">💾 Salvar alterações</button>
+        <div class="obra-sel" id="lotViewBtn" title="Filtrar quais lotes aparecem na matriz, no histograma e nas curvas (o cronograma continua calculado com todos)" style="display:none"><span class="k">Lotes</span><b id="lotViewName">Todos</b><span style="opacity:.5">▾</span></div>
         <div class="obra-sel" id="obraSel" title="Trocar obra"><span class="k">Obra</span><b id="obraSelName">—</b><span style="opacity:.5">▾</span></div>
         <button class="icon-btn" id="themeBtn" title="Tema">◐</button>
         <div class="avatar">W</div>
@@ -835,7 +837,7 @@
       document.getElementById('content').scrollTop=0; window.scrollTo(0,0);
     }
     document.getElementById('side').classList.remove('open');
-    refreshTopSaveBtn();
+    refreshTopSaveBtn(); refreshLotViewBtn();
     if(selectedObra){ try{ safeStore.setItem('lps-tripoloni-lastview',view); }catch(e){} }
   }
   function hasAnyDirty(){
@@ -2097,12 +2099,13 @@
   var PNC=['Projeto / detalhamento','Material / suprimento','Clima (chuva)','Mão de obra','Equipamento','Pré-requisito','Reprogramação','Terceiros','Outros'];
 
   function weeklyQtyBySvc(){
-    var segs=buildSchedule(); var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
+    var segsAll=buildSchedule(); var tw=1; segsAll.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
+    var segs=viewSegs(segsAll);
     var M=SERV.map(function(){var a=[];for(var i=0;i<=tw;i++)a.push(0);return a;});
     segs.forEach(function(sg){for(var i=0;i<sg.dur;i++){M[sg.si][sg.start+i]+=sg.wq[i];}});
     return {M:M,tw:tw};
   }
-  function svcSpan(){var segs=buildSchedule();return SERV.map(function(s,si){var mn=1e9,mx=0;segs.forEach(function(g){if(g.si===si){mn=Math.min(mn,g.start);mx=Math.max(mx,g.start+g.dur-1);}});return mx>0?{s:mn,e:mx}:{s:0,e:0};});}
+  function svcSpan(){var segs=viewSegs(buildSchedule());return SERV.map(function(s,si){var mn=1e9,mx=0;segs.forEach(function(g){if(g.si===si){mn=Math.min(mn,g.start);mx=Math.max(mx,g.start+g.dur-1);}});return mx>0?{s:mn,e:mx}:{s:0,e:0};});}
 
   function barLine(el,labels,real,prev,colHex){
     if(!el)return;
@@ -3323,10 +3326,92 @@
   }
   /** Pacote contratual do lote (índice li) — '' quando não marcado. */
   function pacoteOfLote(li){ return LOTE_PACOTE[li]||''; }
-  /** Filtra segmentos pra só os lotes de um pacote contratual (ou todos, se pacote for vazio). */
+
+  /* ---- Filtro global de lotes (só visualização) ----
+     O cronograma continua calculado integrado, com TODOS os lotes (predecessoras, filas de
+     equipe, tudo). O filtro só recorta o que aparece na matriz, no histograma, nas curvas e
+     no PDF. Guardado por obra no navegador. null = todos. */
+  var LOT_VIEW=null; // {loteId:true,...} ou null
+  function lotViewSet(){
+    if(!LOT_VIEW)return null;
+    var ids=window._LOTIDS||[], any=false;
+    for(var i=0;i<ids.length;i++){ if(LOT_VIEW[ids[i]]){any=true;break;} }
+    return any?LOT_VIEW:null; // se nenhum lote atual está no filtro (ex.: lotes reimportados), ignora o filtro
+  }
+  function lotInView(li){ var set=lotViewSet(); if(!set)return true; var id=(window._LOTIDS||[])[li]; return !!(id&&set[id]); }
+  function viewLotIdxs(){ var out=[]; LOTS.forEach(function(l,li){ if(lotInView(li))out.push(li); }); return out; }
+  function viewSegs(segs){ return lotViewSet()?(segs||[]).filter(function(sg){return lotInView(sg.li);}):segs; }
+  function lotViewKey(){ return 'lps-tripoloni-lotview-'+(selectedObra?selectedObra.id:''); }
+  function loadLotView(){
+    try{ var raw=safeStore.getItem(lotViewKey()); LOT_VIEW=raw?JSON.parse(raw):null; }catch(e){ LOT_VIEW=null; }
+    if(LOT_VIEW&&typeof LOT_VIEW==='object'&&!Object.keys(LOT_VIEW).length)LOT_VIEW=null;
+    refreshLotViewBtn();
+  }
+  function saveLotView(){ try{ if(LOT_VIEW)safeStore.setItem(lotViewKey(),JSON.stringify(LOT_VIEW)); else safeStore.removeItem(lotViewKey()); }catch(e){} }
+  function refreshLotViewBtn(){
+    var b=document.getElementById('lotViewBtn'), n=document.getElementById('lotViewName');
+    if(!b||!n)return;
+    b.style.display=selectedObra?'inline-flex':'none';
+    var set=lotViewSet();
+    if(!set){ n.textContent='Todos'; b.classList.remove('active'); return; }
+    var idxs=viewLotIdxs();
+    // Se a seleção bate exatamente com um pacote contratual, mostra o nome dele
+    var byPac={}; LOTS.forEach(function(l,li){ (byPac[pacoteOfLote(li)]=byPac[pacoteOfLote(li)]||[]).push(li); });
+    var match=null;
+    Object.keys(byPac).forEach(function(p){ if(p&&byPac[p].length===idxs.length&&byPac[p].every(function(li){return lotInView(li);}))match=p; });
+    n.textContent=match?match:(idxs.length+' de '+LOTS.length);
+    b.classList.add('active');
+  }
+  function openLotViewMenu(){
+    var set=lotViewSet();
+    var byPac={}, pacs=[];
+    LOTS.forEach(function(l,li){ var p=pacoteOfLote(li); if(!byPac[p]){byPac[p]=[];if(p)pacs.push(p);} byPac[p].push(li); });
+    var backdrop=document.createElement('div');
+    backdrop.className='segmenu-backdrop';
+    backdrop.innerHTML='<div class="segmenu-panel card" style="max-width:520px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Lotes em exibição</div>'+
+      '<div class="note" style="margin-bottom:10px">Só muda o que aparece na matriz, no histograma, nas curvas e no PDF. O cronograma continua calculado com todos os lotes juntos (predecessoras e equipes entre lotes seguem valendo).</div>'+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'+
+        '<button class="btn" data-lvpac="*">Todos</button>'+
+        pacs.map(function(p){return '<button class="btn" data-lvpac="'+escAttr(p)+'">'+p+' <span class="note">('+byPac[p].length+')</span></button>';}).join('')+
+        '<button class="btn" data-lvpac="">Nenhum</button>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:4px 10px;max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">'+
+        LOTS.map(function(l,li){ var id=(window._LOTIDS||[])[li]; var on=!set||!!set[id];
+          return '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap"><input type="checkbox" data-lvlot="'+escAttr(id||'')+'"'+(on?' checked':'')+'>'+l+(pacoteOfLote(li)?' <span class="note">'+pacoteOfLote(li)+'</span>':'')+'</label>';
+        }).join('')+
+      '</div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="lvCancel">Cancelar</button>'+
+        '<button class="btn primary" id="lvApply">Aplicar</button>'+
+      '</div></div>';
+    document.body.appendChild(backdrop);
+    function close(){ backdrop.remove(); }
+    var cbs=function(){return backdrop.querySelectorAll('[data-lvlot]');};
+    backdrop.addEventListener('pointerdown',function(e){ if(e.target===backdrop)close(); });
+    backdrop.querySelectorAll('[data-lvpac]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var p=b.getAttribute('data-lvpac');
+        var lis=p==='*'?LOTS.map(function(l,li){return li;}):(byPac[p]||[]);
+        var ids={}; lis.forEach(function(li){ ids[(window._LOTIDS||[])[li]]=true; });
+        cbs().forEach(function(cb){ cb.checked=!!ids[cb.getAttribute('data-lvlot')]; });
+      });
+    });
+    document.getElementById('lvCancel').addEventListener('click',close);
+    document.getElementById('lvApply').addEventListener('click',function(){
+      var sel={}, n=0;
+      cbs().forEach(function(cb){ if(cb.checked){ sel[cb.getAttribute('data-lvlot')]=true; n++; } });
+      if(n===0){ alert('Selecione pelo menos um lote.'); return; }
+      LOT_VIEW=(n===LOTS.length)?null:sel;
+      saveLotView(); refreshLotViewBtn(); close(); go(current);
+    });
+  }
+  /** Filtra segmentos pra só os lotes de um pacote contratual (ou todos, se pacote for vazio),
+   *  e sempre também pelo filtro global de lotes em exibição. */
   function filterSegsByPacote(segs,pacote){
+    segs=viewSegs(segs||[]);
     if(!pacote)return segs;
-    return (segs||[]).filter(function(sg){return pacoteOfLote(sg.li)===pacote;});
+    return segs.filter(function(sg){return pacoteOfLote(sg.li)===pacote;});
   }
   /** Dados da Curva S: previsto cliente (linha de base ativa, se houver), previsto executivo
    *  (cronograma atual, ao vivo) e realizado (Produção Diária), por serviço e total. Se
@@ -3344,7 +3429,7 @@
     var twCliente=0; if(segsClienteAll)segsClienteAll.forEach(function(sg){twCliente=Math.max(twCliente,sg.start+sg.dur-1);});
     var tw=Math.max(twExec,twCliente,1); // horizonte sempre com base no cronograma integrado inteiro
 
-    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(pacote&&pacoteOfLote(li)!==pacote)return;t+=QTY[li][si]||0;});return t;});
+    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(!lotInView(li))return;if(pacote&&pacoteOfLote(li)!==pacote)return;t+=QTY[li][si]||0;});return t;});
     var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
 
     var executivo=cumulativePct(weeklyFromSegs(segsExec,tw),tw,totalByServ,grandTotal);
@@ -3354,8 +3439,9 @@
     var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
     var weekIdxCache={};
     (window.PROD_LIST||[]).forEach(function(r){
+      var li0=(window._LOTIDS||[]).indexOf(r.loteId);
+      if(li0>=0&&!lotInView(li0))return;
       if(pacote){
-        var li0=(window._LOTIDS||[]).indexOf(r.loteId);
         if(li0<0||pacoteOfLote(li0)!==pacote)return;
       }
       var mon=mondayOfIso(r.data), w4=weekIdxCache[mon];
@@ -3653,11 +3739,12 @@
   function cmpCurves(){
     var el=document.getElementById('cmpc');if(!el)return;
     var legEl=document.getElementById('cmpcLeg');
-    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){t+=QTY[li][si]||0;});return t;});
+    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(lotInView(li))t+=QTY[li][si]||0;});return t;});
     var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
     function totalSeriesFor(snap){
-      var segs=scheduleWithSnapshot(snap), tw=1;
-      segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+      var segsAll=scheduleWithSnapshot(snap), tw=1;
+      segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+      var segs=viewSegs(segsAll); // filtro global de lotes; horizonte continua o do cronograma inteiro
       var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=0;
       segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++)weekly[sg.start+i]+=sg.wq[i]||0; });
       var out=[0], acc=0;
@@ -3670,6 +3757,8 @@
     var maxTw=1; computed.forEach(function(c){maxTw=Math.max(maxTw,c.tw);});
     var realWeekly=[]; for(var w3=0;w3<=maxTw;w3++)realWeekly[w3]=0;
     (window.PROD_LIST||[]).forEach(function(r){
+      var liR=(window._LOTIDS||[]).indexOf(r.loteId);
+      if(liR>=0&&!lotInView(liR))return;
       var mon=mondayOfIso(r.data), w4=null;
       for(var wi=1;wi<=maxTw;wi++){ if(mondayOf(wi).toISOString().slice(0,10)===mon){w4=wi;break;} }
       if(w4!=null)realWeekly[w4]+=r.qtd||0;
@@ -4278,7 +4367,10 @@
    * desmobilizar e remobilizar nesse intervalo. Por isso agrupa por serviço+equipe (do primeiro
    * início ao último término), em vez de olhar semana a semana se há produção naquela semana. */
   function activeTeamsByWeek(){
-    var segs=buildSchedule(); var tw=1; segs.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    var segsAll=buildSchedule(); var tw=1; segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    // Filtro global de lotes: conta só as equipes trabalhando nos lotes em exibição. O horizonte
+    // (tw) continua o do cronograma integrado inteiro, pra alinhar com as outras visões.
+    var segs=viewSegs(segsAll);
     var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<tw;w++)out[si].push(0);});
     var spanByTeam={}; // "si::team" -> {min,max}
     segs.forEach(function(sg){
@@ -4719,7 +4811,7 @@
       var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
       var headH=30, slack=14; // cabeçalho por folha + folga fixa
       var segsAll=buildSchedule();
-      var allIdxs=LOTS.map(function(l,li){return li;});
+      var allIdxs=viewLotIdxs(); // respeita o filtro global de lotes em exibição
       // Mede a matriz no formato COMPACTO de impressão (linhas mais baixas, sem grips/etiquetas
       // de equipe — estilos de .print-page), num elemento fora da tela. Medir a matriz da tela
       // daria uma altura maior que a real e a escala sairia menor do que podia.
@@ -4743,10 +4835,10 @@
       var availW=pageW/scale*0.97-fixedW;
       function splitLots(target){
         var out=[], cur=[], curW=0;
-        for(var li=0;li<LOTS.length;li++){
-          var wcol=lotWs[li]||60;
+        for(var k=0;k<allIdxs.length;k++){
+          var wcol=lotWs[k]||60; // lotWs está na ordem de allIdxs (uma coluna por lote em exibição)
           if(cur.length&&(curW+wcol>availW||curW>=target)){ out.push(cur); cur=[]; curW=0; }
-          cur.push(li); curW+=wcol;
+          cur.push(allIdxs[k]); curW+=wcol;
         }
         if(cur.length)out.push(cur);
         return out;
@@ -5327,8 +5419,7 @@
     return '<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
   }
   function matrixTableHTML(withSummary){
-    var allIdxs=LOTS.map(function(l,li){return li;});
-    var tableHtml=matrixTableCore(withSummary,allIdxs,buildSchedule());
+    var tableHtml=matrixTableCore(withSummary,viewLotIdxs(),buildSchedule());
     var anyHidden=SERV.some(function(s,si){return !!TC_HIDDEN_SVC[si];});
     var svcToggles=SERV.length?('<div class="tc-svctoggle">'+
       SERV.map(function(sv,si){
@@ -5387,14 +5478,17 @@
   }
 
   function resumoHTML(){
-    var segs=buildSchedule(); var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
+    var segsAll=buildSchedule(); var twAll=1; segsAll.forEach(function(s){twAll=Math.max(twAll,s.start+s.dur-1);});
+    var segs=viewSegs(segsAll), nView=viewLotIdxs().length;
+    var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
     var load={}; segs.forEach(function(s){for(var i=0;i<s.dur;i++){var w=s.start+i;load[w]=(load[w]||0)+1;}});
     var pico=0; Object.keys(load).forEach(function(k){pico=Math.max(pico,load[k]);});
+    var lotesTxt=nView<LOTS.length?(nView+' de '+LOTS.length+' lotes em exibição'):(LOTS.length+' lotes');
     var kpis='<div class="grid g4" style="margin-bottom:14px">'+
-      kpi('info','Prazo total',tw+' sem','~'+Math.round(tw/4.33)+' meses')+
+      kpi('info','Prazo total',tw+' sem','~'+Math.round(tw/4.33)+' meses'+(nView<LOTS.length?' · obra inteira: '+twAll+' sem':''))+
       kpi('accent','Término previsto',fmtDate(mondayOf(tw)),'semana S'+isoWeek(mondayOf(tw)))+
       kpi('good','Pico de frentes',pico,'atividades simultâneas')+
-      kpi('warn','Serviços',SERV.length,LOTS.length+' lotes')+'</div>';
+      kpi('warn','Serviços',SERV.length,lotesTxt)+'</div>';
     if(!SERV.length||!tw)return kpis+'<div class="note">Cadastre serviços e quantidades pra ver o quantitativo semanal.</div>';
     var weekly=[]; for(var w=0;w<=tw;w++){weekly[w]=SERV.map(function(){return 0;});}
     segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ weekly[sg.start+i][sg.si]+=sg.wq[i]||0; } });
@@ -6176,6 +6270,7 @@
     try{ await sbLoadCadastro(id); }
     catch(e){ if(!silent)alert('Falha ao carregar a obra: '+((e&&e.message)||e)); return; }
     selectedObra={id:id,nome:o.nome}; CUR={id:id,nome:o.nome};
+    loadLotView();
     document.getElementById('landing').classList.remove('show');
     try{ safeStore.setItem('lps-tripoloni-lastobra',id); }catch(e){}
     go(initialView&&CRUMB[initialView]?initialView:'torre');
@@ -6214,6 +6309,7 @@
   })();
   document.getElementById('obraSel').addEventListener('click',function(){ renderLanding(); showLanding(); });
   document.getElementById('topSaveBtn').addEventListener('click',saveAllPending);
+  document.getElementById('lotViewBtn').addEventListener('click',function(){ if(selectedObra&&LOTS.length)openLotViewMenu(); });
   document.getElementById('obraSearch').addEventListener('input',function(e){renderLanding(e.target.value);});
 
   document.getElementById('content').addEventListener('click',function(e){
