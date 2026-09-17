@@ -5640,13 +5640,10 @@
           if(mode==='replace'){
             commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:[{team:srcSeg.team,startWeek:destWeek}]},srcSeg.team,destWeek);
           } else if(mode==='include'){
-            // Divide o lote entre a equipe arrastada e quem já estava. As equipes que já
-            // estavam ali mantêm a semana onde já se encontravam (não pula porque uma nova
-            // equipe entrou); a equipe arrastada começa exatamente onde foi solta.
-            var pins=otherTeams.map(function(t){
-              var seg=others.filter(function(sg){return sg.team===t;})[0];
-              return {team:t,startWeek:seg?seg.start:destWeek};
-            });
+            // Divide o lote entre a equipe arrastada e quem já estava — as duas passam a
+            // trabalhar juntas ali a partir da MESMA semana selecionada agora (não fica cada
+            // equipe numa semana diferente).
+            var pins=otherTeams.map(function(t){ return {team:t,startWeek:destWeek}; });
             pins.push({team:srcSeg.team,startWeek:destWeek});
             commitWithOverlapCheck(kOrig,kDst,{pinned:true,pins:pins},srcSeg.team,destWeek);
           }
