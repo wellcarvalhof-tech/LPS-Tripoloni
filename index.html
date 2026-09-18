@@ -1575,7 +1575,10 @@
         '<div><div class="note" style="margin-bottom:4px;font-weight:600">Evolução semanal</div><svg class="chart" id="cmpHistW" viewBox="0 0 620 220"></svg></div>'+
         '<div><div class="note" style="margin-bottom:4px;font-weight:600">Acumulado</div><svg class="chart" id="cmpHistA" viewBox="0 0 620 220"></svg></div>'+
       '</div>'+
-      '<div class="legend" id="cmpHistLeg" style="margin-top:8px"></div></div>';
+      '<div class="legend" id="cmpHistLeg" style="margin-top:8px"></div></div>'+
+    '<div class="card" style="margin-top:14px"><div class="eyebrow" style="margin:0">Comparação — Matrizes (só as cores dos serviços)</div>'+
+      '<div class="note" style="margin-bottom:8px">Uma mini-matriz por linha selecionada: lotes na horizontal, semanas na vertical (mais recente em cima, como no Tempo-Caminho), cada célula com a cor do(s) serviço(s) daquela semana no lote. A primeira linha marcada é a referência; nas outras, as células com <span style="display:inline-block;width:10px;height:10px;border:1.5px solid #dc2626;vertical-align:-1px"></span> contorno vermelho têm serviços diferentes da referência.</div>'+
+      '<div class="grid g2" id="cmpMat" style="gap:16px"></div></div>';
   };
 
   VIEWS['ac-curvas']=function(){
@@ -2837,13 +2840,13 @@
     }
     if(view==='cr-matriz'){setupCrono();}
     if(view==='cr-cenarios'){
-      cmpCurves(); cmpHist();
+      cmpAll();
       // Marcar/desmarcar uma linha redesenha só os gráficos (sem recarregar a aba inteira, que
       // recalcularia todos os cenários de novo pra montar a tabela).
       document.querySelectorAll('[data-cmpsel]').forEach(function(cb){
         cb.addEventListener('change',function(){
           CMP_SEL[cb.getAttribute('data-cmpsel')]=cb.checked;
-          cmpCurves(); cmpHist();
+          cmpAll();
         });
       });
       document.querySelectorAll('[data-cmphisttipo]').forEach(function(b){
@@ -3695,6 +3698,67 @@
     });
     return lines;
   }
+  // Cache por render da aba Cenários: cada linha (cronograma atual / cenário) tem seu cronograma
+  // e histograma calculados uma vez só, compartilhados pela Curva S, pelo histograma comparativo
+  // e pela comparação de matrizes. Zerado em cmpAll().
+  var _cmpMemo={segs:{},hist:{}};
+  function cmpSegs(l){ if(!_cmpMemo.segs[l.key])_cmpMemo.segs[l.key]=scheduleWithSnapshot(l.snap); return _cmpMemo.segs[l.key]; }
+  function cmpHistFor(l){ if(!_cmpMemo.hist[l.key])_cmpMemo.hist[l.key]=histogramWithSnapshot(l.snap); return _cmpMemo.hist[l.key]; }
+  function cmpAll(){ _cmpMemo={segs:{},hist:{}}; cmpCurves(); cmpHist(); cmpMatrix(); }
+  /** Comparação visual das matrizes (aba Cenários): uma mini-matriz por linha selecionada, só
+   *  com a cor dos serviços em cada lote × semana (sem números), pra enxergar onde o cronograma
+   *  muda de um cenário pro outro. A primeira linha selecionada é a referência; nas demais, as
+   *  células cujo conjunto de serviços difere da referência ganham contorno vermelho. */
+  function cmpMatrix(){
+    var el=document.getElementById('cmpMat'); if(!el)return;
+    var lines=cmpLines().filter(function(l){return l.on;});
+    if(!SERV.length||!LOTS.length||!lines.length){ el.innerHTML=''; return; }
+    var lotIdxs=viewLotIdxs();
+    var data=lines.map(function(l){
+      var all=cmpSegs(l), tw=1; all.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+      var cell={}; // 'semana::li' -> [si,...]
+      viewSegs(all).forEach(function(sg){
+        for(var i=0;i<sg.dur;i++){ if(!(sg.wq[i]>0))continue; var k=(sg.start+i)+'::'+sg.li; var arr=cell[k]||(cell[k]=[]); if(arr.indexOf(sg.si)<0)arr.push(sg.si); }
+      });
+      return {line:l,cell:cell,tw:tw};
+    });
+    var tw=1; data.forEach(function(d){tw=Math.max(tw,d.tw);});
+    var ref=data[0];
+    function ck(arr){ return (arr||[]).slice().sort(function(a,b){return a-b;}).join(','); }
+    el.innerHTML=data.map(function(d,di){
+      var diffs=0;
+      if(di>0){
+        var keys={}; Object.keys(d.cell).concat(Object.keys(ref.cell)).forEach(function(k){keys[k]=1;});
+        Object.keys(keys).forEach(function(k){ if(ck(d.cell[k])!==ck(ref.cell[k]))diffs++; });
+      }
+      var title='<span class="swatch" style="background:'+d.line.color+'"></span><b>'+d.line.nome+'</b>'+
+        (di===0?' <span class="note">(referência) · '+d.tw+' sem</span>':' <span class="note">· '+d.tw+' sem · <b style="color:'+(diffs?'var(--crit)':'var(--good)')+'">'+diffs+' célula'+(diffs===1?'':'s')+' diferente'+(diffs===1?'':'s')+'</b> da referência</span>');
+      return '<div><div style="font-size:12px;margin-bottom:4px">'+title+'</div>'+miniMatrixSVG(d,lotIdxs,tw,di>0?ref:null)+'</div>';
+    }).join('');
+  }
+  function miniMatrixSVG(d,lotIdxs,tw,ref){
+    var n=Math.max(1,lotIdxs.length), W=620, labelW=26, labelH=12;
+    var cw=(W-labelW)/n, ch=Math.max(3,Math.min(9,Math.floor(360/tw)));
+    var H=labelH+tw*ch+labelH;
+    function ck(arr){ return (arr||[]).slice().sort(function(a,b){return a-b;}).join(','); }
+    var s='<rect x="'+labelW+'" y="'+labelH+'" width="'+(W-labelW)+'" height="'+(tw*ch)+'" fill="var(--elev)"/>';
+    var stepW=Math.max(1,Math.ceil(tw/12)), stepL=Math.max(1,Math.ceil(n/14));
+    var cells='', marks='';
+    for(var r=0;r<tw;r++){
+      var w=tw-r, y=labelH+r*ch;
+      if((w-1)%stepW===0)s+='<text class="axm" x="'+(labelW-3)+'" y="'+(y+ch*0.5+2)+'" text-anchor="end" style="font-size:6px">S'+isoWeek(mondayOf(w))+'</text>';
+      for(var c=0;c<n;c++){
+        var li=lotIdxs[c], k=w+'::'+li, arr=d.cell[k], x=labelW+c*cw;
+        if(arr&&arr.length){
+          var sw=cw/arr.length;
+          for(var j=0;j<arr.length;j++){ cells+='<rect x="'+(x+j*sw).toFixed(2)+'" y="'+y+'" width="'+Math.max(0.5,sw-0.3).toFixed(2)+'" height="'+(ch-0.5)+'" fill="'+svcColor(SERV[arr[j]])+'"/>'; }
+        }
+        if(ref&&ck(arr)!==ck(ref.cell[k]))marks+='<rect x="'+x.toFixed(2)+'" y="'+y+'" width="'+cw.toFixed(2)+'" height="'+ch+'" fill="none" stroke="#dc2626" stroke-width="1"/>';
+      }
+    }
+    for(var c2=0;c2<n;c2+=stepL){ s+='<text class="axm" x="'+(labelW+c2*cw+cw/2)+'" y="'+(H-2)+'" text-anchor="middle" style="font-size:6px">'+LOTS[lotIdxs[c2]]+'</text>'; }
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto">'+s+cells+marks+'</svg>';
+  }
   /** Gráfico de linhas simples (usado pelo histograma comparativo): cada série é um array
    *  indexado pela semana (índice 0 = semana 1). Eixo Y começa no zero e vai até o maior valor. */
   function lineChartSVG(el,series,opts){
@@ -3723,7 +3787,7 @@
     if(!SERV.length||!RECURSOS.length||!lines.length){ elW.innerHTML=''; elA.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
     var recIds=RECURSOS.filter(function(r){return CMP_HIST_TIPO==='todos'||r.tipo===CMP_HIST_TIPO;}).map(function(r){return r.id;});
     var computed=lines.map(function(l){
-      var h=histogramWithSnapshot(l.snap);
+      var h=cmpHistFor(l);
       var weekly=[]; for(var w=0;w<h.tw;w++)weekly.push(0);
       recIds.forEach(function(id){ var arr=h.byResource[id]||[]; for(var w2=0;w2<arr.length;w2++)weekly[w2]+=arr[w2]||0; });
       var acc=[], sum=0; weekly.forEach(function(v){ sum+=v; acc.push(sum); });
@@ -3741,8 +3805,8 @@
     var legEl=document.getElementById('cmpcLeg');
     var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(lotInView(li))t+=QTY[li][si]||0;});return t;});
     var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
-    function totalSeriesFor(snap){
-      var segsAll=scheduleWithSnapshot(snap), tw=1;
+    function totalSeriesFor(l){
+      var segsAll=cmpSegs(l), tw=1;
       segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
       var segs=viewSegs(segsAll); // filtro global de lotes; horizonte continua o do cronograma inteiro
       var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=0;
@@ -3753,7 +3817,7 @@
     }
     var lines=cmpLines().filter(function(l){return l.on;});
     if(!SERV.length||!lines.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
-    var computed=lines.map(function(l){return Object.assign({},l,totalSeriesFor(l.snap));});
+    var computed=lines.map(function(l){return Object.assign({},l,totalSeriesFor(l));});
     var maxTw=1; computed.forEach(function(c){maxTw=Math.max(maxTw,c.tw);});
     var realWeekly=[]; for(var w3=0;w3<=maxTw;w3++)realWeekly[w3]=0;
     (window.PROD_LIST||[]).forEach(function(r){
