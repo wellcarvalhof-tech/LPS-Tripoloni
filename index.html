@@ -78,6 +78,11 @@
   .obra-sel .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
   .obra-sel b{font-weight:600}
   .obra-sel.active{border-color:var(--accent);background:var(--accent-soft)}
+  /* modo somente leitura (visualizador) */
+  body.ro #topSaveBtn{display:none!important}
+  body.ro .tcm-seg{cursor:default}
+  body.ro .tcm-grip{display:none}
+  body.ro #cronoToolbar [data-act^="imp"],body.ro #cronoToolbar [data-act="rev00"]{display:none!important}
   .top-right{margin-left:auto;display:flex;align-items:center;gap:9px}
   .icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);display:grid;place-items:center;cursor:pointer}
   .icon-btn:hover{border-color:var(--accent);color:var(--ink)}
@@ -427,6 +432,7 @@
       <div class="crumb" id="crumb"></div>
       <div class="top-right">
         <button class="btn primary" id="topSaveBtn" style="display:none" title="Salvar todas as alterações pendentes nesta obra">💾 Salvar alterações</button>
+        <span class="pill warn" id="roleBadge" style="display:none;align-items:center"></span>
         <div class="obra-sel" id="lotViewBtn" title="Filtrar quais lotes aparecem na matriz, no histograma e nas curvas (o cronograma continua calculado com todos)" style="display:none"><span class="k">Lotes</span><b id="lotViewName">Todos</b><span style="opacity:.5">▾</span></div>
         <div class="obra-sel" id="obraSel" title="Trocar obra"><span class="k">Obra</span><b id="obraSelName">—</b><span style="opacity:.5">▾</span></div>
         <button class="icon-btn" id="themeBtn" title="Tema">◐</button>
@@ -503,6 +509,33 @@
     var r=await SB.from('obras').update(patch).eq('id',id);
     if(r.error)throw r.error;
   }
+  /* ---- Acessos (obra_membros / obra_convites — migração 14) ---- */
+  async function sbMyUserId(){
+    var s=await SB.auth.getSession();
+    return (s&&s.data&&s.data.session&&s.data.session.user)?s.data.session.user.id:null;
+  }
+  async function sbLoadMyRole(obraId){
+    var uid=await sbMyUserId(); if(!uid)return null;
+    var r=await SB.from('obra_membros').select('papel,permissoes').eq('obra_id',obraId).eq('user_id',uid).maybeSingle();
+    if(r.error)throw r.error;
+    return r.data||null;
+  }
+  async function sbListMembros(obraId){
+    var r=await SB.from('obra_membros').select('id,user_id,papel,permissoes,email,created_at').eq('obra_id',obraId).order('created_at',{ascending:true});
+    if(r.error)throw r.error; return r.data||[];
+  }
+  async function sbListConvites(obraId){
+    var r=await SB.from('obra_convites').select('id,email,papel,permissoes,created_at').eq('obra_id',obraId).order('created_at',{ascending:true});
+    if(r.error)throw r.error; return r.data||[];
+  }
+  async function sbConvidarMembro(obraId,email,papel,permissoes){
+    await sbRequireSession();
+    var r=await SB.rpc('convidar_membro',{_obra_id:obraId,_email:email,_papel:papel,_permissoes:permissoes||[]});
+    if(r.error)throw r.error; return r.data; // 'membro' | 'convite'
+  }
+  async function sbUpdateMembro(id,patch){ await sbRequireSession(); var r=await SB.from('obra_membros').update(patch).eq('id',id); if(r.error)throw r.error; }
+  async function sbDeleteMembro(id){ await sbRequireSession(); var r=await SB.from('obra_membros').delete().eq('id',id); if(r.error)throw r.error; }
+  async function sbDeleteConvite(id){ await sbRequireSession(); var r=await SB.from('obra_convites').delete().eq('id',id); if(r.error)throw r.error; }
   async function sbCreateServico(obraId,patch){
     await sbRequireSession();
     var id=newUuid();
@@ -756,7 +789,7 @@
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
-      ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo']]},
+      ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo'],['cad-acessos','Acessos']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários']]},
@@ -766,7 +799,7 @@
       ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]}
   ];
   var CRUMB={torre:['Torre de Controle'],
-    'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],
+    'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
@@ -781,17 +814,59 @@
   };
   function svgIcon(n){return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[n]||'')+'</svg>';}
 
+  /* ---------- Perfil do usuário na obra (migração 14) ----------
+     planejador = tudo; gestor = edita só nas abas em permissoes; visualizador = só lê, só nas
+     abas em permissoes. Se o perfil não puder ser carregado (migração ainda não rodada, ou
+     admin global sem linha em obra_membros), o app segue como planejador — igual era antes. */
+  var MY_ROLE={papel:'planejador',permissoes:['*']};
+  function isPlanejador(){ return MY_ROLE.papel==='planejador'; }
+  function isReadOnly(){ return MY_ROLE.papel==='visualizador'; }
+  function canViewTab(view){
+    if(view==='cad-acessos')return isPlanejador();
+    if(isPlanejador())return true;
+    var p=Array.isArray(MY_ROLE.permissoes)?MY_ROLE.permissoes:[];
+    return p.indexOf('*')>=0||p.indexOf(view)>=0;
+  }
+  function allTabs(){ var out=[]; NAV.forEach(function(g){ if(g.solo)out.push([g.id,g.label]); else g.items.forEach(function(it){ if(it[0]!=='cad-acessos')out.push(it); }); }); return out; }
+  function firstAllowedTab(){ var t=allTabs().filter(function(it){return canViewTab(it[0]);})[0]; return t?t[0]:'torre'; }
+  function refreshRoleBadge(){
+    var b=document.getElementById('roleBadge'); if(!b)return;
+    if(!selectedObra||isPlanejador()){ b.style.display='none'; return; }
+    b.style.display='inline-flex';
+    b.textContent=isReadOnly()?'Visualização':'Gestor';
+    b.title=isReadOnly()?'Seu acesso a esta obra é somente leitura':'Você edita só as abas liberadas pra você';
+  }
+  /** Modo somente leitura (visualizador): o banco já bloqueia a gravação (RLS); aqui só tira
+   *  da tela o que não faz sentido — botões de salvar/importar/adicionar/excluir, campos
+   *  editáveis e o arraste da matriz — pra não parecer que dá pra mexer. Roda depois de cada
+   *  render. Filtros de visualização (selects com id, checkboxes de comparação) continuam ativos. */
+  function applyReadOnly(){
+    document.body.classList.toggle('ro',isReadOnly());
+    if(!isReadOnly())return;
+    var c=document.getElementById('content'); if(!c)return;
+    c.querySelectorAll('input.einp,input.inp,textarea,input[type=color],input[data-cfgbool],input[data-teamprod],input[data-crewres],input[data-apoiocrewres],input[data-realres],input[data-svcvis],select:not([id])').forEach(function(el){ el.disabled=true; });
+    var rx=/salvar|importar|adicionar|excluir|gerar linha|carregar|duplicar|aplicar|remover|limpar|modelo|exportar equipes|reiniciar|\+ /i;
+    c.querySelectorAll('button').forEach(function(b){
+      var t=(b.textContent||'').trim();
+      if(b.classList.contains('iconbtn')&&/✕|↑|↓|⋮/.test(t))b.style.display='none';
+      else if(rx.test(t)&&!/ajustar à tela|mostrar todos/i.test(t))b.style.display='none';
+    });
+  }
+
   /* ---------- Render nav ---------- */
   var current='torre';
   function buildNav(){
     var nav=document.getElementById('nav'); nav.innerHTML='';
     NAV.forEach(function(g){
+      if(g.solo&&!canViewTab(g.id))return;
+      var items=g.solo?[]:g.items.filter(function(it){return canViewTab(it[0]);});
+      if(!g.solo&&!items.length)return;
       var grp=document.createElement('div');
       grp.className='nav-group'+(g.solo?' nav-solo':'')+(g.open?' open':'');
       if(g.solo){
         grp.innerHTML='<button class="nav-head" data-view="'+g.id+'">'+svgIcon(g.icon)+g.label+'</button>';
       }else{
-        var sub=g.items.map(function(it){return '<button class="nav-item" data-view="'+it[0]+'">'+it[1]+'</button>';}).join('');
+        var sub=items.map(function(it){return '<button class="nav-item" data-view="'+it[0]+'">'+it[1]+'</button>';}).join('');
         grp.innerHTML='<button class="nav-head" data-group="'+g.id+'">'+svgIcon(g.icon)+g.label+
           '<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>'+
           '<div class="nav-sub">'+sub+'</div>';
@@ -813,6 +888,7 @@
       var grp=el.closest('.nav-group'); if(grp && !grp.classList.contains('nav-solo')) grp.classList.add('open');}
   }
   function go(view){
+    if(!canViewTab(view))view=firstAllowedTab();
     var sameView=(view===current);
     var contentEl0=document.getElementById('content');
     var keepContentScroll=sameView&&contentEl0?contentEl0.scrollTop:0;
@@ -837,7 +913,7 @@
       document.getElementById('content').scrollTop=0; window.scrollTo(0,0);
     }
     document.getElementById('side').classList.remove('open');
-    refreshTopSaveBtn(); refreshLotViewBtn();
+    refreshTopSaveBtn(); refreshLotViewBtn(); refreshRoleBadge(); applyReadOnly();
     if(selectedObra){ try{ safeStore.setItem('lps-tripoloni-lastview',view); }catch(e){} }
   }
   function hasAnyDirty(){
@@ -944,7 +1020,13 @@
       ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     window._cronoTab=window._cronoTab||'tc';
-    var tabs=TABS.map(function(t){var act=(!t[2]&&t[0]===window._cronoTab)?' active':'';
+    // Visualizador não vê as abas de edição; atalhos pra outras telas só se ele puder abri-las.
+    if(isReadOnly()&&(window._cronoTab==='ajuste'||window._cronoTab==='equipe'))window._cronoTab='tc';
+    var tabs=TABS.filter(function(t){
+      if(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
+      if(t[2]&&!canViewTab(t[2]))return false;
+      return true;
+    }).map(function(t){var act=(!t[2]&&t[0]===window._cronoTab)?' active':'';
       return '<button class="subtab'+act+'" data-tab="'+t[0]+'"'+(t[2]?' data-nav="'+t[2]+'"':'')+'>'+t[1]+'</button>';}).join('');
 
     return head('Tempo-Caminho','Cronograma automático para obras rodoviárias — monte, importe, ajuste e exporte.','')+
@@ -1053,6 +1135,112 @@
    * (gerência, QSMS, engenharia, produção, unidade industrial...), num catálogo de referência em
    * 3 níveis de classificação (ex.: "INDIRETO ADMINISTRATIVO" > "1. Administrativo" > "RECURSOS
    * HUMANOS"). Puramente cadastral — não entra no cálculo do cronograma. */
+  /* ---------- Acessos (planejador) ---------- */
+  var PAPEL_LABEL={planejador:'Planejador',gestor:'Gestor',visualizador:'Visualizador'};
+  function tabsCheckboxesHTML(selected,prefix){
+    var sel=selected||[], all=sel.indexOf('*')>=0;
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px 12px">'+allTabs().map(function(it){
+      var on=all||sel.indexOf(it[0])>=0;
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer"><input type="checkbox" data-'+prefix+'="'+it[0]+'"'+(on?' checked':'')+'>'+(CRUMB[it[0]]?CRUMB[it[0]].join(' › '):it[1])+'</label>';
+    }).join('')+'</div>';
+  }
+  function tabsLabel(perm){
+    if(!Array.isArray(perm)||perm.indexOf('*')>=0)return '<span class="note">todas</span>';
+    if(!perm.length)return '<span class="note" style="color:var(--crit)">nenhuma</span>';
+    var names=perm.map(function(k){var c=CRUMB[k];return c?c[c.length-1]:k;});
+    return '<span class="note">'+names.join(', ')+'</span>';
+  }
+  VIEWS['cad-acessos']=function(){
+    return head('Acessos','Quem pode entrar nesta obra, com qual perfil e em quais abas.','')+
+      '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Perfis</div><div class="note">'+
+        '<b>Planejador</b> — acesso total: edita tudo e gerencia os acessos. &nbsp; '+
+        '<b>Gestor</b> — edita, mas só nas abas liberadas. &nbsp; '+
+        '<b>Visualizador</b> — só lê, e só nas abas liberadas (o banco também bloqueia gravação).</div>'+
+        '<div class="note" style="margin-top:6px">Pra entrar, a pessoa cria a conta em "Criar conta" na tela inicial com o mesmo e-mail cadastrado aqui. Se a conta já existir, o acesso vale na hora; senão fica como convite pendente e é aplicado sozinho quando ela se cadastrar.</div></div>'+
+      '<div id="acessosRoot"><div class="note">Carregando…</div></div>';
+  };
+  async function renderAcessos(){
+    var root=document.getElementById('acessosRoot'); if(!root||!selectedObra)return;
+    var membros, convites, myUid=await sbMyUserId();
+    try{ membros=await sbListMembros(selectedObra.id); convites=await sbListConvites(selectedObra.id); }
+    catch(e){
+      root.innerHTML='<div class="banner" style="border-color:var(--crit)">Não deu pra carregar os acessos: '+escAttr((e&&e.message)||e)+'<br>Provavelmente a migração <b>sql/14_add_acessos.sql</b> ainda não foi rodada no Supabase.</div>';
+      return;
+    }
+    var rows=membros.map(function(m){
+      var me=m.user_id===myUid;
+      var sel='<select class="esel" data-mpapel="'+m.id+'"'+(me?' disabled':'')+'>'+['planejador','gestor','visualizador'].map(function(p){return '<option value="'+p+'"'+(m.papel===p?' selected':'')+'>'+PAPEL_LABEL[p]+'</option>';}).join('')+'</select>';
+      var acoes=me?'<span class="note">(você)</span>':
+        (m.papel==='planejador'?'':'<button class="btn" data-mtabs="'+m.id+'" style="padding:4px 9px">Abas…</button> ')+
+        '<button class="iconbtn" data-mdel="'+m.id+'" title="Remover acesso">✕</button>';
+      return '<tr><td>'+escAttr(m.email||m.user_id)+'</td><td>'+sel+'</td><td>'+(m.papel==='planejador'?'<span class="note">todas</span>':tabsLabel(m.permissoes))+'</td><td style="white-space:nowrap">'+acoes+'</td></tr>';
+    }).join('');
+    var convRows=convites.map(function(c){
+      return '<tr><td>'+escAttr(c.email)+' <span class="pill warn">pendente</span></td><td>'+PAPEL_LABEL[c.papel]+'</td><td>'+(c.papel==='planejador'?'<span class="note">todas</span>':tabsLabel(c.permissoes))+'</td><td><button class="iconbtn" data-cdel="'+c.id+'" title="Cancelar convite">✕</button></td></tr>';
+    }).join('');
+    root.innerHTML=
+      '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Quem tem acesso</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>E-mail</th><th>Perfil</th><th>Abas</th><th></th></tr></thead><tbody>'+rows+convRows+'</tbody></table></div></div>'+
+      '<div class="card"><div class="eyebrow">Dar acesso</div>'+
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">'+
+          '<div class="field" style="margin:0;min-width:260px"><label>E-mail</label><input class="inp" id="acEmail" type="email" placeholder="pessoa@empresa.com.br"></div>'+
+          '<div class="field" style="margin:0"><label>Perfil</label><select class="esel" id="acPapel" style="height:36px"><option value="visualizador">Visualizador</option><option value="gestor">Gestor</option><option value="planejador">Planejador</option></select></div>'+
+          '<button class="btn primary" id="acConvidar">Dar acesso</button>'+
+        '</div>'+
+        '<div id="acTabsWrap"><div class="note" style="margin-bottom:6px">Abas liberadas:</div>'+tabsCheckboxesHTML([],'actab')+'</div>'+
+      '</div>';
+    var papelSel=document.getElementById('acPapel'), tabsWrap=document.getElementById('acTabsWrap');
+    papelSel.addEventListener('change',function(){ tabsWrap.style.display=papelSel.value==='planejador'?'none':''; });
+    document.getElementById('acConvidar').addEventListener('click',async function(){
+      var email=(document.getElementById('acEmail').value||'').trim(), papel=papelSel.value;
+      var perm=papel==='planejador'?['*']:[].map.call(root.querySelectorAll('[data-actab]:checked'),function(cb){return cb.getAttribute('data-actab');});
+      if(!email){alert('Informe o e-mail.');return;}
+      if(papel!=='planejador'&&!perm.length){alert('Marque pelo menos uma aba.');return;}
+      try{
+        var r=await sbConvidarMembro(selectedObra.id,email,papel,perm);
+        toast(r==='membro'?'Acesso liberado — a pessoa já tem conta.':'Convite registrado — vale assim que a pessoa criar a conta com esse e-mail.');
+        renderAcessos();
+      }catch(e){ alert('Falha ao dar acesso: '+((e&&e.message)||e)); }
+    });
+    root.querySelectorAll('[data-mpapel]').forEach(function(s){
+      s.addEventListener('change',async function(){
+        var id=s.getAttribute('data-mpapel'), papel=s.value;
+        try{ await sbUpdateMembro(id,papel==='planejador'?{papel:papel,permissoes:['*']}:{papel:papel}); toast('Perfil atualizado.'); renderAcessos(); }
+        catch(e){ alert('Falha: '+((e&&e.message)||e)); renderAcessos(); }
+      });
+    });
+    root.querySelectorAll('[data-mtabs]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var id=b.getAttribute('data-mtabs'), m=membros.filter(function(x){return x.id===id;})[0]; if(!m)return;
+        var backdrop=document.createElement('div'); backdrop.className='segmenu-backdrop';
+        backdrop.innerHTML='<div class="segmenu-panel card" style="max-width:560px"><div class="eyebrow" style="margin-bottom:8px">Abas de '+escAttr(m.email||'')+'</div>'+tabsCheckboxesHTML(m.permissoes,'mtab')+
+          '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" id="mtCancel">Cancelar</button><button class="btn primary" id="mtSave">Salvar</button></div></div>';
+        document.body.appendChild(backdrop);
+        function close(){backdrop.remove();}
+        backdrop.addEventListener('pointerdown',function(e){if(e.target===backdrop)close();});
+        document.getElementById('mtCancel').addEventListener('click',close);
+        document.getElementById('mtSave').addEventListener('click',async function(){
+          var perm=[].map.call(backdrop.querySelectorAll('[data-mtab]:checked'),function(cb){return cb.getAttribute('data-mtab');});
+          if(!perm.length){alert('Marque pelo menos uma aba.');return;}
+          try{ await sbUpdateMembro(id,{permissoes:perm}); close(); toast('Abas atualizadas.'); renderAcessos(); }
+          catch(e){ alert('Falha: '+((e&&e.message)||e)); }
+        });
+      });
+    });
+    root.querySelectorAll('[data-mdel]').forEach(function(b){
+      b.addEventListener('click',async function(){
+        var id=b.getAttribute('data-mdel'), m=membros.filter(function(x){return x.id===id;})[0];
+        if(!confirm('Remover o acesso de '+(m&&m.email||'este usuário')+' a esta obra?'))return;
+        try{ await sbDeleteMembro(id); toast('Acesso removido.'); renderAcessos(); }
+        catch(e){ alert('Falha: '+((e&&e.message)||e)); }
+      });
+    });
+    root.querySelectorAll('[data-cdel]').forEach(function(b){
+      b.addEventListener('click',async function(){
+        try{ await sbDeleteConvite(b.getAttribute('data-cdel')); toast('Convite cancelado.'); renderAcessos(); }
+        catch(e){ alert('Falha: '+((e&&e.message)||e)); }
+      });
+    });
+  }
   VIEWS['cad-apoio']=function(){
     var th='<th style="width:26px"><input type="checkbox" id="selAllApoio"'+(APOIO.length&&Object.keys(APOIO_SELECTED).length===APOIO.length?' checked':'')+'></th><th>Nível 1</th><th>Nível 2</th><th>Nível 3</th><th></th>';
     var n1Set={}, n2Set={};
@@ -3252,6 +3440,7 @@
       var realImp=document.getElementById('histRealImp');
       if(realImp)realImp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importRealizadoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
     }
+    if(view==='cad-acessos'){ renderAcessos(); }
     if(view==='cad-obra'){
       var sb=document.getElementById('saveObraBtn');
       if(sb)sb.addEventListener('click',async function(){
@@ -5620,8 +5809,8 @@
       window.scrollTo(0,prevPageScroll);
     });
     wireMatrixZoom();
-    refreshTopSaveBtn();
-    if((window._cronoTab||'tc')==='ajuste'){
+    refreshTopSaveBtn(); applyReadOnly();
+    if((window._cronoTab||'tc')==='ajuste'&&!isReadOnly()){
       renderAssignPanel(); wireDragMatrix();
       var clearB=document.getElementById('clearAdjustsBtn');
       if(clearB)clearB.addEventListener('click',function(){
@@ -6334,6 +6523,12 @@
     try{ await sbLoadCadastro(id); }
     catch(e){ if(!silent)alert('Falha ao carregar a obra: '+((e&&e.message)||e)); return; }
     selectedObra={id:id,nome:o.nome}; CUR={id:id,nome:o.nome};
+    // Perfil nesta obra. Sem linha em obra_membros (admin global) ou erro (migração 14 ainda
+    // não rodada) → segue como planejador, igual era antes.
+    MY_ROLE={papel:'planejador',permissoes:['*']};
+    try{ var role=await sbLoadMyRole(id); if(role&&role.papel)MY_ROLE={papel:role.papel,permissoes:Array.isArray(role.permissoes)?role.permissoes:[]}; }
+    catch(e){ console.warn('Perfil não carregado (rodou a migração 14?):',e&&e.message); }
+    buildNav();
     loadLotView();
     document.getElementById('landing').classList.remove('show');
     try{ safeStore.setItem('lps-tripoloni-lastobra',id); }catch(e){}
