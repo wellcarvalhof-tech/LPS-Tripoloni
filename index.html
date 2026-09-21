@@ -43,6 +43,7 @@
   .app{display:grid;grid-template-columns:248px 1fr;min-height:100vh;transition:grid-template-columns .18s ease}
   .app.nav-collapsed{grid-template-columns:0 1fr}
   .app.nav-collapsed .side{min-width:0;overflow:hidden;padding:0;border:0}
+  .app.nav-collapsed .content{max-width:none}
 
   /* ---------- Sidebar ---------- */
   .side{background:var(--nav-bg);color:var(--nav-ink);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
@@ -6070,9 +6071,21 @@
     var zoomBar='<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
       '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
       (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+'</div>';
-    return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap" style="zoom:'+z+'">'+tableHtml+'</div>';
+    // O zoom vai no conteúdo (tc-zoomin), não no quadro: o quadro (tcWrap) mantém o tamanho e
+    // rola por dentro — a página não cresce quando a escala muda.
+    return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap"><div class="tc-zoomin" style="zoom:'+z+'">'+tableHtml+'</div></div>';
   }
+  /** Quadro da matriz ocupa o que sobra da tela abaixo dele (com a página no topo), com mínimo
+   *  de 320px — independe do zoom, que só escala o conteúdo por dentro. */
+  function fitMatrixFrameHeight(){
+    var wrap=document.getElementById('tcWrap'); if(!wrap||document.body.classList.contains('printing-mat'))return;
+    var docTop=wrap.getBoundingClientRect().top+(window.scrollY||window.pageYOffset||0);
+    var h=Math.max(320,Math.floor(window.innerHeight-docTop-18));
+    wrap.style.maxHeight=h+'px';
+  }
+  window.addEventListener('resize',function(){ fitMatrixFrameHeight(); });
   function wireMatrixZoom(){
+    fitMatrixFrameHeight();
     document.querySelectorAll('[data-zoom]').forEach(function(b){
       b.addEventListener('click',function(){
         var act=b.getAttribute('data-zoom'), z=window._matrixZoom||1;
@@ -6949,6 +6962,8 @@
       var next=!appEl.classList.contains('nav-collapsed');
       applyNavCollapsed(next);
       try{safeStore.setItem('lps-tripoloni-navcollapsed',next?'1':'0');}catch(e){}
+      // depois da transição da grade, os painéis já ocupam a largura nova; só reajusta a altura do quadro da matriz
+      setTimeout(function(){ window.dispatchEvent(new Event('resize')); },220);
     });
   })();
   document.getElementById('obraSel').addEventListener('click',function(){ renderLanding(); showLanding(); });
