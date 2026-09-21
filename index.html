@@ -1372,7 +1372,7 @@
     realizado.apoio=zeros();
 
     for(var w=1;w<=tw;w++){
-      var d=mondayOf(w).toISOString().slice(0,10);
+      var d=calWeekDate(w).toISOString().slice(0,10);
       RECURSOS.forEach(function(r){
         if(tipoFilter!=='todos'&&r.tipo!==tipoFilter)return;
         var rv=REALIZADO_REC[r.id+'::'+d]||0; if(!rv)return;
@@ -1439,7 +1439,7 @@
     var apoioP=spr.previsto.apoio||[], apoioR=spr.realizado.apoio||[], apoioHas=false;
     for(var wA=0;wA<tw;wA++){ if(apoioP[wA]>0||apoioR[wA]>0){apoioHas=true;break;} }
     var w, th='<th style="min-width:150px">Serviço</th>';
-    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(calWeekDate(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
     var colspanAll=1+tw*2;
@@ -1523,11 +1523,11 @@
    *  o realizado por serviço é o rateio de computeServicePR. */
   function relatorioPeriodoData(hist){
     var tw=hist.tw||0; if(!tw)return null;
-    var hoje=hojeWeekNumber(tw)||1;
+    var hoje=hojeCalWeek(tw)||1;
     var from=Math.min(tw,Math.max(1,REP_FROM||hoje)), to=Math.min(tw,Math.max(from,REP_TO||from));
     var recs=RECURSOS.filter(function(r){return REP_TIPO==='todos'||r.tipo===REP_TIPO;});
     var weeks=[]; for(var w=from;w<=to;w++)weeks.push(w);
-    var dateOf={}; weeks.forEach(function(w){ dateOf[w]=mondayOf(w).toISOString().slice(0,10); });
+    var dateOf={}; weeks.forEach(function(w){ dateOf[w]=calWeekDate(w).toISOString().slice(0,10); });
     var prevW={}, realW={}; weeks.forEach(function(w){prevW[w]=0;realW[w]=0;});
     var porRecurso=recs.map(function(r){
       var p=0, rv=0, arr=hist.byResource[r.id]||[];
@@ -1553,12 +1553,12 @@
   function relatorioPeriodoHTML(hist){
     var d=relatorioPeriodoData(hist);
     if(!d)return sectionCard('relatorio','Relatório do período',null,null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra gerar o relatório.</div>');
-    var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(mondayOf(w))+' · '+fmtDate(mondayOf(w))+'</option>'; return o; };
+    var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
     var tipoBtns=['todos','funcao','equipamento'].map(function(f){
       var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
       return '<button class="subtab'+(REP_TIPO===f?' active':'')+'" data-reptipo="'+f+'">'+lbl+'</button>';
     }).join('');
-    var periodoTxt=d.from===d.to?('Semana S'+isoWeek(mondayOf(d.from))+' ('+fmtDate(mondayOf(d.from))+')'):('S'+isoWeek(mondayOf(d.from))+' a S'+isoWeek(mondayOf(d.to))+' ('+fmtDate(mondayOf(d.from))+' – '+fmtDate(mondayOf(d.to))+', '+d.weeks.length+' semanas)');
+    var periodoTxt=d.from===d.to?('Semana S'+isoWeek(calWeekDate(d.from))+' ('+fmtDate(calWeekDate(d.from))+')'):('S'+isoWeek(calWeekDate(d.from))+' a S'+isoWeek(calWeekDate(d.to))+' ('+fmtDate(calWeekDate(d.from))+' – '+fmtDate(calWeekDate(d.to))+', '+d.weeks.length+' semanas)');
     var diff=d.R-d.P;
     var kpis='<div class="grid g4" style="margin:10px 0 14px">'+
       kpi('info','Previsto no período',fmtBR(d.P),'recurso × semana')+
@@ -1597,7 +1597,7 @@
       var arr=hist.byResource[r.id]||[];
       for(var w=0;w<arr.length;w++){ if(arr[w]>0)return true; }
       for(var w2=1;w2<=tw;w2++){
-        var d=mondayOf(w2).toISOString().slice(0,10);
+        var d=calWeekDate(w2).toISOString().slice(0,10);
         if((REALIZADO_REC[r.id+'::'+d]||0)>0)return true;
       }
       return false;
@@ -1609,7 +1609,7 @@
       groups[cat].push(r);
     });
     var w, th='<th style="min-width:150px">Recurso</th>';
-    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(mondayOf(w))+'</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(calWeekDate(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
     var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
@@ -1621,7 +1621,7 @@
       groups[cat].forEach(function(r){
         var cells='';
         for(var w2=1;w2<=tw;w2++){
-          var d=mondayOf(w2).toISOString().slice(0,10);
+          var d=calWeekDate(w2).toISOString().slice(0,10);
           var p=(hist.byResource[r.id]||[])[w2-1]||0;
           var rv=REALIZADO_REC[r.id+'::'+d]||0;
           totP[w2-1]+=p; totR[w2-1]+=rv;
@@ -2458,14 +2458,14 @@
     var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
     var rot=gap<22, s='';
     weekNums.forEach(function(w,i){
-      var lbl='S'+isoWeek(mondayOf(w)), x=xAt(i);
+      var lbl='S'+isoWeek(calWeekDate(w)), x=xAt(i);
       if(rot)s+='<text class="axm" font-size="'+(gap<12?7:8)+'" transform="translate('+(x+3).toFixed(1)+','+(yTop+4)+') rotate(90)" text-anchor="start">'+lbl+'</text>';
       else s+='<text class="axm" x="'+x.toFixed(1)+'" y="'+(yTop+12)+'" text-anchor="middle">'+lbl+'</text>';
     });
     var yBand=yTop+(rot?30:18);
     var groups=[];
     weekNums.forEach(function(w,i){
-      var d=mondayOf(w), k=d.getFullYear()*12+d.getMonth(), g=groups[groups.length-1];
+      var d=calWeekDate(w), k=d.getFullYear()*12+d.getMonth(), g=groups[groups.length-1];
       if(g&&g.k===k)g.to=i; else groups.push({k:k,from:i,to:i,m:d.getMonth(),y:d.getFullYear()});
     });
     s+='<line x1="'+xl+'" y1="'+yBand+'" x2="'+xr+'" y2="'+yBand+'" stroke="var(--line)"/>';
@@ -3602,7 +3602,7 @@
         if(rd){
           var accP=[], accR=[], sP=0, sR=0;
           rd.weeks.forEach(function(w){ sP+=rd.prevW[w]||0; sR+=rd.realW[w]||0; accP.push(sP); accR.push(sR); });
-          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(mondayOf(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR},rd.from);
+          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(calWeekDate(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR},rd.from);
         }
       }
       var repFrom=document.getElementById('repFrom'), repTo=document.getElementById('repTo');
@@ -4027,7 +4027,7 @@
     // mesma lógica de computeServicePR, só que aqui por tipo de recurso filtrado (visRes).
     var prevWeek=[], realWeek=[];
     for(var w=0;w<tw;w++){
-      var d=mondayOf(w+1).toISOString().slice(0,10), p=0, r=0;
+      var d=calWeekDate(w+1).toISOString().slice(0,10), p=0, r=0;
       visRes.forEach(function(res){
         var pd=(hist.byResourceDireto[res.id]||[])[w]||0, pi=(hist.byResourceIndireto[res.id]||[])[w]||0;
         var rvTotal=REALIZADO_REC[res.id+'::'+d]||0;
@@ -4046,9 +4046,11 @@
     for(var g=0;g<=steps;g++){var val=Math.round(maxVal*g/steps);s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+val+'</text>';}
     var wnAll=[]; for(var wi=0;wi<tw;wi++)wnAll.push(wi+1);
     s+=weekAxisSVG(wnAll,function(i){return xx(i)+grpW/2;},iw/tw,pt+ih,pl,W-pr);
+    var hol=hist.isHoliday||[];
+    for(var wh=0;wh<tw;wh++){ if(hol[wh])s+='<rect x="'+xx(wh).toFixed(1)+'" y="'+pt+'" width="'+(iw/tw).toFixed(1)+'" height="'+ih+'" fill="var(--warn)" opacity="0.10"><title>Recesso / feriado — S'+isoWeek(calWeekDate(wh+1))+' (recursos mobilizados, sem produção)</title></rect>'; }
     for(var w4=0;w4<tw;w4++){
       var pv=prevWeek[w4], rv=realWeek[w4]; if(pv<=0&&rv<=0)continue;
-      var x0=xx(w4), wkLbl='S'+isoWeek(mondayOf(w4+1));
+      var x0=xx(w4), wkLbl='S'+isoWeek(calWeekDate(w4+1));
       if(pv>0){
         var yP1=yy(pv), yP2=yy(0);
         s+='<rect x="'+x0.toFixed(1)+'" y="'+yP1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yP2-yP1).toFixed(1)+'" fill="var(--line-2)" stroke="var(--muted)"><title>Previsto — '+wkLbl+': '+fmtBR(pv)+'</title></rect>';
@@ -4064,13 +4066,14 @@
     var lastReal=-1; for(var w5=0;w5<tw;w5++){ if(realWeek[w5]>0)lastReal=w5; }
     var accP=[], accR=[], sP=0, sR=0;
     for(var w6=0;w6<tw;w6++){ sP+=prevWeek[w6]; accP.push(sP); if(w6<=lastReal){ sR+=realWeek[w6]; accR.push(sR); } }
-    var wkLabels=[]; for(var w7=0;w7<tw;w7++)wkLabels.push('S'+isoWeek(mondayOf(w7+1)));
+    var wkLabels=[]; for(var w7=0;w7<tw;w7++)wkLabels.push('S'+isoWeek(calWeekDate(w7+1)));
     s+=accLinesSVG({prev:accP,real:accR},function(i){return xx(i)+grpW/2;},W-pr,pt,ih,wkLabels);
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
     if(legEl)legEl.innerHTML='<span><span class="swatch" style="background:var(--line-2);border:1px solid var(--muted)"></span>Previsto</span>'+
       '<span><span class="swatch" style="background:var(--good)"></span>Realizado = previsto</span>'+
       '<span><span class="swatch" style="background:var(--warn)"></span>Realizado abaixo</span>'+
       '<span><span class="swatch" style="background:var(--crit)"></span>Realizado acima</span>'+
+      '<span><span class="swatch" style="background:var(--warn);opacity:.35"></span>Semana de recesso (equipe mobilizada)</span>'+
       '<span><span class="swatch" style="background:var(--muted)"></span>Previsto acumulado (tracejado, eixo à direita)</span>'+
       '<span><span class="swatch" style="background:var(--accent)"></span>Realizado acumulado (até a última semana apontada)</span>';
   }
@@ -4174,9 +4177,9 @@
     var s='';
     for(var g=0;g<=4;g++){ var v=ymax*g/4; s+='<line x1="'+pl+'" y1="'+yy(v)+'" x2="'+(W-pr)+'" y2="'+yy(v)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(v)+3)+'" text-anchor="end">'+fmtBR(v)+'</text>'; }
     var step=Math.max(1,Math.ceil(n/8));
-    for(var i=0;i<n;i+=step){ s+='<text class="axm" x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(w0+i))+'</text>'; }
+    for(var i=0;i<n;i+=step){ s+='<text class="axm" x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(calWeekDate(w0+i))+'</text>'; }
     series.forEach(function(sr){ s+='<path d="'+path(sr.values)+'" fill="none" stroke="'+sr.color+'" stroke-width="2"'+(sr.dashed?' stroke-dasharray="6 4"':'')+'/>';
-      if(sr.dots)sr.values.forEach(function(v,j){ s+='<circle cx="'+xx(j).toFixed(1)+'" cy="'+yy(v||0).toFixed(1)+'" r="2.5" fill="'+sr.color+'"><title>S'+isoWeek(mondayOf(w0+j))+' · '+fmtBR(v||0)+'</title></circle>'; }); });
+      if(sr.dots)sr.values.forEach(function(v,j){ s+='<circle cx="'+xx(j).toFixed(1)+'" cy="'+yy(v||0).toFixed(1)+'" r="2.5" fill="'+sr.color+'"><title>S'+isoWeek(calWeekDate(w0+j))+' · '+fmtBR(v||0)+'</title></circle>'; }); });
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
   /** Histograma comparativo entre cenários (aba Cenários): total de recursos mobilizados por
@@ -4650,6 +4653,20 @@
     for(var w=1;w<=1000;w++){ if(mondayOf(w).toISOString().slice(0,10)===mon)return w; }
     return null;
   }
+  /** Semana de CALENDÁRIO w (1 = segunda-feira do início da obra), contando também as semanas
+   *  de recesso/feriado — diferente de mondayOf(w), que pula essas semanas (semana de trabalho,
+   *  usada pelo cronograma). O histograma usa calendário: recurso parado no recesso continua
+   *  mobilizado. */
+  function calWeekDate(w){
+    var d=new Date(TC_START()+'T00:00:00');
+    var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff+7*(w-1));
+    return d;
+  }
+  function hojeCalWeek(tw){
+    var today=new Date(); today.setHours(0,0,0,0);
+    var hojeW=0; for(var i=1;i<=tw;i++){ if(calWeekDate(i)<=today)hojeW=i; else break; }
+    return hojeW;
+  }
   function hojeWeekNumber(tw){
     var today=new Date(); today.setHours(0,0,0,0);
     var hojeW=0; for(var i=1;i<=tw;i++){ if(mondayOf(i)<=today)hojeW=i; else break; }
@@ -4838,8 +4855,13 @@
     // Filtro global de lotes: conta só as equipes trabalhando nos lotes em exibição. O horizonte
     // (tw) continua o do cronograma integrado inteiro, pra alinhar com as outras visões.
     var segs=viewSegs(segsAll);
-    var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<tw;w++)out[si].push(0);});
-    var spanByTeam={}; // "si::team" -> {min,max}
+    // O cronograma conta só semanas de trabalho (pula recesso/feriado). O histograma é por semana
+    // de CALENDÁRIO: uma equipe que trabalha antes e depois do recesso fica mobilizada durante ele.
+    var calRows=buildCalendarRows(tw), calIdx={}, isHoliday=[];
+    calRows.forEach(function(r,i){ if(r.working)calIdx[r.working]=i+1; isHoliday.push(!!r.isHoliday); });
+    var twCal=calRows.length||tw;
+    var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<twCal;w++)out[si].push(0);});
+    var spanByTeam={}; // "si::team" -> {min,max} (semanas de trabalho)
     segs.forEach(function(sg){
       if(!sg.dur)return;
       var k=sg.si+'::'+sg.team, start=sg.start, end=sg.start+sg.dur-1;
@@ -4848,10 +4870,10 @@
       else{ cur.min=Math.min(cur.min,start); cur.max=Math.max(cur.max,end); }
     });
     Object.keys(spanByTeam).forEach(function(k){
-      var span=spanByTeam[k], from=Math.max(1,span.min), to=Math.min(tw,span.max);
+      var span=spanByTeam[k], from=calIdx[Math.max(1,span.min)]||1, to=calIdx[Math.min(tw,span.max)]||twCal;
       for(var w=from;w<=to;w++){ if(out[span.si])out[span.si][w-1]+=1; }
     });
-    return {teamsByService:out,tw:tw};
+    return {teamsByService:out,tw:twCal,isHoliday:isHoliday};
   }
   /** Demanda de recursos por semana = equipes ativas do serviço × qtd/equipe cadastrada (direto)
    * + composição de Apoio Administrativo, constante em todas as semanas do cronograma já que
@@ -4859,7 +4881,7 @@
    * byResourceDireto/byResourceIndireto ficam disponíveis à parte pra quem quiser decompor
    * (gráfico, filtro por origem). */
   function computeHistogram(){
-    var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
+    var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService, isHoliday=atbw.isHoliday||[];
     var byResource={}, byResourceDireto={}, byResourceIndireto={};
     RECURSOS.forEach(function(r){
       byResource[r.id]=[]; byResourceDireto[r.id]=[]; byResourceIndireto[r.id]=[];
@@ -4893,7 +4915,7 @@
     });
     var peakByResource={};
     RECURSOS.forEach(function(r){ var arr=byResource[r.id]||[]; peakByResource[r.id]=arr.reduce(function(m,v){return Math.max(m,v);},0); });
-    return {byResource:byResource,byResourceDireto:byResourceDireto,byResourceIndireto:byResourceIndireto,
+    return {isHoliday:isHoliday,byResource:byResource,byResourceDireto:byResourceDireto,byResourceIndireto:byResourceIndireto,
       totalByService:totalByService,totalByServiceResource:totalByServiceResource,
       totalByApoio:totalByApoio,totalByApoioResource:totalByApoioResource,
       peakByResource:peakByResource,grandTotal:grandTotal+grandTotalIndireto,grandTotalDireto:grandTotal,grandTotalIndireto:grandTotalIndireto,tw:tw};
@@ -5391,7 +5413,7 @@
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var hist=computeHistogram(), tw=hist.tw;
     var wb=XLSX.utils.book_new();
-    var header=['Recurso','Categoria','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push('S'+isoWeek(mondayOf(w)));
+    var header=['Recurso','Categoria','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push('S'+isoWeek(calWeekDate(w)));
     var rows=[header];
     RECURSOS.forEach(function(r){
       var row=[r.n,r.cat||'',r.tipo==='funcao'?'Função':'Equipamento',r.u,hist.peakByResource[r.id]||0];
@@ -5522,7 +5544,7 @@
       var r=byName[String(row[0]).trim().toLowerCase()]; if(!r)continue;
       for(var wi=0;wi<weekCols.length;wi++){
         var w=wi+1, val=Number(row[weekCols[wi]]); if(!isFinite(val))continue;
-        var d=mondayOf(w).toISOString().slice(0,10);
+        var d=calWeekDate(w).toISOString().slice(0,10);
         REALIZADO_REC[r.id+'::'+d]=val;
         REALIZADO_DIRTY[r.id+'::'+d]=val;
         applied++;
