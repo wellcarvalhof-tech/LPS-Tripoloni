@@ -5592,10 +5592,18 @@
     return null;
   }
   /** Lê uma aba de períodos -> {nome: [contagem por semana de calendário 1..tw]} (só até a semana atual). */
-  function countPeriodsByWeek(aoa,hdr,colNome,colIni,colFim,tw,lastW){
+  /** colNomes = colunas candidatas ao nome (a 1ª é a principal). A linha é agrupada pela primeira
+   *  coluna cujo valor casa com um recurso do app (matchRes); se nenhuma casar, pela principal
+   *  — assim o de-para mostra o nome principal. */
+  function countPeriodsByWeek(aoa,hdr,colNomes,colIni,colFim,tw,lastW,matchRes){
     var counts={}, rowsOk=0, semData=0;
+    if(!Array.isArray(colNomes))colNomes=[colNomes];
     for(var i=hdr.row+1;i<aoa.length;i++){
-      var row=aoa[i]||[]; var orig=String(row[hdr.ix[colNome]]==null?'':row[hdr.ix[colNome]]).trim(), nome=normName(orig); if(!nome)continue;
+      var row=aoa[i]||[];
+      var cands=colNomes.map(function(c){ var j=hdr.ix[c]; return j>=0?String(row[j]==null?'':row[j]).trim():''; }).filter(Boolean);
+      if(!cands.length)continue;
+      var orig=cands[0]; for(var ci=0;ci<cands.length;ci++){ if(matchRes&&matchRes(normName(cands[ci]))){orig=cands[ci];break;} }
+      var nome=normName(orig); if(!nome)continue;
       var ini=excelDateToIso(row[hdr.ix[colIni]]), fim=excelDateToIso(row[hdr.ix[colFim]]);
       if(!/^\d{4}-\d{2}-\d{2}$/.test(ini)){semData++;continue;}
       if(!/^\d{4}-\d{2}-\d{2}$/.test(fim))fim=null; // vazio = ainda na obra
@@ -5619,18 +5627,6 @@
     if(!wsDp&&!wsCeq){alert('Não achei as abas "Dados EFETIVO DP" nem "DADOS Realizado CEQ" nesse arquivo.');return;}
     var tw=computeHistogram().tw||0; if(!tw){alert('Monte o cronograma antes: o histograma ainda não tem semanas.');return;}
     var lastW=hojeCalWeek(tw); if(!lastW){alert('A obra ainda não começou (nenhuma semana até hoje).');return;}
-    var sources=[], problems=[];
-    if(wsDp){
-      var aoa=sheetRows(wsDp), hdr=findHeaderRow(aoa,['ADMISSÃO','DEMISSÃO','FUNÇÃO OBRA']);
-      if(!hdr)problems.push('Aba EFETIVO DP: não achei as colunas ADMISSÃO / DEMISSÃO / FUNÇÃO OBRA.');
-      else { var c=countPeriodsByWeek(aoa,hdr,'FUNÇÃO OBRA','ADMISSÃO','DEMISSÃO',tw,lastW); sources.push({tipo:'funcao',label:'Mão de obra (DP)',counts:c.counts,rowsOk:c.rowsOk,semData:c.semData}); }
-    }
-    if(wsCeq){
-      var aoa2=sheetRows(wsCeq), hdr2=findHeaderRow(aoa2,['TIPO TXC','MOBILIZAÇÃO','DESMOBILIZAÇÃO']);
-      if(!hdr2)problems.push('Aba CEQ: não achei as colunas TIPO TXC / Mobilização / Desmobilização.');
-      else { var c2=countPeriodsByWeek(aoa2,hdr2,'TIPO TXC','MOBILIZAÇÃO','DESMOBILIZAÇÃO',tw,lastW); sources.push({tipo:'equipamento',label:'Equipamentos (CEQ)',counts:c2.counts,rowsOk:c2.rowsOk,semData:c2.semData}); }
-    }
-    if(!sources.length){alert(problems.join('\n'));return;}
     // Casamento nome -> recurso (nome ou alias, sem acento/caixa)
     // O cadastro costuma ter sigla antes do nome ("CP - CAMINHAO PIPA"); a planilha vem sem
     // ("CAMINHÃO PIPA"). Casa também sem a sigla, dos dois lados.
@@ -5639,6 +5635,24 @@
     var addKey=function(k,r){ if(k&&!byKey[k])byKey[k]=r; };
     RECURSOS.forEach(function(r){ var k=normName(r.n); addKey(k,r); addKey(semSigla(k),r); (r.aliases||[]).forEach(function(a){ addKey(normName(a),r); addKey(semSigla(normName(a)),r); }); });
     var matchRes=function(nome){ return byKey[nome]||byKey[semSigla(nome)]||null; };
+    var sources=[], problems=[];
+    if(wsDp){
+      var aoa=sheetRows(wsDp), hdr=findHeaderRow(aoa,['ADMISSÃO','DEMISSÃO','FUNÇÃO OBRA']);
+      if(!hdr)problems.push('Aba EFETIVO DP: não achei as colunas ADMISSÃO / DEMISSÃO / FUNÇÃO OBRA.');
+      else { var c=countPeriodsByWeek(aoa,hdr,['FUNÇÃO OBRA'],'ADMISSÃO','DEMISSÃO',tw,lastW,matchRes); sources.push({tipo:'funcao',label:'Mão de obra (DP)',counts:c.counts,rowsOk:c.rowsOk,semData:c.semData}); }
+    }
+    if(wsCeq){
+      // Equipamento: casa por qualquer uma das três colunas de tipo (TIPO TXC, TIPO V.A., Tipo)
+      var aoa2=sheetRows(wsCeq), hdr2=findHeaderRow(aoa2,['TIPO TXC','MOBILIZAÇÃO','DESMOBILIZAÇÃO']);
+      if(!hdr2)problems.push('Aba CEQ: não achei as colunas TIPO TXC / Mobilização / Desmobilização.');
+      else {
+        var hrow=(aoa2[hdr2.row]||[]).map(normName);
+        hdr2.ix['TIPO V.A.']=hrow.indexOf('TIPO V.A.'); hdr2.ix['TIPO']=hrow.indexOf('TIPO');
+        var c2=countPeriodsByWeek(aoa2,hdr2,['TIPO TXC','TIPO V.A.','TIPO'],'MOBILIZAÇÃO','DESMOBILIZAÇÃO',tw,lastW,matchRes);
+        sources.push({tipo:'equipamento',label:'Equipamentos (CEQ)',counts:c2.counts,rowsOk:c2.rowsOk,semData:c2.semData});
+      }
+    }
+    if(!sources.length){alert(problems.join('\n'));return;}
     var unmatched=[];
     sources.forEach(function(src){ Object.keys(src.counts).forEach(function(nome){ if(!matchRes(nome))unmatched.push({nome:nome,orig:src.counts[nome].orig||nome,tipo:src.tipo,label:src.label,peak:src.counts[nome].reduce(function(m,v){return Math.max(m,v||0);},0)}); }); });
     var mapping={}; // nome normalizado -> recurso (ou null = ignorar)
