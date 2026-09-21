@@ -5632,10 +5632,15 @@
     }
     if(!sources.length){alert(problems.join('\n'));return;}
     // Casamento nome -> recurso (nome ou alias, sem acento/caixa)
+    // O cadastro costuma ter sigla antes do nome ("CP - CAMINHAO PIPA"); a planilha vem sem
+    // ("CAMINHÃO PIPA"). Casa também sem a sigla, dos dois lados.
+    var semSigla=function(n){ return n.replace(/^[A-Z0-9]{1,5}\s*[-–]\s*/,''); };
     var byKey={};
-    RECURSOS.forEach(function(r){ byKey[normName(r.n)]=byKey[normName(r.n)]||r; (r.aliases||[]).forEach(function(a){ byKey[normName(a)]=byKey[normName(a)]||r; }); });
+    var addKey=function(k,r){ if(k&&!byKey[k])byKey[k]=r; };
+    RECURSOS.forEach(function(r){ var k=normName(r.n); addKey(k,r); addKey(semSigla(k),r); (r.aliases||[]).forEach(function(a){ addKey(normName(a),r); addKey(semSigla(normName(a)),r); }); });
+    var matchRes=function(nome){ return byKey[nome]||byKey[semSigla(nome)]||null; };
     var unmatched=[];
-    sources.forEach(function(src){ Object.keys(src.counts).forEach(function(nome){ if(!byKey[nome])unmatched.push({nome:nome,orig:src.counts[nome].orig||nome,tipo:src.tipo,label:src.label,peak:src.counts[nome].reduce(function(m,v){return Math.max(m,v||0);},0)}); }); });
+    sources.forEach(function(src){ Object.keys(src.counts).forEach(function(nome){ if(!matchRes(nome))unmatched.push({nome:nome,orig:src.counts[nome].orig||nome,tipo:src.tipo,label:src.label,peak:src.counts[nome].reduce(function(m,v){return Math.max(m,v||0);},0)}); }); });
     var mapping={}; // nome normalizado -> recurso (ou null = ignorar)
     if(unmatched.length){
       mapping=await openDeParaDialog(unmatched);
@@ -5649,7 +5654,7 @@
     // Aplica: soma por recurso (dois nomes podem cair no mesmo recurso), sobrescreve só recursos que vieram do arquivo
     var perRes={}, ignored=[];
     sources.forEach(function(src){ Object.keys(src.counts).forEach(function(nome){
-      var r=byKey[nome]||mapping[nome]; if(!r){ignored.push(src.counts[nome].orig||nome);return;}
+      var r=matchRes(nome)||mapping[nome]; if(!r){ignored.push(src.counts[nome].orig||nome);return;}
       var arr=perRes[r.id]||(perRes[r.id]=[]); src.counts[nome].forEach(function(v,i){ arr[i]=(arr[i]||0)+(v||0); });
     }); });
     var applied=0, nRes=0;
