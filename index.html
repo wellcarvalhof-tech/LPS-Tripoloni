@@ -1370,6 +1370,10 @@
     });
     previsto.apoio=arrApoio;
     realizado.apoio=zeros();
+    // Realizado de recurso que não estava previsto em serviço nenhum (nem apoio) naquela semana:
+    // não dá pra ratear, mas não pode sumir — vai pro balde "semprev" (recurso cadastrado e
+    // mobilizado, mas fora da equipe típica / fora do período previsto).
+    previsto.semprev=zeros(); realizado.semprev=zeros(); previstoRes.semprev={}; realizadoRes.semprev={};
 
     for(var w=1;w<=tw;w++){
       var d=calWeekDate(w).toISOString().slice(0,10);
@@ -1390,7 +1394,7 @@
           if(item)apoioP+=item.qtyPerTeam||0;
         });
         if(apoioP>0){shares.push({key:'apoio',p:apoioP}); totalPrev+=apoioP;}
-        if(totalPrev<=0)return;
+        if(totalPrev<=0){ realizado.semprev[w-1]+=rv; if(!realizadoRes.semprev[r.id]){realizadoRes.semprev[r.id]=zeros();previstoRes.semprev[r.id]=zeros();} realizadoRes.semprev[r.id][w-1]+=rv; return; }
         shares.forEach(function(x){ var v=rv*(x.p/totalPrev); realizado[x.key][w-1]+=v; if(realizadoRes[x.key][r.id])realizadoRes[x.key][r.id][w-1]+=v; });
       });
     }
@@ -1438,6 +1442,7 @@
     });
     var apoioP=spr.previsto.apoio||[], apoioR=spr.realizado.apoio||[], apoioHas=false;
     for(var wA=0;wA<tw;wA++){ if(apoioP[wA]>0||apoioR[wA]>0){apoioHas=true;break;} }
+    var spR=spr.realizado.semprev||[], spHas=spR.some(function(v){return v>0;});
     var w, th='<th style="min-width:150px">Serviço</th>';
     for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(calWeekDate(w))+'</th>';
     var th2='<th></th>';
@@ -1495,7 +1500,18 @@
       rows+='<tr><td><button class="iconbtn" data-svcprtoggle="apoio" style="margin-right:4px">'+(apoOpen?'▾':'▸')+'</button><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td>'+cellsA+'</tr>';
       if(apoOpen)rows+=resourceRows('apoio',null);
     }
-    if(visible.length||apoioHas){
+    if(spHas){
+      var cellsS='';
+      for(var w2c=1;w2c<=tw;w2c++){
+        var rvS=spR[w2c-1]||0; totR[w2c-1]+=rvS;
+        cellsS+='<td class="r mono" style="color:var(--muted);font-size:10.5px">—</td>'+
+          '<td class="r mono" style="'+(rvS>0?'background:var(--crit-bg);color:var(--crit)':'color:var(--muted)')+';font-size:10.5px">'+(rvS>0?fmtBR(rvS):'—')+'</td>';
+      }
+      var spOpen=!!SVCPR_OPEN.semprev;
+      rows+='<tr><td><button class="iconbtn" data-svcprtoggle="semprev" style="margin-right:4px">'+(spOpen?'▾':'▸')+'</button><span class="swatch" style="background:var(--crit)"></span><i>Sem serviço previsto</i> <span class="note" title="Recurso cadastrado com realizado apontado numa semana em que nenhum serviço nem apoio o previa — não dá pra ratear por serviço">?</span></td>'+cellsS+'</tr>';
+      if(spOpen)rows+=resourceRows('semprev',null);
+    }
+    if(visible.length||apoioHas||spHas){
       var totCells='';
       for(var w3=1;w3<=tw;w3++){
         var p3=totP[w3-1], r3=totR[w3-1];
@@ -1513,7 +1529,7 @@
     return sectionCard('servicopr','Previsto × Realizado por serviço',
       'Mostra só serviços (e Apoio Administrativo) com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre todos os consumidores (serviços + apoio) que o utilizam naquela semana, proporcional ao previsto. Filtro Mão de obra/Equipamentos limita o previsto/realizado só aos recursos desse tipo. Clique em ▸ pra abrir os recursos do serviço, semana a semana.',
       svcprFiltBtns,
-      (visible.length||apoioHas)?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço ou item de apoio com previsto ou realizado apontado ainda.</div>'
+      (visible.length||apoioHas||spHas)?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço ou item de apoio com previsto ou realizado apontado ainda.</div>'
     );
   }
   /** Relatório do período (Histograma): previsto × realizado entre duas semanas do projeto,
@@ -1542,6 +1558,8 @@
     }).filter(function(x){return x.prev>0||x.real>0;});
     var pA=0, rA=0; weeks.forEach(function(w){ pA+=(spr.previsto.apoio||[])[w-1]||0; rA+=(spr.realizado.apoio||[])[w-1]||0; });
     if(pA>0||rA>0)porServico.push({nome:'Apoio Administrativo (indireto)',cor:'var(--ink-2)',prev:pA,real:rA,italic:true});
+    var rS=0; weeks.forEach(function(w){ rS+=(spr.realizado.semprev||[])[w-1]||0; });
+    if(rS>0)porServico.push({nome:'Sem serviço previsto (recurso mobilizado fora do previsto)',cor:'var(--crit)',prev:0,real:rS,italic:true});
     var P=0,R=0; weeks.forEach(function(w){P+=prevW[w];R+=realW[w];});
     return {tw:tw,from:from,to:to,weeks:weeks,prevW:prevW,realW:realW,P:P,R:R,porRecurso:porRecurso,porServico:porServico};
   }
