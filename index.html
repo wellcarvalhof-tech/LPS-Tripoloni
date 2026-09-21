@@ -154,7 +154,6 @@
   .legend span{display:inline-flex;align-items:center;gap:6px}
   svg.chart{width:100%;height:auto;display:block;overflow:visible}
   .axm{fill:var(--muted);font-size:9px;font-family:"IBM Plex Mono",monospace}
-  .chart-sm{max-width:900px}
   .crew-tbl{min-width:0!important;width:auto!important;font-size:11.5px;margin:2px 0 6px}
   .crew-tbl th,.crew-tbl td{padding:3px 10px}
   .barrow{display:grid;grid-template-columns:70px 1fr 32px;align-items:center;gap:9px;margin:8px 0;font-size:12px}
@@ -1576,7 +1575,7 @@
       '<div class="print-only" style="font-weight:700;font-size:14px;margin-bottom:4px">'+escAttr((window._OBRA&&window._OBRA.nome)||'')+' — Relatório do histograma</div>'+
       '<div class="note" style="margin-bottom:6px">Período: <b>'+periodoTxt+'</b>'+(REP_TIPO!=='todos'?' · '+(REP_TIPO==='funcao'?'só mão de obra':'só equipamentos'):'')+'. IAH = realizado ÷ previsto (verde entre 95% e 105%; amarelo abaixo; vermelho acima).</div>'+
       kpis+
-      '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras) · acumulado no período (eixo da direita)</div><svg class="chart chart-sm" id="repSvg" viewBox="0 0 900 260"></svg>'+
+      '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras) · acumulado no período (eixo da direita)</div><svg class="chart" id="repSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg>'+
         '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--accent)"></span>Realizado (barras)</span><span><span class="swatch" style="background:var(--ink-2)"></span>Previsto (linha)</span><span><span class="swatch" style="background:var(--muted)"></span>Previsto acumulado (tracejado)</span><span><span class="swatch" style="background:var(--accent);border:2px solid var(--accent)"></span>Realizado acumulado (linha cheia)</span></div></div>'+
       '<div class="grid g2" style="gap:14px">'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por função / equipamento</div>'+(recRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Recurso')+'<tbody>'+recRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
@@ -1838,7 +1837,7 @@
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart chart-sm" id="histSvg" viewBox="0 0 1000 300" style="max-width:1000px"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -2431,10 +2430,11 @@
   }
   function svcSpan(){var segs=viewSegs(buildSchedule());return SERV.map(function(s,si){var mn=1e9,mx=0;segs.forEach(function(g){if(g.si===si){mn=Math.min(mn,g.start);mx=Math.max(mx,g.start+g.dur-1);}});return mx>0?{s:mn,e:mx}:{s:0,e:0};});}
 
-  function barLine(el,labels,real,prev,colHex,acc){
+  function barLine(el,labels,real,prev,colHex,acc,weekStart){
     if(!el)return;
     // acc (opcional) = {prev:[],real:[]} acumulados, desenhados como linhas no eixo da direita.
-    var W=900,H=260,pl=52,pr=acc?60:14,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=labels.length||1;
+    // weekStart (opcional) = nº da semana do projeto do 1º ponto: liga o eixo com todas as semanas + meses.
+    var W=900,H=290,pl=52,pr=acc?60:14,pt=12,pb=weekStart?48:26,iw=W-pl-pr,ih=H-pt-pb,n=labels.length||1;
     var mx=Math.max(1,Math.max.apply(null,real.concat(prev)));
     var unit=mx>2000?1000:(mx>200?100:10),top=Math.max(unit,Math.ceil(mx/4/unit)*unit*4);
     var yy=function(v){return pt+ih-ih*v/top;}, gap=iw/n, bw=gap*0.5;
@@ -2442,12 +2442,41 @@
     for(var g=0;g<=4;g++){var val=top*g/4;s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+fmtBR(val)+'</text>';}
     for(var i=0;i<n;i++){var x=pl+gap*i+(gap-bw)/2,h=Math.max(0,yy(0)-yy(real[i]));
       s+='<rect x="'+x.toFixed(1)+'" y="'+yy(real[i]).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="2" fill="'+colHex+'"><title>'+labels[i]+' · realizado '+fmtBR(real[i])+'</title></rect>';
-      s+='<text class="axm" x="'+(x+bw/2)+'" y="'+(H-10)+'" text-anchor="middle">'+labels[i]+'</text>';}
+      if(!weekStart)s+='<text class="axm" x="'+(x+bw/2)+'" y="'+(H-10)+'" text-anchor="middle">'+labels[i]+'</text>';}
+    if(weekStart){ var wn=[]; for(var k=0;k<n;k++)wn.push(weekStart+k); s+=weekAxisSVG(wn,function(i){return pl+gap*i+gap/2;},gap,pt+ih,pl,W-pr); }
     var d=prev.map(function(v,i){return (i?'L':'M')+(pl+gap*i+gap/2).toFixed(1)+' '+yy(v).toFixed(1);}).join(' ');
     s+='<path d="'+d+'" fill="none" stroke="var(--ink-2)" stroke-width="2.5" stroke-dasharray="5 3"/>';
     prev.forEach(function(v,i){s+='<circle cx="'+(pl+gap*i+gap/2).toFixed(1)+'" cy="'+yy(v).toFixed(1)+'" r="3" fill="var(--ink-2)"><title>previsto '+fmtBR(v)+'</title></circle>';});
     if(acc)s+=accLinesSVG(acc,function(i){return pl+gap*i+gap/2;},W-pr,pt,ih,labels);
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+  }
+  /** Eixo do tempo dos gráficos semanais: rótulo de TODAS as semanas (na vertical quando não cabem
+   *  na horizontal) e, abaixo, uma faixa com os meses (mês da segunda-feira de cada semana).
+   *  weekNums = nº da semana do projeto de cada ponto; xAt(i) = centro do ponto i; gap = largura
+   *  de uma semana; yTop = base da área do gráfico; xl/xr = limites horizontais. Ocupa ~46 de altura. */
+  function weekAxisSVG(weekNums,xAt,gap,yTop,xl,xr){
+    var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    var rot=gap<22, s='';
+    weekNums.forEach(function(w,i){
+      var lbl='S'+isoWeek(mondayOf(w)), x=xAt(i);
+      if(rot)s+='<text class="axm" font-size="'+(gap<12?7:8)+'" transform="translate('+(x+3).toFixed(1)+','+(yTop+4)+') rotate(90)" text-anchor="start">'+lbl+'</text>';
+      else s+='<text class="axm" x="'+x.toFixed(1)+'" y="'+(yTop+12)+'" text-anchor="middle">'+lbl+'</text>';
+    });
+    var yBand=yTop+(rot?30:18);
+    var groups=[];
+    weekNums.forEach(function(w,i){
+      var d=mondayOf(w), k=d.getFullYear()*12+d.getMonth(), g=groups[groups.length-1];
+      if(g&&g.k===k)g.to=i; else groups.push({k:k,from:i,to:i,m:d.getMonth(),y:d.getFullYear()});
+    });
+    s+='<line x1="'+xl+'" y1="'+yBand+'" x2="'+xr+'" y2="'+yBand+'" stroke="var(--line)"/>';
+    groups.forEach(function(g,gi){
+      var x0=xAt(g.from)-gap/2, x1=xAt(g.to)+gap/2, wpx=x1-x0;
+      s+='<line x1="'+x0.toFixed(1)+'" y1="'+yBand+'" x2="'+x0.toFixed(1)+'" y2="'+(yBand+14)+'" stroke="var(--line)"/>';
+      if(gi===groups.length-1)s+='<line x1="'+x1.toFixed(1)+'" y1="'+yBand+'" x2="'+x1.toFixed(1)+'" y2="'+(yBand+14)+'" stroke="var(--line)"/>';
+      var full=MES[g.m]+'/'+String(g.y).slice(2);
+      if(wpx>=20)s+='<text class="axm" font-size="8.5" font-weight="600" x="'+((x0+x1)/2).toFixed(1)+'" y="'+(yBand+11)+'" text-anchor="middle"><title>'+full+'</title>'+(wpx>=40?full:MES[g.m])+'</text>';
+    });
+    return s;
   }
   /** Linhas de acumulado (previsto tracejado, realizado cheio) com eixo próprio à direita —
    *  compartilhado pelo histograma e pelo relatório. xAt(i) = centro da semana i; xr = borda direita. */
@@ -3573,7 +3602,7 @@
         if(rd){
           var accP=[], accR=[], sP=0, sR=0;
           rd.weeks.forEach(function(w){ sP+=rd.prevW[w]||0; sR+=rd.realW[w]||0; accP.push(sP); accR.push(sR); });
-          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(mondayOf(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR});
+          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(mondayOf(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR},rd.from);
         }
       }
       var repFrom=document.getElementById('repFrom'), repTo=document.getElementById('repTo');
@@ -4008,15 +4037,15 @@
       });
       prevWeek.push(p); realWeek.push(r);
     }
-    var W=1000,H=300,pl=44,pr=64,pt=12,pb=24,iw=W-pl-pr,ih=H-pt-pb;
+    var W=900,H=290,pl=44,pr=64,pt=12,pb=48,iw=W-pl-pr,ih=H-pt-pb;
     var maxVal=1;
     for(var w2=0;w2<tw;w2++)maxVal=Math.max(maxVal,prevWeek[w2],realWeek[w2]);
     var xx=function(w3){return pl+iw*w3/tw;}, grpW=iw/tw*0.82, barW=grpW*0.42;
     var yy=function(v){return pt+ih-ih*v/maxVal;};
     var s='', steps=4;
     for(var g=0;g<=steps;g++){var val=Math.round(maxVal*g/steps);s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+val+'</text>';}
-    var stepLbl=Math.max(1,Math.ceil(tw/14));
-    for(var wi=0;wi<tw;wi+=stepLbl){s+='<text class="axm" x="'+(xx(wi)+grpW/2)+'" y="'+(H-8)+'" text-anchor="middle">S'+isoWeek(mondayOf(wi+1))+'</text>';}
+    var wnAll=[]; for(var wi=0;wi<tw;wi++)wnAll.push(wi+1);
+    s+=weekAxisSVG(wnAll,function(i){return xx(i)+grpW/2;},iw/tw,pt+ih,pl,W-pr);
     for(var w4=0;w4<tw;w4++){
       var pv=prevWeek[w4], rv=realWeek[w4]; if(pv<=0&&rv<=0)continue;
       var x0=xx(w4), wkLbl='S'+isoWeek(mondayOf(w4+1));
