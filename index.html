@@ -155,7 +155,7 @@
   .legend span{display:inline-flex;align-items:center;gap:6px}
   svg.chart{width:100%;height:auto;display:block;overflow:visible}
   .axm{fill:var(--muted);font-size:9px;font-family:"IBM Plex Mono",monospace}
-  .exec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
+  .exec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(640px,1fr));gap:12px}
   .exec-grid .card{padding:8px 12px}
   .crew-tbl{min-width:0!important;width:auto!important;font-size:11.5px;margin:2px 0 6px}
   .crew-tbl th,.crew-tbl td{padding:3px 10px}
@@ -1051,7 +1051,7 @@
     var cell={};
     segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ if(!(sg.wq[i]>0))continue; var k=(sg.start+i)+'::'+sg.li; var arr=cell[k]||(cell[k]=[]); if(arr.indexOf(sg.si)<0)arr.push(sg.si); } });
     var legend='<div class="legend" style="margin-top:6px">'+SERV.map(function(sv){return '<span><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</span>';}).join('')+'</div>';
-    var mini='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Tempo-caminho resumido — lotes × semanas (cores = serviços)</div>'+miniMatrixSVG({cell:cell},lotIdxs,tw,null)+legend+'</div>';
+    var mini='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Tempo-caminho resumido — lotes × semanas (cores = serviços)</div>'+miniMatrixSVG({cell:cell},lotIdxs,tw,null,{all:true,W:900})+legend+'</div>';
     // 3) quadro de produtividade
     var prodRows=SERV.map(function(sv,si){
       var perTeam=pnum(sv.p), semanal=perTeam*(sv.eq||0), span=sp[si], dur=span.e>0?(span.e-span.s+1):0;
@@ -1064,10 +1064,10 @@
       '<div class="note" style="margin-top:6px">Prod. total = cadastrada × nº de equipes. Média efetiva = quantidade ÷ duração no cronograma (já considera praticabilidade, paralisações e esperas entre lotes).</div></div>';
     // 4) distribuição semanal por serviço (desenhada depois do render)
     var dist='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:6px">Distribuição semanal da produção por serviço (quantidade prevista por semana)</div><div class="exec-grid">'+
-      SERV.map(function(sv,si){ if(!(totalByServ[si]>0))return ''; return '<div class="card"><div style="font-size:12px;font-weight:600;margin-bottom:2px"><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+sv.u+')</span></div><svg class="chart" data-execbar="'+si+'" viewBox="0 0 900 200"></svg></div>'; }).join('')+
+      SERV.map(function(sv,si){ if(!(totalByServ[si]>0))return ''; return '<div class="card"><div style="font-size:12px;font-weight:600;margin-bottom:2px"><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+sv.u+')</span></div><svg class="chart" data-execbar="'+si+'" viewBox="0 0 900 240"></svg></div>'; }).join('')+
       '</div></div>';
     // 5) gantt
-    var gantt='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Gantt do projeto</div><div class="tc-wrap" style="max-height:none">'+ganttSVG()+'</div></div>';
+    var gantt='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Gantt do projeto</div><div style="max-width:900px">'+ganttSVG({rowH:16,W:900,maxH:'260px'})+'</div></div>';
     // 6) histograma previsto
     var hist='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Histograma previsto — recursos mobilizados por semana</div>'+
       (RECURSOS.length?'<svg class="chart" id="execHist" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--c1)"></span>Mão de obra</span><span><span class="swatch" style="background:var(--c2)"></span>Equipamentos</span><span><span class="swatch" style="background:var(--muted)"></span>Total acumulado (recurso × semana, eixo à direita)</span></div>':'<div class="note">Sem recursos cadastrados no Histograma.</div>')+'</div>';
@@ -1107,7 +1107,7 @@
     var wq=weeklyQtyBySvc();
     document.querySelectorAll('[data-execbar]').forEach(function(el){
       var si=+el.getAttribute('data-execbar'), vals=[]; for(var w=1;w<=wq.tw;w++)vals.push(wq.M[si][w]||0);
-      barsSVG(el,[{values:vals,color:svcColor(SERV[si])}],{H:200,dateFn:mondayOf});
+      barsSVG(el,[{values:vals,color:svcColor(SERV[si])}],{H:240,dateFn:mondayOf});
     });
     // histograma previsto (mão de obra × equipamentos) + acumulado total
     var hEl=document.getElementById('execHist');
@@ -3275,16 +3275,17 @@
   /* ---- Gantt + resumo semanal (aba do Cronograma) ---- */
   /** Gantt dos serviços (barra = 1ª à última semana do serviço no cronograma). Rótulos das semanas
    *  em semana do calendário (S+isoWeek), com a data em tooltip. */
-  function ganttSVG(){
+  function ganttSVG(opts){
+    opts=opts||{};
     var sp=svcSpan(); var tw=1; sp.forEach(function(x){tw=Math.max(tw,x.e);});
-    var W=760,rowH=28,H=SERV.length*rowH+40,pl=160,pr=16,iw=W-pl-pr;
+    var W=opts.W||760,rowH=opts.rowH||28,H=SERV.length*rowH+40,pl=160,pr=16,iw=W-pl-pr;
     var xx=function(w){return pl+iw*(w-1)/Math.max(1,tw-1);};
     var s='';
     for(var g=1;g<=tw;g+=Math.ceil(tw/12)){s+='<line x1="'+xx(g)+'" y1="20" x2="'+xx(g)+'" y2="'+(H-16)+'" stroke="var(--line)"/><text class="axm" x="'+xx(g)+'" y="14" text-anchor="middle">S'+isoWeek(mondayOf(g))+'<title>'+fmtDate(mondayOf(g))+'</title></text>';}
     SERV.forEach(function(sv,si){var y=24+si*rowH,x1=xx(sp[si].s||1),x2=xx((sp[si].e||1)+1);
-      s+='<text class="axm" x="8" y="'+(y+rowH/2+1)+'" style="fill:var(--ink);font-size:11px">'+sv.n+'</text>';
-      s+='<rect x="'+x1.toFixed(1)+'" y="'+(y+4)+'" width="'+Math.max(4,x2-x1).toFixed(1)+'" height="'+(rowH-10)+'" rx="4" fill="'+svcColor(sv)+'"><title>'+sv.n+': S'+isoWeek(mondayOf(sp[si].s||1))+' ('+fmtDate(mondayOf(sp[si].s||1))+') – S'+isoWeek(mondayOf(sp[si].e||1))+'</title></rect>';});
-    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:700px">'+s+'</svg>';
+      s+='<text class="axm" x="8" y="'+(y+rowH/2+1)+'" style="fill:var(--ink);font-size:'+(rowH<22?9:11)+'px">'+sv.n+'</text>';
+      s+='<rect x="'+x1.toFixed(1)+'" y="'+(y+(rowH<22?2:4))+'" width="'+Math.max(4,x2-x1).toFixed(1)+'" height="'+(rowH-(rowH<22?5:10))+'" rx="3" fill="'+svcColor(sv)+'"><title>'+sv.n+': S'+isoWeek(mondayOf(sp[si].s||1))+' ('+fmtDate(mondayOf(sp[si].s||1))+') – S'+isoWeek(mondayOf(sp[si].e||1))+'</title></rect>';});
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:700px'+(opts.maxH?';max-height:'+opts.maxH:'')+'">'+s+'</svg>';
   }
   function ganttHTML(){
     var gantt='<div class="card" style="margin-bottom:14px"><div class="eyebrow">Gantt dos serviços</div><div class="tc-wrap">'+ganttSVG()+'</div></div>';
@@ -4282,17 +4283,20 @@
       return '<div><div style="font-size:12px;margin-bottom:4px">'+title+'</div>'+miniMatrixSVG(d,lotIdxs,tw,di>0?ref:null)+'</div>';
     }).join('');
   }
-  function miniMatrixSVG(d,lotIdxs,tw,ref){
-    var n=Math.max(1,lotIdxs.length), W=620, labelW=26, labelH=12;
-    var cw=(W-labelW)/n, ch=Math.max(3,Math.min(9,Math.floor(360/tw)));
-    var H=labelH+tw*ch+labelH;
+  function miniMatrixSVG(d,lotIdxs,tw,ref,opts){
+    opts=opts||{};
+    var all=!!opts.all; // relatório: todos os lotes e semanas rotulados (lotes na vertical)
+    var n=Math.max(1,lotIdxs.length), W=opts.W||620, labelW=26, labelH=12, footH=all?44:labelH;
+    var cw=(W-labelW)/n, ch=Math.max(3,Math.min(all?10:9,Math.floor((all?480:360)/tw)));
+    var H=labelH+tw*ch+footH;
     function ck(arr){ return (arr||[]).slice().sort(function(a,b){return a-b;}).join(','); }
     var s='<rect x="'+labelW+'" y="'+labelH+'" width="'+(W-labelW)+'" height="'+(tw*ch)+'" fill="var(--elev)"/>';
-    var stepW=Math.max(1,Math.ceil(tw/12)), stepL=Math.max(1,Math.ceil(n/14));
+    var stepW=all?1:Math.max(1,Math.ceil(tw/12)), stepL=all?1:Math.max(1,Math.ceil(n/14));
+    var wkFs=all?Math.min(6,Math.max(4,ch-1.5)):6;
     var cells='', marks='';
     for(var r=0;r<tw;r++){
       var w=tw-r, y=labelH+r*ch;
-      if((w-1)%stepW===0)s+='<text class="axm" x="'+(labelW-3)+'" y="'+(y+ch*0.5+2)+'" text-anchor="end" style="font-size:6px">S'+isoWeek(mondayOf(w))+'</text>';
+      if((w-1)%stepW===0)s+='<text class="axm" x="'+(labelW-3)+'" y="'+(y+ch*0.5+wkFs*0.35)+'" text-anchor="end" style="font-size:'+wkFs+'px">S'+isoWeek(mondayOf(w))+'</text>';
       for(var c=0;c<n;c++){
         var li=lotIdxs[c], k=w+'::'+li, arr=d.cell[k], x=labelW+c*cw;
         if(arr&&arr.length){
@@ -4302,7 +4306,10 @@
         if(ref&&ck(arr)!==ck(ref.cell[k]))marks+='<rect x="'+x.toFixed(2)+'" y="'+y+'" width="'+cw.toFixed(2)+'" height="'+ch+'" fill="none" stroke="#dc2626" stroke-width="1"/>';
       }
     }
-    for(var c2=0;c2<n;c2+=stepL){ s+='<text class="axm" x="'+(labelW+c2*cw+cw/2)+'" y="'+(H-2)+'" text-anchor="middle" style="font-size:6px">'+LOTS[lotIdxs[c2]]+'</text>'; }
+    for(var c2=0;c2<n;c2+=stepL){
+      if(all){ var lfs=Math.min(6.5,Math.max(4,cw-1.5)); s+='<text class="axm" transform="translate('+(labelW+c2*cw+cw/2+lfs*0.35).toFixed(2)+','+(labelH+tw*ch+3)+') rotate(90)" text-anchor="start" style="font-size:'+lfs+'px">'+LOTS[lotIdxs[c2]]+'</text>'; }
+      else s+='<text class="axm" x="'+(labelW+c2*cw+cw/2)+'" y="'+(H-2)+'" text-anchor="middle" style="font-size:6px">'+LOTS[lotIdxs[c2]]+'</text>';
+    }
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto">'+s+cells+marks+'</svg>';
   }
   /** Gráfico de linhas simples (usado pelo histograma comparativo): cada série é um array
