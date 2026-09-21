@@ -375,6 +375,12 @@
     .print-head h2{font-family:"Archivo",sans-serif;font-size:16px;margin:0}
     body.printing-mat .print-head,
     body.printing-mat #cronoContent{display:none!important}
+    /* Relatório do período (Histograma): imprime só o card do relatório, sem os controles */
+    body.printing-report #content>*:not(#repCard){display:none!important}
+    body.printing-report #repCard select,body.printing-report #repCard button,body.printing-report #repCard .subtab{display:none!important}
+    body.printing-report #repCard .card{break-inside:avoid;page-break-inside:avoid}
+    body.printing-report #repCard .grid.g2{grid-template-columns:1fr 1fr}
+    body.printing-report #repCard svg.chart{max-height:260px}
     .print-page{break-inside:avoid;page-break-inside:avoid}
     .print-page.brk{break-after:page;page-break-after:always}
     .print-page-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:11px;color:#444;margin-bottom:4px;height:22px;font-family:"Archivo",sans-serif}
@@ -1308,7 +1314,8 @@
 
   var HIST_FILTER='todos', HIST_SVC=null;
   var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
-  var HIST_OPEN={};
+  var HIST_OPEN={cadastro:false}; // o grupo "Cadastro histograma" começa recolhido — é configuração, não análise do dia a dia
+  var REP_FROM=null, REP_TO=null, REP_TIPO='todos'; // relatório do período (semanas do projeto) e filtro de tipo
   var REAL_FILTER='todos';
   var REAL_CAT_OPEN={};
   var TOT_FILTER='todos', TOT_OPEN={};
@@ -1458,6 +1465,77 @@
       svcprFiltBtns,
       (visible.length||apoioHas)?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço ou item de apoio com previsto ou realizado apontado ainda.</div>'
     );
+  }
+  /** Relatório do período (Histograma): previsto × realizado entre duas semanas do projeto,
+   *  com IAH (Índice de Aderência do Histograma = realizado ÷ previsto), por semana, por
+   *  função/equipamento e por serviço. Previsto vem do cronograma × equipe típica
+   *  (computeHistogram); realizado por recurso vem dos apontamentos semanais (REALIZADO_REC) e
+   *  o realizado por serviço é o rateio de computeServicePR. */
+  function relatorioPeriodoData(hist){
+    var tw=hist.tw||0; if(!tw)return null;
+    var hoje=hojeWeekNumber(tw)||1;
+    var from=Math.min(tw,Math.max(1,REP_FROM||hoje)), to=Math.min(tw,Math.max(from,REP_TO||from));
+    var recs=RECURSOS.filter(function(r){return REP_TIPO==='todos'||r.tipo===REP_TIPO;});
+    var weeks=[]; for(var w=from;w<=to;w++)weeks.push(w);
+    var dateOf={}; weeks.forEach(function(w){ dateOf[w]=mondayOf(w).toISOString().slice(0,10); });
+    var prevW={}, realW={}; weeks.forEach(function(w){prevW[w]=0;realW[w]=0;});
+    var porRecurso=recs.map(function(r){
+      var p=0, rv=0, arr=hist.byResource[r.id]||[];
+      weeks.forEach(function(w){ var pv=arr[w-1]||0, rr=REALIZADO_REC[r.id+'::'+dateOf[w]]||0; p+=pv; rv+=rr; prevW[w]+=pv; realW[w]+=rr; });
+      return {r:r,prev:p,real:rv};
+    }).filter(function(x){return x.prev>0||x.real>0;});
+    var spr=computeServicePR(hist,REP_TIPO);
+    var porServico=SERV.map(function(s,si){
+      var p=0, rv=0, pa=spr.previsto['s'+si]||[], ra=spr.realizado['s'+si]||[];
+      weeks.forEach(function(w){ p+=pa[w-1]||0; rv+=ra[w-1]||0; });
+      return {nome:s.n,cor:svcColor(s),prev:p,real:rv};
+    }).filter(function(x){return x.prev>0||x.real>0;});
+    var pA=0, rA=0; weeks.forEach(function(w){ pA+=(spr.previsto.apoio||[])[w-1]||0; rA+=(spr.realizado.apoio||[])[w-1]||0; });
+    if(pA>0||rA>0)porServico.push({nome:'Apoio Administrativo (indireto)',cor:'var(--ink-2)',prev:pA,real:rA,italic:true});
+    var P=0,R=0; weeks.forEach(function(w){P+=prevW[w];R+=realW[w];});
+    return {tw:tw,from:from,to:to,weeks:weeks,prevW:prevW,realW:realW,P:P,R:R,porRecurso:porRecurso,porServico:porServico};
+  }
+  function iahHTML(p,r){
+    if(!(p>0))return '<span class="note">—</span>';
+    var v=r/p*100, col=v>=95&&v<=105?'var(--good)':(v<95?'var(--warn)':'var(--crit)');
+    return '<b style="color:'+col+'">'+Math.round(v)+'%</b>';
+  }
+  function relatorioPeriodoHTML(hist){
+    var d=relatorioPeriodoData(hist);
+    if(!d)return sectionCard('relatorio','Relatório do período',null,null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra gerar o relatório.</div>');
+    var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(mondayOf(w))+' · '+fmtDate(mondayOf(w))+'</option>'; return o; };
+    var tipoBtns=['todos','funcao','equipamento'].map(function(f){
+      var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
+      return '<button class="subtab'+(REP_TIPO===f?' active':'')+'" data-reptipo="'+f+'">'+lbl+'</button>';
+    }).join('');
+    var periodoTxt=d.from===d.to?('Semana S'+isoWeek(mondayOf(d.from))+' ('+fmtDate(mondayOf(d.from))+')'):('S'+isoWeek(mondayOf(d.from))+' a S'+isoWeek(mondayOf(d.to))+' ('+fmtDate(mondayOf(d.from))+' – '+fmtDate(mondayOf(d.to))+', '+d.weeks.length+' semanas)');
+    var diff=d.R-d.P;
+    var kpis='<div class="grid g4" style="margin:10px 0 14px">'+
+      kpi('info','Previsto no período',fmtBR(d.P),'recurso × semana')+
+      kpi('accent','Realizado no período',fmtBR(d.R),'apontado')+
+      kpi(diff<0?'warn':(diff>0?'crit':'good'),'Diferença',(diff>0?'+':'')+fmtBR(diff),'realizado − previsto')+
+      kpi(d.P>0&&d.R/d.P>=0.95&&d.R/d.P<=1.05?'good':'warn','IAH',d.P>0?Math.round(d.R/d.P*100)+'%':'—','realizado ÷ previsto')+
+    '</div>';
+    var row=function(nomeHtml,x){ var df=x.real-x.prev; return '<tr><td>'+nomeHtml+'</td><td class="r mono">'+fmtBR(x.prev)+'</td><td class="r mono">'+fmtBR(x.real)+'</td><td class="r mono" style="color:'+(df<0?'var(--warn)':(df>0?'var(--crit)':'var(--good)'))+'">'+(df>0?'+':'')+fmtBR(df)+'</td><td class="r">'+iahHTML(x.prev,x.real)+'</td></tr>'; };
+    var thead='<thead><tr><th>__N__</th><th class="r">Previsto</th><th class="r">Realizado</th><th class="r">Diferença</th><th class="r">IAH</th></tr></thead>';
+    var recRows=d.porRecurso.sort(function(a,b){return (a.r.tipo+a.r.n).localeCompare(b.r.tipo+b.r.n);}).map(function(x){return row(x.r.n+' <span class="note">'+(x.r.tipo==='funcao'?'Função':'Equipamento')+'</span>',x);}).join('');
+    var svcRows=d.porServico.map(function(x){return row('<span class="swatch" style="background:'+x.cor+'"></span>'+(x.italic?'<i>'+x.nome+'</i>':x.nome),x);}).join('');
+    var totRow='<tr style="font-weight:700;background:var(--elev)"><td>Total</td><td class="r mono">'+fmtBR(d.P)+'</td><td class="r mono">'+fmtBR(d.R)+'</td><td class="r mono">'+(diff>0?'+':'')+fmtBR(diff)+'</td><td class="r">'+iahHTML(d.P,d.R)+'</td></tr>';
+    var body='<div class="rep-body">'+
+      '<div class="print-only" style="font-weight:700;font-size:14px;margin-bottom:4px">'+escAttr((window._OBRA&&window._OBRA.nome)||'')+' — Relatório do histograma</div>'+
+      '<div class="note" style="margin-bottom:6px">Período: <b>'+periodoTxt+'</b>'+(REP_TIPO!=='todos'?' · '+(REP_TIPO==='funcao'?'só mão de obra':'só equipamentos'):'')+'. IAH = realizado ÷ previsto (verde entre 95% e 105%; amarelo abaixo; vermelho acima).</div>'+
+      kpis+
+      '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras)</div><svg class="chart" id="repSvg" viewBox="0 0 660 280"></svg></div>'+
+      '<div class="grid g2" style="gap:14px">'+
+        '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por função / equipamento</div>'+(recRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Recurso')+'<tbody>'+recRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
+        '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por serviço</div>'+(svcRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Serviço')+'<tbody>'+svcRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
+      '</div></div>';
+    var actions='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+      '<span class="note">De</span><select class="esel" id="repFrom">'+opts(d.from)+'</select>'+
+      '<span class="note">até</span><select class="esel" id="repTo">'+opts(d.to)+'</select>'+
+      '<span style="display:flex;gap:2px">'+tipoBtns+'</span>'+
+      '<button class="btn" id="repPrint">🖨 Imprimir relatório</button></div>';
+    return '<div id="repCard">'+sectionCard('relatorio','Relatório do período',null,actions,body)+'</div>';
   }
   function realizadoHTML(hist){
     var tw=hist.tw;
@@ -1712,8 +1790,12 @@
       RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart" id="histSvg" viewBox="0 0 700 320"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
+    // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
+    // grupo recolhível só — a análise (relatório, totais, gráfico, realizado) fica solta abaixo.
+    var cadastro=sectionCard('cadastro','Cadastro histograma','Funções, equipamentos, equipe típica de cada serviço e alocação do apoio administrativo.',null,
+      catalogoFuncoes+catalogoEquip+equipe+apoioAloc);
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
-      catalogoFuncoes+catalogoEquip+equipe+apoioAloc+totais+servicoPR+grafico+realizadoHTML(hist);
+      cadastro+relatorioPeriodoHTML(hist)+totais+servicoPR+grafico+realizadoHTML(hist);
   };
 
   function scenarioStats(snap){
@@ -3416,6 +3498,28 @@
       });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
+      });
+      // Relatório do período
+      var repSvg=document.getElementById('repSvg');
+      if(repSvg){
+        var rd=relatorioPeriodoData(computeHistogram());
+        if(rd)barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(mondayOf(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'));
+      }
+      var repFrom=document.getElementById('repFrom'), repTo=document.getElementById('repTo');
+      if(repFrom)repFrom.addEventListener('change',function(){ REP_FROM=+repFrom.value; if(REP_TO&&REP_TO<REP_FROM)REP_TO=REP_FROM; go('cr-hist'); });
+      if(repTo)repTo.addEventListener('change',function(){ REP_TO=+repTo.value; if(REP_FROM&&REP_FROM>REP_TO)REP_FROM=REP_TO; go('cr-hist'); });
+      document.querySelectorAll('[data-reptipo]').forEach(function(b){
+        b.addEventListener('click',function(){REP_TIPO=b.getAttribute('data-reptipo'); go('cr-hist');});
+      });
+      var repPrint=document.getElementById('repPrint');
+      if(repPrint)repPrint.addEventListener('click',function(){
+        // Imprime só o card do relatório: a classe no body esconde o resto da página no @media print.
+        HIST_OPEN.relatorio=true;
+        document.body.classList.add('printing-report');
+        var prevTitle=document.title;
+        document.title='Relatório do histograma - '+((window._OBRA&&window._OBRA.nome)||'');
+        window.onafterprint=function(){ document.body.classList.remove('printing-report'); document.title=prevTitle; window.onafterprint=null; };
+        window.print();
       });
       document.querySelectorAll('[data-realcat]').forEach(function(b){
         b.addEventListener('click',function(){var k=b.getAttribute('data-realcat'); REAL_CAT_OPEN[k]=!(REAL_CAT_OPEN[k]!==false); go('cr-hist');});
