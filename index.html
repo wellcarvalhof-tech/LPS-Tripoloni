@@ -1346,23 +1346,31 @@
     }
     var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
     var previsto={}, realizado={};
+    // Abertura por recurso dentro de cada consumidor: previstoRes[key][resourceId][w] / realizadoRes[...]
+    // (mesmos números da linha do serviço, só que sem somar os recursos — pra expandir a linha).
+    var previstoRes={}, realizadoRes={};
+    function zeros(){ var a=[]; for(var i=0;i<tw;i++)a.push(0); return a; }
     SERV.forEach(function(s,si){
-      var arr=[]; for(var w=0;w<tw;w++)arr.push(0);
-      previsto['s'+si]=arr;
+      var arr=zeros(), key='s'+si;
+      previsto[key]=arr; previstoRes[key]={}; realizadoRes[key]={};
       var crew=((s.cfg&&s.cfg.crew)||[]).filter(crewMatch), teams=teamsByService[si]||[];
       crew.forEach(function(item){
-        for(var w2=0;w2<tw;w2++) arr[w2]+=(teams[w2]||0)*(item.qtyPerTeam||0);
+        var pr=previstoRes[key][item.resourceId]||(previstoRes[key][item.resourceId]=zeros());
+        if(!realizadoRes[key][item.resourceId])realizadoRes[key][item.resourceId]=zeros();
+        for(var w2=0;w2<tw;w2++){ var v=(teams[w2]||0)*(item.qtyPerTeam||0); arr[w2]+=v; pr[w2]+=v; }
       });
-      realizado['s'+si]=[]; for(var w3=0;w3<tw;w3++)realizado['s'+si].push(0);
+      realizado[key]=zeros();
     });
-    var arrApoio=[]; for(var wA=0;wA<tw;wA++)arrApoio.push(0);
+    var arrApoio=zeros(); previstoRes.apoio={}; realizadoRes.apoio={};
     APOIO.forEach(function(a){
       ((a.cfg&&a.cfg.crew)||[]).filter(crewMatch).forEach(function(item){
-        for(var w4=0;w4<tw;w4++) arrApoio[w4]+=(item.qtyPerTeam||0);
+        var pr=previstoRes.apoio[item.resourceId]||(previstoRes.apoio[item.resourceId]=zeros());
+        if(!realizadoRes.apoio[item.resourceId])realizadoRes.apoio[item.resourceId]=zeros();
+        for(var w4=0;w4<tw;w4++){ arrApoio[w4]+=(item.qtyPerTeam||0); pr[w4]+=(item.qtyPerTeam||0); }
       });
     });
     previsto.apoio=arrApoio;
-    realizado.apoio=[]; for(var w5=0;w5<tw;w5++)realizado.apoio.push(0);
+    realizado.apoio=zeros();
 
     for(var w=1;w<=tw;w++){
       var d=mondayOf(w).toISOString().slice(0,10);
@@ -1384,10 +1392,10 @@
         });
         if(apoioP>0){shares.push({key:'apoio',p:apoioP}); totalPrev+=apoioP;}
         if(totalPrev<=0)return;
-        shares.forEach(function(x){ realizado[x.key][w-1]+=rv*(x.p/totalPrev); });
+        shares.forEach(function(x){ var v=rv*(x.p/totalPrev); realizado[x.key][w-1]+=v; if(realizadoRes[x.key][r.id])realizadoRes[x.key][r.id][w-1]+=v; });
       });
     }
-    return {previsto:previsto,realizado:realizado,tw:tw};
+    return {previsto:previsto,realizado:realizado,previstoRes:previstoRes,realizadoRes:realizadoRes,tw:tw};
   }
   /** Tabela de composição da equipe típica (Recurso · Tipo · Qtd por equipe · Total nas N equipes),
    *  mostrada ao expandir um serviço em "Quantidades totais" e "Previsto × Realizado por serviço".
@@ -1436,6 +1444,26 @@
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
     var colspanAll=1+tw*2;
+    // Sub-linhas ao expandir: cada recurso do consumidor (serviço ou apoio) com previsto/realizado
+    // por semana nas mesmas colunas da linha-mãe. qtdTxt = "N/equipe" (serviço) ou vazio (apoio).
+    function resourceRows(key,eqLabel){
+      var pRes=spr.previstoRes[key]||{}, rRes=spr.realizadoRes[key]||{};
+      var ids=Object.keys(pRes).map(function(id){ return RECURSOS.filter(function(x){return x.id===id;})[0]; }).filter(Boolean)
+        .sort(function(a,b){return (a.tipo+a.n).localeCompare(b.tipo+b.n);});
+      if(!ids.length)return '<tr><td colspan="'+colspanAll+'" class="note" style="padding:4px 8px 6px 32px">Nenhum recurso'+(SVCPR_FILTER!=='todos'?' desse tipo':'')+' na equipe típica.</td></tr>';
+      return ids.map(function(r){
+        var pa=pRes[r.id]||[], ra=rRes[r.id]||[], cells='';
+        for(var w2=1;w2<=tw;w2++){
+          var p=pa[w2-1]||0, rv=ra[w2-1]||0, has=p>0||rv>0;
+          var bg=has?(rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)')):'transparent';
+          var fg=has?(rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)')):'var(--muted)';
+          cells+='<td class="r mono" style="color:var(--muted);font-size:10px">'+(p>0?fmtBR(p):'—')+'</td>'+
+            '<td class="r mono" style="background:'+bg+';color:'+fg+';font-size:10px">'+(rv>0?fmtBR(rv):'—')+'</td>';
+        }
+        var q=eqLabel?eqLabel(r.id):'';
+        return '<tr style="background:var(--elev)"><td style="padding-left:32px;font-size:11px">'+r.n+' <span class="note">'+(r.tipo==='funcao'?'Mão de obra':'Equipamento')+(q?' · '+q:'')+'</span></td>'+cells+'</tr>';
+      }).join('');
+    }
     var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
     var rows=visible.map(function(si){
       var s=SERV[si], cells='';
@@ -1450,7 +1478,7 @@
       }
       var key='s'+si, open=!!SVCPR_OPEN[key];
       var r='<tr><td><button class="iconbtn" data-svcprtoggle="'+key+'" style="margin-right:4px">'+(open?'▾':'▸')+'</button><span class="swatch" style="background:'+svcColor(s)+'"></span>'+s.n+'</td>'+cells+'</tr>';
-      if(open)r+='<tr><td colspan="'+colspanAll+'" style="padding:4px 8px 8px 32px;background:var(--elev)"><div class="eyebrow" style="margin-bottom:2px">Composição da equipe típica — '+s.n+' ('+s.eq+' '+(s.eq===1?'equipe':'equipes')+')</div>'+crewTableHTML((s.cfg&&s.cfg.crew)||[],SVCPR_FILTER,s.eq)+'</td></tr>';
+      if(open)r+=resourceRows(key,function(rid){ var it=((s.cfg&&s.cfg.crew)||[]).filter(function(c){return c.resourceId===rid;})[0]; return it?fmtBR(it.qtyPerTeam||0)+'/equipe × '+s.eq:''; });
       return r;
     }).join('');
     if(apoioHas){
@@ -1466,7 +1494,7 @@
       }
       var apoOpen=!!SVCPR_OPEN.apoio;
       rows+='<tr><td><button class="iconbtn" data-svcprtoggle="apoio" style="margin-right:4px">'+(apoOpen?'▾':'▸')+'</button><span class="swatch" style="background:var(--ink-2)"></span><i>Apoio Administrativo (indireto)</i></td>'+cellsA+'</tr>';
-      if(apoOpen)rows+='<tr><td colspan="'+colspanAll+'" style="padding:4px 8px 8px 32px;background:var(--elev)"><div class="eyebrow" style="margin-bottom:2px">Composição do Apoio Administrativo</div>'+apoioCrewTableHTML(SVCPR_FILTER)+'</td></tr>';
+      if(apoOpen)rows+=resourceRows('apoio',null);
     }
     if(visible.length||apoioHas){
       var totCells='';
@@ -1484,7 +1512,7 @@
       return '<button class="subtab'+(SVCPR_FILTER===f?' active':'')+'" data-svcprfilter="'+f+'">'+lbl+'</button>';
     }).join('');
     return sectionCard('servicopr','Previsto × Realizado por serviço',
-      'Mostra só serviços (e Apoio Administrativo) com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre todos os consumidores (serviços + apoio) que o utilizam naquela semana, proporcional ao previsto. Filtro Mão de obra/Equipamentos limita o previsto/realizado só aos recursos desse tipo.',
+      'Mostra só serviços (e Apoio Administrativo) com previsto ou realizado apontado. O realizado apontado por recurso é rateado entre todos os consumidores (serviços + apoio) que o utilizam naquela semana, proporcional ao previsto. Filtro Mão de obra/Equipamentos limita o previsto/realizado só aos recursos desse tipo. Clique em ▸ pra abrir os recursos do serviço, semana a semana.',
       svcprFiltBtns,
       (visible.length||apoioHas)?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum serviço ou item de apoio com previsto ou realizado apontado ainda.</div>'
     );
@@ -1548,9 +1576,8 @@
       '<div class="print-only" style="font-weight:700;font-size:14px;margin-bottom:4px">'+escAttr((window._OBRA&&window._OBRA.nome)||'')+' — Relatório do histograma</div>'+
       '<div class="note" style="margin-bottom:6px">Período: <b>'+periodoTxt+'</b>'+(REP_TIPO!=='todos'?' · '+(REP_TIPO==='funcao'?'só mão de obra':'só equipamentos'):'')+'. IAH = realizado ÷ previsto (verde entre 95% e 105%; amarelo abaixo; vermelho acima).</div>'+
       kpis+
-      '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras)</div><svg class="chart chart-sm" id="repSvg" viewBox="0 0 900 260"></svg></div>'+
-      '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Acumulado no período — previsto (tracejado) × realizado</div><svg class="chart chart-sm" id="repAccSvg" viewBox="0 0 900 240"></svg>'+
-        '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--ink-2)"></span>Previsto acumulado</span><span><span class="swatch" style="background:var(--accent)"></span>Realizado acumulado</span></div></div>'+
+      '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras) · acumulado no período (eixo da direita)</div><svg class="chart chart-sm" id="repSvg" viewBox="0 0 900 260"></svg>'+
+        '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--accent)"></span>Realizado (barras)</span><span><span class="swatch" style="background:var(--ink-2)"></span>Previsto (linha)</span><span><span class="swatch" style="background:var(--muted)"></span>Previsto acumulado (tracejado)</span><span><span class="swatch" style="background:var(--accent);border:2px solid var(--accent)"></span>Realizado acumulado (linha cheia)</span></div></div>'+
       '<div class="grid g2" style="gap:14px">'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por função / equipamento</div>'+(recRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Recurso')+'<tbody>'+recRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por serviço</div>'+(svcRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Serviço')+'<tbody>'+svcRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
@@ -1811,9 +1838,7 @@
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart chart-sm" id="histSvg" viewBox="0 0 1000 300" style="max-width:1000px"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>'+
-        '<div class="eyebrow" style="margin:14px 0 2px">Acumulado (recurso × semana) — previsto (tracejado) × realizado</div><svg class="chart chart-sm" id="histAccSvg" viewBox="0 0 900 240"></svg>'+
-        '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--ink-2)"></span>Previsto acumulado</span><span><span class="swatch" style="background:var(--accent)"></span>Realizado acumulado (até a última semana apontada)</span></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart chart-sm" id="histSvg" viewBox="0 0 1000 300" style="max-width:1000px"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -2406,9 +2431,10 @@
   }
   function svcSpan(){var segs=viewSegs(buildSchedule());return SERV.map(function(s,si){var mn=1e9,mx=0;segs.forEach(function(g){if(g.si===si){mn=Math.min(mn,g.start);mx=Math.max(mx,g.start+g.dur-1);}});return mx>0?{s:mn,e:mx}:{s:0,e:0};});}
 
-  function barLine(el,labels,real,prev,colHex){
+  function barLine(el,labels,real,prev,colHex,acc){
     if(!el)return;
-    var W=900,H=260,pl=52,pr=14,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=labels.length||1;
+    // acc (opcional) = {prev:[],real:[]} acumulados, desenhados como linhas no eixo da direita.
+    var W=900,H=260,pl=52,pr=acc?60:14,pt=12,pb=26,iw=W-pl-pr,ih=H-pt-pb,n=labels.length||1;
     var mx=Math.max(1,Math.max.apply(null,real.concat(prev)));
     var unit=mx>2000?1000:(mx>200?100:10),top=Math.max(unit,Math.ceil(mx/4/unit)*unit*4);
     var yy=function(v){return pt+ih-ih*v/top;}, gap=iw/n, bw=gap*0.5;
@@ -2420,7 +2446,22 @@
     var d=prev.map(function(v,i){return (i?'L':'M')+(pl+gap*i+gap/2).toFixed(1)+' '+yy(v).toFixed(1);}).join(' ');
     s+='<path d="'+d+'" fill="none" stroke="var(--ink-2)" stroke-width="2.5" stroke-dasharray="5 3"/>';
     prev.forEach(function(v,i){s+='<circle cx="'+(pl+gap*i+gap/2).toFixed(1)+'" cy="'+yy(v).toFixed(1)+'" r="3" fill="var(--ink-2)"><title>previsto '+fmtBR(v)+'</title></circle>';});
+    if(acc)s+=accLinesSVG(acc,function(i){return pl+gap*i+gap/2;},W-pr,pt,ih,labels);
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+  }
+  /** Linhas de acumulado (previsto tracejado, realizado cheio) com eixo próprio à direita —
+   *  compartilhado pelo histograma e pelo relatório. xAt(i) = centro da semana i; xr = borda direita. */
+  function accLinesSVG(acc,xAt,xr,pt,ih,labels){
+    var aP=acc.prev||[], aR=acc.real||[], mx=1;
+    aP.concat(aR).forEach(function(v){ mx=Math.max(mx,v||0); });
+    var ya=function(v){return pt+ih-ih*v/mx;}, s='';
+    for(var g=0;g<=4;g++){ var val=mx*g/4; s+='<text class="axm" x="'+(xr+6)+'" y="'+(ya(val)+3)+'" text-anchor="start">'+fmtBR(val)+'</text>'; }
+    s+='<line x1="'+xr+'" y1="'+pt+'" x2="'+xr+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>';
+    function path(a){ return a.map(function(v,i){ return (i?'L':'M')+xAt(i).toFixed(1)+' '+ya(v||0).toFixed(1); }).join(' '); }
+    if(aP.length)s+='<path d="'+path(aP)+'" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 4"/>';
+    if(aR.length)s+='<path d="'+path(aR)+'" fill="none" stroke="var(--accent)" stroke-width="2.5"/>';
+    aR.forEach(function(v,i){ s+='<circle cx="'+xAt(i).toFixed(1)+'" cy="'+ya(v||0).toFixed(1)+'" r="2.5" fill="var(--accent)"><title>'+(labels?labels[i]+' · ':'')+'acumulado realizado '+fmtBR(v||0)+' / previsto '+fmtBR(aP[i]||0)+'</title></circle>'; });
+    return s;
   }
   function curveSVG(el,labels,prev,real,trend){
     if(!el)return;
@@ -3530,13 +3571,9 @@
       if(repSvg){
         var rd=relatorioPeriodoData(computeHistogram());
         if(rd){
-          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(mondayOf(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'));
-          var repAcc=document.getElementById('repAccSvg');
-          if(repAcc){
-            var accP=[], accR=[], sP=0, sR=0;
-            rd.weeks.forEach(function(w){ sP+=rd.prevW[w]||0; sR+=rd.realW[w]||0; accP.push(sP); accR.push(sR); });
-            lineChartSVG(repAcc,[{values:accP,color:cssHex('--ink-2'),dashed:true,dots:true},{values:accR,color:cssHex('--accent'),dots:true}],{weekStart:rd.from,W:900,H:240});
-          }
+          var accP=[], accR=[], sP=0, sR=0;
+          rd.weeks.forEach(function(w){ sP+=rd.prevW[w]||0; sR+=rd.realW[w]||0; accP.push(sP); accR.push(sR); });
+          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(mondayOf(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR});
         }
       }
       var repFrom=document.getElementById('repFrom'), repTo=document.getElementById('repTo');
@@ -3954,8 +3991,7 @@
     var hist=computeHistogram(), tw=hist.tw;
     var visRes=RECURSOS.filter(function(r){return HIST_FILTER==='todos'||r.tipo===HIST_FILTER;});
     var legEl=document.getElementById('histLeg');
-    var accEl=document.getElementById('histAccSvg');
-    if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; if(accEl)accEl.innerHTML=''; return; }
+    if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
     // HIST_ORIGEM decompõe direto (serviços) × indireto (apoio administrativo). O previsto já
     // vem separado (byResourceDireto/byResourceIndireto); o realizado apontado por recurso não
     // é separado por origem, então rateia proporcional ao previsto de cada lado naquela semana —
@@ -3972,7 +4008,7 @@
       });
       prevWeek.push(p); realWeek.push(r);
     }
-    var W=1000,H=300,pl=44,pr=12,pt=12,pb=24,iw=W-pl-pr,ih=H-pt-pb;
+    var W=1000,H=300,pl=44,pr=64,pt=12,pb=24,iw=W-pl-pr,ih=H-pt-pb;
     var maxVal=1;
     for(var w2=0;w2<tw;w2++)maxVal=Math.max(maxVal,prevWeek[w2],realWeek[w2]);
     var xx=function(w3){return pl+iw*w3/tw;}, grpW=iw/tw*0.82, barW=grpW*0.42;
@@ -3994,19 +4030,20 @@
         s+='<rect x="'+(x0+barW*1.15).toFixed(1)+'" y="'+yR1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(0,yR2-yR1).toFixed(1)+'" fill="'+col+'"><title>Realizado — '+wkLbl+': '+fmtBR(rv)+'</title></rect>';
       }
     }
+    // Acumulado no mesmo gráfico (eixo da direita): previsto na obra inteira; realizado só até a
+    // última semana com apontamento (depois disso a curva ficaria plana e enganaria — corta ali).
+    var lastReal=-1; for(var w5=0;w5<tw;w5++){ if(realWeek[w5]>0)lastReal=w5; }
+    var accP=[], accR=[], sP=0, sR=0;
+    for(var w6=0;w6<tw;w6++){ sP+=prevWeek[w6]; accP.push(sP); if(w6<=lastReal){ sR+=realWeek[w6]; accR.push(sR); } }
+    var wkLabels=[]; for(var w7=0;w7<tw;w7++)wkLabels.push('S'+isoWeek(mondayOf(w7+1)));
+    s+=accLinesSVG({prev:accP,real:accR},function(i){return xx(i)+grpW/2;},W-pr,pt,ih,wkLabels);
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
-    if(accEl){
-      // Acumulado: previsto na obra inteira; realizado só até a última semana com apontamento
-      // (depois disso a curva ficaria plana e enganaria — então corta ali).
-      var lastReal=-1; for(var w5=0;w5<tw;w5++){ if(realWeek[w5]>0)lastReal=w5; }
-      var accP=[], accR=[], sP=0, sR=0;
-      for(var w6=0;w6<tw;w6++){ sP+=prevWeek[w6]; accP.push(sP); if(w6<=lastReal){ sR+=realWeek[w6]; accR.push(sR); } }
-      lineChartSVG(accEl,[{values:accP,color:cssHex('--ink-2'),dashed:true},{values:accR,color:cssHex('--accent')}],{W:900,H:240});
-    }
     if(legEl)legEl.innerHTML='<span><span class="swatch" style="background:var(--line-2);border:1px solid var(--muted)"></span>Previsto</span>'+
       '<span><span class="swatch" style="background:var(--good)"></span>Realizado = previsto</span>'+
       '<span><span class="swatch" style="background:var(--warn)"></span>Realizado abaixo</span>'+
-      '<span><span class="swatch" style="background:var(--crit)"></span>Realizado acima</span>';
+      '<span><span class="swatch" style="background:var(--crit)"></span>Realizado acima</span>'+
+      '<span><span class="swatch" style="background:var(--muted)"></span>Previsto acumulado (tracejado, eixo à direita)</span>'+
+      '<span><span class="swatch" style="background:var(--accent)"></span>Realizado acumulado (até a última semana apontada)</span>';
   }
 
   function ppcBars(id){
