@@ -144,8 +144,18 @@
   /* Tela cheia da matriz: o bloco do cronograma vira uma camada sobre a página inteira —
      só ficam os filtros de serviço, a barra de zoom e a própria matriz. */
   body.mat-fullscreen #cronoContent{position:fixed;inset:0;z-index:190;background:var(--bg);padding:10px 14px;display:flex;flex-direction:column;overflow:auto}
-  body.mat-fullscreen #cronoContent .tc-head,body.mat-fullscreen #cronoContent .assign{display:none!important}
+  body.mat-fullscreen #cronoContent .tc-head{display:none!important}
   body.mat-fullscreen #cronoContent .tc-svctoggle{margin-bottom:6px}
+  /* Barra de edição da tela cheia: abas, ações do ajuste manual e saída. Fora da tela cheia não aparece. */
+  .fs-bar{display:none}
+  body.mat-fullscreen .fs-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  body.mat-fullscreen .fs-bar .fs-title{font-family:"Archivo",sans-serif;font-weight:800;font-size:14px;margin-right:6px;white-space:nowrap}
+  body.mat-fullscreen .fs-bar .btn{padding:4px 10px;font-size:12px}
+  body.mat-fullscreen .fs-bar .subtab{padding:4px 10px;font-size:12px}
+  /* Painel "Lotes e sequência" vira gaveta lateral; a matriz se desloca pra não ficar coberta. */
+  body.mat-fullscreen #cronoContent .assign{display:none!important}
+  body.mat-fullscreen.assign-open #cronoContent{padding-left:calc(min(420px,42vw) + 20px)}
+  body.mat-fullscreen.assign-open #cronoContent .assign{display:block!important;position:fixed;left:0;top:0;bottom:0;width:min(420px,42vw);z-index:196;overflow:auto;background:var(--surface);border-right:1px solid var(--line);border-radius:0;padding:14px;box-shadow:var(--shadow)}
   .tc-zoom button{width:28px;height:28px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;font-weight:700}
   .tc-zoom button:hover{border-color:var(--accent)}
   .tc-zoom .lvl{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-2);min-width:38px;text-align:center}
@@ -6220,18 +6230,42 @@
   }
   function setMatrixFullscreen(on){
     document.body.classList.toggle('mat-fullscreen',!!on);
-    var bar=document.querySelector('[data-zoom="full"]');
-    if(bar)bar.textContent=on?'✕ Sair da tela cheia':'⛶ Tela cheia';
+    if(!on)document.body.classList.remove('assign-open');
+    document.querySelectorAll('.tc-zoom [data-zoom="full"]').forEach(function(b){ b.textContent=on?'✕ Sair da tela cheia':'⛶ Tela cheia'; });
     if(on)window.scrollTo(0,0);
     fitMatrixFrameHeight();
     requestAnimationFrame(fitMatrixFrameHeight);
   }
   document.addEventListener('keydown',function(e){
-    if(e.key==='Escape'&&document.body.classList.contains('mat-fullscreen'))setMatrixFullscreen(false);
+    if(e.key!=='Escape'||!document.body.classList.contains('mat-fullscreen'))return;
+    // Esc fecha primeiro a gaveta de edição; só depois sai da tela cheia.
+    if(document.body.classList.contains('assign-open')){ document.body.classList.remove('assign-open'); fitMatrixFrameHeight(); return; }
+    setMatrixFullscreen(false);
   });
+  /** Liga a barra da tela cheia (abas, gaveta e ações do ajuste manual) — refeita a cada render. */
+  function wireFsBar(){
+    document.querySelectorAll('[data-fstab]').forEach(function(b){
+      b.addEventListener('click',function(){
+        window._cronoTab=b.getAttribute('data-fstab');
+        var tabs=document.getElementById('cronoTabs');
+        if(tabs)tabs.querySelectorAll('.subtab').forEach(function(x){ x.classList.toggle('active',x.getAttribute('data-tab')===window._cronoTab); });
+        renderCrono();
+      });
+    });
+    document.querySelectorAll('[data-fsdrawer]').forEach(function(b){
+      b.addEventListener('click',function(){ document.body.classList.toggle('assign-open'); fitMatrixFrameHeight(); requestAnimationFrame(fitMatrixFrameHeight); });
+    });
+    document.querySelectorAll('[data-fsact]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var alvo=document.getElementById(b.getAttribute('data-fsact')==='save'?'saveAdjustsBtn':'clearAdjustsBtn');
+        if(alvo)alvo.click();
+      });
+    });
+  }
   window.addEventListener('resize',function(){ fitMatrixFrameHeight(); });
   function wireMatrixZoom(){
     fitMatrixFrameHeight();
+    wireFsBar();
     document.querySelectorAll('[data-zoom]').forEach(function(b){
       b.addEventListener('click',function(){
         var act=b.getAttribute('data-zoom'), z=window._matrixZoom||1;
@@ -6310,9 +6344,27 @@
     return kpis+table;
   }
 
+  /** Barra de edição mostrada só no modo tela cheia — sem ela o usuário perderia as abas e os
+   *  botões do ajuste manual, que ficam fora do bloco do cronograma. */
+  function fsBarHTML(){
+    var tab=window._cronoTab||'tc';
+    var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt']]
+      .filter(function(t){ return !(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe')); })
+      .map(function(t){ return '<button class="subtab'+(tab===t[0]?' active':'')+'" data-fstab="'+t[0]+'">'+t[1]+'</button>'; }).join('');
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'';
+    return '<div class="fs-bar">'+
+      '<span class="fs-title">'+escAttr(nome)+'</span>'+tabs+
+      (tab==='ajuste'&&!isReadOnly()?
+        '<button class="btn" data-fsdrawer="1" title="Abrir/fechar o painel de lotes e sequência por equipe">⚙ Equipes e sequência</button>'+
+        '<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
+        '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar ajustes')+'</button>':'')+
+      (ACTIVE_CENARIO?'<span class="note" style="color:var(--warn);white-space:nowrap">Editando cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</span>':'')+
+      (ADJ_DIRTY?'<span class="note" style="color:var(--warn);white-space:nowrap">ajustes não salvos</span>':'')+
+      '<button class="btn" data-zoom="full" style="margin-left:auto">✕ Sair da tela cheia</button></div>';
+  }
   function cronoContent(){
     var tab=window._cronoTab||'tc';
-    if(tab==='ajuste') return '<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
+    if(tab==='ajuste') return fsBarHTML()+'<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
       '<div><h3>Ajuste manual (arraste para mover)</h3>'+
       '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.'+
       (ADJ_DIRTY?' <b style="color:var(--warn)">Há ajustes não salvos.</b>':'')+'</p></div>'+
@@ -6321,10 +6373,10 @@
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
-    if(tab==='equipe') return editarPorEquipeHTML();
-    if(tab==='resumo') return resumoHTML();
-    if(tab==='gantt') return ganttHTML();
-    return matrixTableHTML(true); // 'tc'
+    if(tab==='equipe') return fsBarHTML()+editarPorEquipeHTML();
+    if(tab==='resumo') return fsBarHTML()+resumoHTML();
+    if(tab==='gantt') return fsBarHTML()+ganttHTML();
+    return fsBarHTML()+matrixTableHTML(true); // 'tc'
   }
   function renderCrono(){
     var c=document.getElementById('cronoContent'); if(!c)return;
