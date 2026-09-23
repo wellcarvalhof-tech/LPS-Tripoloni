@@ -544,6 +544,14 @@
     var s=await SB.auth.getSession();
     return (s&&s.data&&s.data.session&&s.data.session.user)?s.data.session.user.id:null;
   }
+  /** Perfil global "desenvolvedor" (admin do sistema): enxerga e edita todas as obras.
+   *  A RLS já reconhece esse papel (has_role(uid,'admin')); aqui é só pra tela saber. */
+  async function sbIsAppAdmin(){
+    var uid=await sbMyUserId(); if(!uid)return false;
+    var r=await SB.from('user_roles').select('role').eq('user_id',uid).eq('role','admin').maybeSingle();
+    if(r.error)return false; // tabela/policy indisponível → trata como usuário comum
+    return !!r.data;
+  }
   async function sbLoadMyRole(obraId){
     var uid=await sbMyUserId(); if(!uid)return null;
     var r=await SB.from('obra_membros').select('papel,permissoes').eq('obra_id',obraId).eq('user_id',uid).maybeSingle();
@@ -849,8 +857,9 @@
      abas em permissoes. Se o perfil não puder ser carregado (migração ainda não rodada, ou
      admin global sem linha em obra_membros), o app segue como planejador — igual era antes. */
   var MY_ROLE={papel:'planejador',permissoes:['*']};
-  function isPlanejador(){ return MY_ROLE.papel==='planejador'; }
-  function isReadOnly(){ return MY_ROLE.papel==='visualizador'; }
+  var IS_APP_ADMIN=false; // desenvolvedor: acesso total a todas as obras (migração 17)
+  function isPlanejador(){ return IS_APP_ADMIN||MY_ROLE.papel==='planejador'; }
+  function isReadOnly(){ return !IS_APP_ADMIN&&MY_ROLE.papel==='visualizador'; }
   function canViewTab(view){
     if(view==='torre-rel')view='torre'; // relatório é parte da Torre de Controle
     if(view==='cad-acessos')return isPlanejador();
@@ -862,6 +871,12 @@
   function firstAllowedTab(){ var t=allTabs().filter(function(it){return canViewTab(it[0]);})[0]; return t?t[0]:'torre'; }
   function refreshRoleBadge(){
     var b=document.getElementById('roleBadge'); if(!b)return;
+    if(IS_APP_ADMIN){
+      b.style.display='inline-flex';
+      b.textContent='Desenvolvedor';
+      b.title='Acesso total a todas as obras do sistema';
+      return;
+    }
     if(!selectedObra||isPlanejador()){ b.style.display='none'; return; }
     b.style.display='inline-flex';
     b.textContent=isReadOnly()?'Visualização':'Gestor';
@@ -7236,6 +7251,8 @@
     var g=document.getElementById('obrasGrid'); if(!g)return;
     if(!SB){g.innerHTML='<div class="note" style="padding:20px;color:var(--crit)">Supabase não carregou. Abra o arquivo localmente.</div>';return;}
     g.innerHTML='<div class="note" style="padding:20px">Carregando obras…</div>';
+    try{ IS_APP_ADMIN=await sbIsAppAdmin(); }catch(e){ IS_APP_ADMIN=false; }
+    refreshRoleBadge();
     var obras=[];
     try{ obras=await sbListObras(); }
     catch(e){ g.innerHTML='<div class="note" style="padding:20px;color:var(--crit)">Falha ao carregar obras: '+((e&&e.message)||e)+'</div>'; return; }
@@ -7271,7 +7288,12 @@
     // Perfil nesta obra. Sem linha em obra_membros (admin global) ou erro (migração 14 ainda
     // não rodada) → segue como planejador, igual era antes.
     MY_ROLE={papel:'planejador',permissoes:['*']};
-    try{ var role=await sbLoadMyRole(id); if(role&&role.papel)MY_ROLE={papel:role.papel,permissoes:Array.isArray(role.permissoes)?role.permissoes:[]}; }
+    try{
+      if(!IS_APP_ADMIN)IS_APP_ADMIN=await sbIsAppAdmin(); // entrou direto numa obra, sem passar pela lista
+      var role=await sbLoadMyRole(id);
+      // Desenvolvedor não é rebaixado pelo papel que tiver (ou não tiver) nesta obra.
+      if(role&&role.papel&&!IS_APP_ADMIN)MY_ROLE={papel:role.papel,permissoes:Array.isArray(role.permissoes)?role.permissoes:[]};
+    }
     catch(e){ console.warn('Perfil não carregado (rodou a migração 14?):',e&&e.message); }
     buildNav();
     loadLotView();

@@ -20,5 +20,6 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `14_add_acessos.sql` | Acessos por obra: perfis planejador/gestor/visualizador, abas permitidas por membro (`obra_membros.permissoes`), convite por e-mail (`obra_convites` + `convidar_membro()` + trigger em `auth.users`), e RLS que só deixa planejador/gestor escrever. **Quem já era membro continua com acesso** (criador vira planejador; demais viram gestor com todas as abas). | ⚠️ novo — rodar **antes** de usar a tela Acessos |
 | `15_add_recurso_aliases.sql` | Coluna `recursos.aliases` — de-para de nomes pra importar o realizado do histograma das abas "Dados EFETIVO DP" / "DADOS Realizado CEQ" da planilha de acompanhamento | ⚠️ novo — rodar antes de usar "Importar DP + CEQ" |
 | `16_add_recurso_classe.sql` | Coluna `recursos.classe` — classificação da mão de obra (MOD direta / MOI indireta), usada no filtro do histograma e preenchida sozinha pela importação DP + CEQ | ⚠️ novo — rodar pra usar o filtro MOD/MOI |
+| `17_add_admin_desenvolvedor.sql` | Registra a sua conta como **desenvolvedor (admin global)**: enxerga e edita todas as obras, inclusive as criadas por outras pessoas. Troque o e-mail no topo do arquivo antes de rodar. | ⚠️ novo — rodar com o seu e-mail |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.
