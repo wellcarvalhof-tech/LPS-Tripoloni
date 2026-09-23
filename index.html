@@ -765,7 +765,7 @@
     LOTE_COMPR=lot.map(function(r){return r.comprimento_m!=null?Number(r.comprimento_m):null;});
     LOTE_ESPAC=lot.map(function(r){return r.espacamento_estaca_m!=null?Number(r.espacamento_estaca_m):20;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
-    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',classe:r.classe||'',aliases:Array.isArray(r.aliases)?r.aliases:[]};});
+    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',classe:normClasse(r.classe),aliases:Array.isArray(r.aliases)?r.aliases:[]};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
@@ -1446,14 +1446,26 @@
   // Classificação da mão de obra (característica da função, independente de onde está alocada):
   // 'todas'|'mod' (direta)|'moi' (indireta)|'sem' (função ainda sem classificação).
   var HIST_CLASSE='todas';
-  function classeLabel(c){ return c==='mod'?'Direta (MOD)':(c==='moi'?'Indireta (MOI)':'—'); }
+  function normClasse(v){
+    var t=String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+    if(/INDIRET|^MOI$/.test(t))return 'indireto';
+    if(/DIRET|^MOD$/.test(t))return 'direto';
+    return '';
+  }
+  function classeLabel(c){ return c==='direto'?'Direto':(c==='indireto'?'Indireto':'—'); }
   /** A classificação MOD/MOI é definida por CATEGORIA (a mesma já cadastrada em cada função):
    *  todas as funções de "Serventes" são MOD, todas de "Encarregados - Escritório" são MOI, etc.
    *  Guardamos em cada recurso (recursos.classe), mas quem manda é a categoria — mudar a
    *  categoria de uma função faz ela herdar a classificação da nova categoria. */
   function catKey(r){ return (r&&r.cat||'').trim(); }
+  /** A categoria da obra já pode dizer tudo ("DIRETO"/"INDIRETO"): nesse caso a classificação sai
+   *  direto dela, sem ninguém precisar escolher nada. Categorias com outro nome ("Serventes",
+   *  "Encarregados - Escritório") usam a escolha guardada em recursos.classe. */
+  function classeFromCat(cat){ return normClasse(cat); }
+  function resClasse(r){ return (r&&r.classe)||classeFromCat(r&&r.cat); }
   function classeOfCat(cat){
     cat=(cat||'').trim();
+    var pelaCat=classeFromCat(cat); if(pelaCat)return pelaCat;
     var found='';
     RECURSOS.forEach(function(r){ if(r.tipo==='funcao'&&catKey(r)===cat&&r.classe&&!found)found=r.classe; });
     return found;
@@ -1465,6 +1477,7 @@
     return out;
   }
   function setClasseCat(cat,classe){
+    classe=normClasse(classe);
     var n=0;
     RECURSOS.forEach(function(r,ri){ if(r.tipo!=='funcao'||catKey(r)!==(cat||'').trim())return; if((r.classe||'')===(classe||''))return; r.classe=classe||''; REC_DIRTY[ri]=true; n++; });
     return n;
@@ -1841,8 +1854,8 @@
     var recDirty=Object.keys(REC_DIRTY).length;
     // A classificação não é editada aqui: ela vem da categoria (bloco abaixo da tabela).
     function classeCell(r){
-      var c=r.classe||'';
-      return '<span class="note"'+(c?' style="color:'+(c==='mod'?'var(--good)':'var(--warn)')+';font-weight:600"':'')+'>'+(c?classeLabel(c):'—')+'</span>';
+      var c=resClasse(r);
+      return '<span class="note"'+(c?' style="color:'+(c==='direto'?'var(--good)':'var(--warn)')+';font-weight:600"':'')+'>'+(c?classeLabel(c):'—')+'</span>';
     }
     function recRowsOfType(tipo){
       return RECURSOS.map(function(r,ri){
@@ -1861,20 +1874,22 @@
     var nFuncoes=RECURSOS.filter(function(r){return r.tipo==='funcao';}).length;
     var nEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento';}).length;
     var catHead='<th style="min-width:260px">Nome</th><th>Categoria</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
-    var catHeadF='<th style="min-width:260px">Nome</th><th>Categoria</th><th title="Mão de obra direta (MOD) ou indireta (MOI) — definida pela categoria, no quadro abaixo da tabela">Classificação</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
+    var catHeadF='<th style="min-width:260px">Nome</th><th>Categoria</th><th title="Direto ou indireto — vem da categoria da função (categorias chamadas Direto/Indireto já classificam sozinhas)">Classificação</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
     // Quadro de classificação por categoria: uma escolha por categoria vale pra todas as funções dela.
     var catsF=funcaoCats();
     var classePorCat=!catsF.length?'':'<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Classificação da mão de obra por categoria</div>'+
-      '<div class="note" style="margin-bottom:8px">Direta (MOD) = produção; Indireta (MOI) = apoio/administração. Vale pra todas as funções da categoria — ao mudar aqui, todas herdam. Clique em 💾 Salvar alterações pra gravar.</div>'+
+      '<div class="note" style="margin-bottom:8px">Categoria chamada "Direto" ou "Indireto" já vale como classificação — não precisa mexer. Nas outras, escolha aqui e todas as funções da categoria herdam (depois clique em 💾 Salvar alterações).</div>'+
       '<div class="tbl-wrap"><table class="edtbl crew-tbl"><thead><tr><th>Categoria</th><th class="r">Funções</th><th>Classificação</th></tr></thead><tbody>'+
       catsF.map(function(c){
-        var n=RECURSOS.filter(function(r){return r.tipo==='funcao'&&catKey(r)===c;}).length, cur=classeOfCat(c);
-        return '<tr><td>'+(c?escAttr(c):'<i>Sem categoria</i>')+'</td><td class="r mono">'+n+'</td><td><select class="esel" data-catclasse="'+escAttr(c)+'" style="width:150px">'+
-          [['','—'],['mod','Direta (MOD)'],['moi','Indireta (MOI)']].map(function(o){ return '<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+
-          '</select></td></tr>';
+        var n=RECURSOS.filter(function(r){return r.tipo==='funcao'&&catKey(r)===c;}).length, cur=classeOfCat(c), auto=classeFromCat(c);
+        return '<tr><td>'+(c?escAttr(c):'<i>Sem categoria</i>')+'</td><td class="r mono">'+n+'</td><td>'+
+          (auto?'<span class="note" style="color:'+(auto==='direto'?'var(--good)':'var(--warn)')+';font-weight:600">'+classeLabel(auto)+'</span> <span class="note">(pelo nome da categoria)</span>':
+            '<select class="esel" data-catclasse="'+escAttr(c)+'" style="width:150px">'+
+            [['','—'],['direto','Direto'],['indireto','Indireto']].map(function(o){ return '<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+
+            '</select>')+'</td></tr>';
       }).join('')+'</tbody></table></div></div>';
-    var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria, classificação (MOD/MOI) e unidade.',
+    var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria, classificação (direto/indireto, vinda da categoria) e unidade.',
       '<button class="btn" id="histModelo">Modelo</button>'+
       '<button class="btn" id="histImportarFuncoes">↥ Importar Funções</button>'+
       '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
@@ -2022,8 +2037,8 @@
       var lbl=o==='todos'?'Todos':o==='direto'?'Alocado em serviços':'Alocado no apoio';
       return '<button class="subtab'+(HIST_ORIGEM===o?' active':'')+'" data-historigem="'+o+'">'+lbl+'</button>';
     }).join('');
-    var nSemClasse=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!r.classe;}).length;
-    var classeBtns=[['todas','Todas'],['mod','Direta (MOD)'],['moi','Indireta (MOI)']].concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]).map(function(o){
+    var nSemClasse=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!resClasse(r);}).length;
+    var classeBtns=[['todas','Todas'],['direto','Direto'],['indireto','Indireto']].concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]).map(function(o){
       return '<button class="subtab'+(HIST_CLASSE===o[0]?' active':'')+'" data-histclasse="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
@@ -2032,7 +2047,7 @@
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (MOD/MOI), independente da origem — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (Direto/Indireto), independente da origem — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -4238,7 +4253,7 @@
       if(HIST_FILTER!=='todos'&&r.tipo!==HIST_FILTER)return false;
       if(HIST_CLASSE==='todas')return true;
       if(r.tipo!=='funcao')return false; // classificação MOD/MOI só existe pra mão de obra
-      return HIST_CLASSE==='sem'?!r.classe:(r.classe||'')===HIST_CLASSE;
+      return HIST_CLASSE==='sem'?!resClasse(r):resClasse(r)===HIST_CLASSE;
     });
     var legEl=document.getElementById('histLeg');
     if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
@@ -5907,7 +5922,7 @@
       Object.keys(votosCat).forEach(function(c){
         if(classeOfCat(c))return; // já classificada à mão ou numa importação anterior
         var v=votosCat[c]; if(!(v.MOD+v.MOI))return;
-        var cl=v.MOD>=v.MOI?'mod':'moi';
+        var cl=v.MOD>=v.MOI?'direto':'indireto';
         nClasse+=setClasseCat(c,cl); nCats++;
         RECURSOS.forEach(function(r){ if(r.tipo==='funcao'&&catKey(r)===c)pend.push({id:r.id,classe:cl,nome:r.n}); });
       });
@@ -5922,7 +5937,7 @@
     HIST_OPEN.realizado=true;
     go('cr-hist');
     var resumo=sources.map(function(src){return src.label+': '+src.rowsOk+' linhas'+(src.semData?' ('+src.semData+' linhas sem data de entrada, ignoradas)':'');}).join(' · ');
-    var msg=nRes+' recurso(s) preenchidos até S'+isoWeek(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+(nClasse?' '+nCats+' categoria(s) classificadas como MOD/MOI pela coluna TIPO ('+nClasse+' função(ões)).':'')+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
+    var msg=nRes+' recurso(s) preenchidos até S'+isoWeek(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+(nClasse?' '+nCats+' categoria(s) classificadas como direto/indireto pela coluna TIPO ('+nClasse+' função(ões)).':'')+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
     alert(msg);
   }
   /** De-para dos nomes da planilha que não casaram com nenhum recurso. Resolve com {nome: recurso|null} ou null se cancelar. */
