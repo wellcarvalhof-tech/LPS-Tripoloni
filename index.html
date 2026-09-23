@@ -427,7 +427,7 @@
     <span class="brand-tag"><b>LPS</b><span>Planejamento de Obras</span></span>
     <div style="margin-left:auto;display:flex;align-items:center;gap:9px">
       <button class="icon-btn" id="themeBtn2" title="Tema">◐</button>
-      <div class="avatar">W</div>
+      <div class="avatar" title="Conta"></div>
     </div>
   </div>
   <div class="land-body">
@@ -466,7 +466,7 @@
         <div class="obra-sel" id="lotViewBtn" title="Filtrar quais lotes aparecem na matriz, no histograma e nas curvas (o cronograma continua calculado com todos)" style="display:none"><span class="k">Lotes</span><b id="lotViewName">Todos</b><span style="opacity:.5">▾</span></div>
         <div class="obra-sel" id="obraSel" title="Trocar obra"><span class="k">Obra</span><b id="obraSelName">—</b><span style="opacity:.5">▾</span></div>
         <button class="icon-btn" id="themeBtn" title="Tema">◐</button>
-        <div class="avatar">W</div>
+        <div class="avatar" title="Conta"></div>
       </div>
     </div>
     <div class="content" id="content"></div>
@@ -812,7 +812,19 @@
     }catch(e){err.style.color='var(--crit)';err.textContent='Falha: '+((e&&e.message)||e);err.hidden=false;}
   }
   async function signOut(){ try{ if(SB)await SB.auth.signOut(); }catch(e){} location.reload(); }
+  /** Avatar do topo: inicial do e-mail da conta logada (e o e-mail inteiro no tooltip) —
+   *  antes era um "W" fixo no HTML, que não batia com quem estava logado. */
+  async function refreshAvatar(){
+    var email='';
+    try{ var s=await SB.auth.getSession(); email=(s&&s.data&&s.data.session&&s.data.session.user&&s.data.session.user.email)||''; }catch(e){}
+    var ini=(email.trim().charAt(0)||'?').toUpperCase();
+    document.querySelectorAll('.avatar').forEach(function(el){
+      el.textContent=ini;
+      el.title=email?(email+' — clique pra sair da conta'):'Sair da conta';
+    });
+  }
   async function enterApp(){
+    await refreshAvatar();
     buildNav();
     await renderLanding();
     var lastObra=null, lastView=null;
@@ -7371,7 +7383,7 @@
   // Login wiring
   var af=document.getElementById('authForm'); if(af)af.addEventListener('submit',function(e){e.preventDefault();doAuth('in');});
   var au=document.getElementById('authUp'); if(au)au.addEventListener('click',function(){doAuth('up');});
-  document.querySelectorAll('.avatar').forEach(function(el){el.style.cursor='pointer';el.title='Sair da conta';el.addEventListener('click',function(){if(confirm('Sair da conta?'))signOut();});});
+  document.querySelectorAll('.avatar').forEach(function(el){el.style.cursor='pointer';if(!el.title||el.title==='Conta')el.title='Sair da conta';el.addEventListener('click',function(){if(confirm('Sair da conta?'))signOut();});});
 
   // Boot: sessão
   (async function boot(){
