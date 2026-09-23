@@ -21,5 +21,6 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `15_add_recurso_aliases.sql` | Coluna `recursos.aliases` — de-para de nomes pra importar o realizado do histograma das abas "Dados EFETIVO DP" / "DADOS Realizado CEQ" da planilha de acompanhamento | ⚠️ novo — rodar antes de usar "Importar DP + CEQ" |
 | `16_add_recurso_classe.sql` | Coluna `recursos.classe` — classificação da mão de obra (MOD direta / MOI indireta), usada no filtro do histograma e preenchida sozinha pela importação DP + CEQ | ⚠️ novo — rodar pra usar o filtro MOD/MOI |
 | `17_add_admin_desenvolvedor.sql` | Registra a sua conta como **desenvolvedor (admin global)**: enxerga e edita todas as obras, inclusive as criadas por outras pessoas. Troque o e-mail no topo do arquivo antes de rodar. | ⚠️ novo — rodar com o seu e-mail |
+| `18_limita_criacao_de_obras.sql` | Só desenvolvedor (ilimitado) e planejador (uma obra do zero) podem criar obra; gestor e visualizador não criam | ⚠️ novo — rodar depois da 17 |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.

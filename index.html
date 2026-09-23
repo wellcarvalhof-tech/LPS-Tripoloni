@@ -521,6 +521,17 @@
     if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);});
   }
+  /** Regra de criação de obra (migração 18): desenvolvedor cria à vontade; planejador de
+   *  alguma obra cria UMA do zero; gestor/visualizador não criam. Quem manda é a RLS — isto
+   *  aqui é só pra tela não oferecer o que o banco vai recusar. Se a migração ainda não
+   *  rodou (função inexistente), libera, pra não travar quem já usava. */
+  async function sbPodeCriarObra(){
+    try{
+      var r=await SB.rpc('pode_criar_obra');
+      if(r.error)return true;
+      return r.data!==false;
+    }catch(e){ return true; }
+  }
   async function sbCreateObra(o){
     await sbRequireSession();
     // Insert sem RETURNING: com RETURNING, a policy de SELECT do RETURNING pode
@@ -7268,8 +7279,11 @@
             '<div class="st" style="margin-left:auto"><span class="obra-del" data-del="'+o.id+'" title="Excluir obra">✕</span></div>'+
           '</div></div></button>';
       }).join('');
-    cards+='<button class="obra-new" id="newObra"><span class="plus">+</span>Nova obra</button>';
-    g.innerHTML=cards||('<div class="note" style="padding:20px">Nenhuma obra ainda. Crie a primeira.</div>'+cards);
+    var podeCriar=await sbPodeCriarObra();
+    cards+=podeCriar?'<button class="obra-new" id="newObra"><span class="plus">+</span>Nova obra</button>':
+      '<div class="obra-new" style="cursor:default;opacity:.65;text-align:center;padding:18px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Criação de obra bloqueada</div><div class="note">'+
+      (obras.length?'Você já criou a sua obra. Só o desenvolvedor pode criar outras — peça pra ele.':'Seu perfil não permite criar obras. Peça ao desenvolvedor pra liberar.')+'</div></div>';
+    g.innerHTML=cards||('<div class="note" style="padding:20px">Nenhuma obra ainda.'+(podeCriar?' Crie a primeira.':'')+'</div>'+cards);
     g.querySelectorAll('[data-obra]').forEach(function(b){b.addEventListener('click',function(e){ if(e.target&&e.target.closest('[data-del]'))return; selectObra(b.getAttribute('data-obra')); });});
     g.querySelectorAll('[data-del]').forEach(function(b){b.addEventListener('click',async function(e){ e.stopPropagation(); if(!confirm('Excluir esta obra e todos os dados dela? Não dá pra desfazer.'))return; try{ await sbDeleteObra(b.getAttribute('data-del')); renderLanding(document.getElementById('obraSearch').value); }catch(err){ alert('Falha ao excluir: '+((err&&err.message)||err)); } });});
     var nb=document.getElementById('newObra'); if(nb)nb.addEventListener('click',enterNewObra);
@@ -7302,9 +7316,17 @@
     go(initialView&&CRUMB[initialView]?initialView:'torre');
   }
   async function enterNewObra(){
+    if(!(await sbPodeCriarObra())){
+      alert('Seu perfil não pode criar obras.\n\nSó o desenvolvedor cria sem limite; um planejador pode criar uma obra do zero. Fale com o responsável pelo sistema.');
+      renderLanding(); return;
+    }
     var nome=prompt('Nome da nova obra:','Nova obra'); if(nome===null)return;
     try{ var id=await sbCreateObra({nome:nome}); await selectObra(id); }
-    catch(e){ alert('Falha ao criar obra: '+((e&&e.message)||e)); }
+    catch(e){
+      var m=(e&&e.message)||String(e);
+      if(/row-level security|violates|42501/i.test(m))m='seu perfil não pode criar obras (só o desenvolvedor cria sem limite; planejador cria uma).';
+      alert('Falha ao criar obra: '+m);
+    }
   }
 
   /* ---------- theme + boot ---------- */
