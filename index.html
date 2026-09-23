@@ -140,7 +140,12 @@
 
   /* Matrix (tempo-caminho) */
   .tc-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:76vh}
-  .tc-zoom{display:flex;align-items:center;gap:6px;margin-bottom:10px}
+  .tc-zoom{display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  /* Tela cheia da matriz: o bloco do cronograma vira uma camada sobre a página inteira —
+     só ficam os filtros de serviço, a barra de zoom e a própria matriz. */
+  body.mat-fullscreen #cronoContent{position:fixed;inset:0;z-index:190;background:var(--bg);padding:10px 14px;display:flex;flex-direction:column;overflow:auto}
+  body.mat-fullscreen #cronoContent .tc-head,body.mat-fullscreen #cronoContent .assign{display:none!important}
+  body.mat-fullscreen #cronoContent .tc-svctoggle{margin-bottom:6px}
   .tc-zoom button{width:28px;height:28px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;font-weight:700}
   .tc-zoom button:hover{border-color:var(--accent)}
   .tc-zoom .lvl{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-2);min-width:38px;text-align:center}
@@ -6197,25 +6202,40 @@
     var z=window._matrixZoom||1;
     var zoomBar='<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
       '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
-      (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+'</div>';
+      (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+
+      '<button data-zoom="full" title="Ver a matriz ocupando a tela toda (Esc sai)" style="width:auto;padding:0 10px;margin-left:auto">'+(document.body.classList.contains('mat-fullscreen')?'✕ Sair da tela cheia':'⛶ Tela cheia')+'</button>'+'</div>';
     // O zoom vai no conteúdo (tc-zoomin), não no quadro: o quadro (tcWrap) mantém o tamanho e
     // rola por dentro — a página não cresce quando a escala muda.
     return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap"><div class="tc-zoomin" style="zoom:'+z+'">'+tableHtml+'</div></div>';
   }
   /** Quadro da matriz ocupa o que sobra da tela abaixo dele (com a página no topo), com mínimo
-   *  de 320px — independe do zoom, que só escala o conteúdo por dentro. */
+   *  de 320px — independe do zoom, que só escala o conteúdo por dentro. Em tela cheia o bloco é
+   *  uma camada fixa, então a medida é direto na janela (sem somar a rolagem da página). */
   function fitMatrixFrameHeight(){
     var wrap=document.getElementById('tcWrap'); if(!wrap||document.body.classList.contains('printing-mat'))return;
-    var docTop=wrap.getBoundingClientRect().top+(window.scrollY||window.pageYOffset||0);
-    var h=Math.max(320,Math.floor(window.innerHeight-docTop-18));
+    var full=document.body.classList.contains('mat-fullscreen');
+    var top=wrap.getBoundingClientRect().top+(full?0:(window.scrollY||window.pageYOffset||0));
+    var h=Math.max(full?240:320,Math.floor(window.innerHeight-top-(full?14:18)));
     wrap.style.maxHeight=h+'px';
   }
+  function setMatrixFullscreen(on){
+    document.body.classList.toggle('mat-fullscreen',!!on);
+    var bar=document.querySelector('[data-zoom="full"]');
+    if(bar)bar.textContent=on?'✕ Sair da tela cheia':'⛶ Tela cheia';
+    if(on)window.scrollTo(0,0);
+    fitMatrixFrameHeight();
+    requestAnimationFrame(fitMatrixFrameHeight);
+  }
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&document.body.classList.contains('mat-fullscreen'))setMatrixFullscreen(false);
+  });
   window.addEventListener('resize',function(){ fitMatrixFrameHeight(); });
   function wireMatrixZoom(){
     fitMatrixFrameHeight();
     document.querySelectorAll('[data-zoom]').forEach(function(b){
       b.addEventListener('click',function(){
         var act=b.getAttribute('data-zoom'), z=window._matrixZoom||1;
+        if(act==='full'){ setMatrixFullscreen(!document.body.classList.contains('mat-fullscreen')); return; }
         if(act==='in')z=Math.min(1.6,+(z+0.1).toFixed(2));
         else if(act==='out')z=Math.max(0.4,+(z-0.1).toFixed(2));
         else if(act==='reset')z=1;
@@ -6849,8 +6869,32 @@
     go(current);
   }
 
+  /** Chaves de agrupamento do painel "Lotes e sequência de execução por equipe": recolhem o
+   *  painel inteiro, a lista de lotes e a sequência — com muitos lotes a lista empurra a matriz
+   *  pra fora da tela. Fica guardado no navegador. */
+  var ASSIGN_OPEN=null;
+  function assignOpen(){
+    if(!ASSIGN_OPEN){
+      ASSIGN_OPEN={panel:true,chips:true,seq:true};
+      try{ var raw=safeStore.getItem('lps-tripoloni-assignopen'); if(raw)ASSIGN_OPEN=Object.assign(ASSIGN_OPEN,JSON.parse(raw)); }catch(e){}
+    }
+    return ASSIGN_OPEN;
+  }
+  function assignToggle(k){
+    var o=assignOpen(); o[k]=!o[k];
+    try{ safeStore.setItem('lps-tripoloni-assignopen',JSON.stringify(o)); }catch(e){}
+    renderAssignPanel();
+    fitMatrixFrameHeight();
+  }
+  function asgBtn(k){ return '<button class="iconbtn" data-asgtoggle="'+k+'" title="Recolher/expandir">'+(assignOpen()[k]?'▾':'▸')+'</button>'; }
+  function wireAssignToggles(p){
+    p.querySelectorAll('[data-asgtoggle]').forEach(function(b){
+      b.addEventListener('click',function(){ assignToggle(b.getAttribute('data-asgtoggle')); });
+    });
+  }
   function renderAssignPanel(){
     var p=document.getElementById('assignPanel');if(!p)return;
+    var OPEN=assignOpen();
     if(!SERV.length){p.innerHTML='<div class="note">Cadastre um serviço primeiro.</div>';return;}
     var svcOpts=SERV.map(function(s,i){return '<option value="'+i+'">'+s.n+'</option>';}).join('');
     var si=window._tcAssignSvc||0, s=SERV[si]; if(!s){si=0;s=SERV[0];}
@@ -6865,9 +6909,11 @@
           '<span class="note" style="margin-left:auto;white-space:nowrap">Equipe '+sg.team+' · S'+isoWeek(mondayOf(sg.start))+'–S'+isoWeek(mondayOf(sg.start+sg.dur-1))+'</span></div>';
       }).join('');
       p.innerHTML='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">'+
-        '<span class="lab">Lotes e sequência de execução por equipe</span>'+svcSelHtml0+'</div>'+
+        asgBtn('panel')+'<span class="lab">Lotes e sequência de execução por equipe</span>'+svcSelHtml0+'</div>'+
+        (!OPEN.panel?'':'')+
         '<div class="banner" style="margin:10px 0">⚠ "'+s.n+'" está com <b>fila dinâmica</b> ligada — a equipe de cada lote é escolhida automaticamente pelo cronograma, então não dá pra fixar manualmente aqui (nem arrastando na matriz). Se quiser atribuir equipes na mão, desligue "Equipe livre pega o próximo lote vazio (fila dinâmica)" em Serviços. Abaixo, a ordem que o cronograma calculou de verdade (só consulta):</div>'+
-        (realRows?'<div class="seqlist">'+realRows+'</div>':'<div class="note">Nenhum lote com quantidade pra este serviço ainda.</div>');
+        (!OPEN.panel?'':(realRows?'<div class="seqlist">'+realRows+'</div>':'<div class="note">Nenhum lote com quantidade pra este serviço ainda.</div>'));
+      wireAssignToggles(p);
       var selFD=document.getElementById('assignSvc');
       if(selFD){selFD.value=si;selFD.addEventListener('change',function(){window._tcAssignSvc=+selFD.value;window._tcAssignTeam=1;renderAssignPanel();});}
       return;
@@ -6901,14 +6947,18 @@
         '<span class="seqbtns"><button class="iconbtn" data-squp="'+item.li+'" title="Executar antes"'+(idx===0?' disabled':'')+'>↑</button>'+
         '<button class="iconbtn" data-sqdn="'+item.li+'" title="Executar depois"'+(idx===seqItems.length-1?' disabled':'')+'>↓</button></span></div>';
     }).join('');
+    var nChips=seqItems.length, nLotes=LOTS.filter(function(l,li){return QTY[li][si]>0;}).length;
     p.innerHTML='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">'+
-      '<span class="lab">Lotes e sequência de execução por equipe</span>'+
+      asgBtn('panel')+'<span class="lab">Lotes e sequência de execução por equipe</span>'+
       '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Serviço: <select id="assignSvc">'+svcOpts+'</select></label>'+
-      '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Equipe: <select id="assignTeam">'+teamOpts+'</select></label></div>'+
-      '<div class="note" style="margin:8px 0 4px">Lotes desta equipe (marque/desmarque pra reatribuir — marque o mesmo lote em mais de uma equipe pra dividir ele entre elas):</div>'+
-      '<div class="lotchips">'+chips+'</div>'+
-      '<div class="note" style="margin:10px 0 4px">Sequência de execução da Equipe '+team+' — do primeiro ao último lote (arraste ⋮ ou use as setas):</div>'+
-      (seqItems.length?'<div class="seqlist">'+seqRows+'</div>':'<div class="note">Nenhum lote atribuído a esta equipe ainda.</div>');
+      '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Equipe: <select id="assignTeam">'+teamOpts+'</select></label>'+
+      (OPEN.panel?'':'<span class="note">recolhido · '+nChips+' lote(s) na Equipe '+team+'</span>')+'</div>'+
+      (!OPEN.panel?'':
+        '<div class="note" style="margin:8px 0 4px;display:flex;align-items:center;gap:6px">'+asgBtn('chips')+'Lotes desta equipe (marque/desmarque pra reatribuir — marque o mesmo lote em mais de uma equipe pra dividir ele entre elas)'+(OPEN.chips?':':' — '+nLotes+' lote(s)')+'</div>'+
+        (OPEN.chips?'<div class="lotchips">'+chips+'</div>':'')+
+        '<div class="note" style="margin:10px 0 4px;display:flex;align-items:center;gap:6px">'+asgBtn('seq')+'Sequência de execução da Equipe '+team+' — do primeiro ao último lote (arraste ⋮ ou use as setas)'+(OPEN.seq?':':' — '+nChips+' lote(s)')+'</div>'+
+        (OPEN.seq?(seqItems.length?'<div class="seqlist">'+seqRows+'</div>':'<div class="note">Nenhum lote atribuído a esta equipe ainda.</div>'):''));
+    wireAssignToggles(p);
     var sel=document.getElementById('assignSvc');
     if(sel){sel.value=si;sel.addEventListener('change',function(){window._tcAssignSvc=+sel.value;window._tcAssignTeam=1;renderAssignPanel();});}
     var selT=document.getElementById('assignTeam');
