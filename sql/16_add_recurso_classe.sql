@@ -1,0 +1,13 @@
+-- ============================================================
+-- Histograma: classificação da mão de obra (MOD / MOI).
+--
+-- recursos.classe = 'mod' (mão de obra direta) | 'moi' (mão de obra indireta) | null.
+-- É uma característica da FUNÇÃO, independente de onde ela está alocada: a mesma
+-- função pode aparecer na equipe típica de um serviço (origem direta) e no Apoio
+-- Administrativo (origem indireta). No histograma dá pra filtrar pelas duas coisas
+-- separadamente — "Origem" (serviços × apoio) e "Mão de obra" (MOD × MOI).
+--
+-- A importação DP + CEQ preenche esta coluna sozinha quando estiver vazia, usando a
+-- coluna TIPO (MOD/MOI) da aba "Dados EFETIVO DP".
+-- ============================================================
+alter table public.recursos add column if not exists classe text;

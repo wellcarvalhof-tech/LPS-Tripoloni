@@ -765,7 +765,7 @@
     LOTE_COMPR=lot.map(function(r){return r.comprimento_m!=null?Number(r.comprimento_m):null;});
     LOTE_ESPAC=lot.map(function(r){return r.espacamento_estaca_m!=null?Number(r.espacamento_estaca_m):20;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
-    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',aliases:Array.isArray(r.aliases)?r.aliases:[]};});
+    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',classe:r.classe||'',aliases:Array.isArray(r.aliases)?r.aliases:[]};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
@@ -1443,6 +1443,10 @@
 
   var HIST_FILTER='todos', HIST_SVC=null;
   var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
+  // Classificação da mão de obra (característica da função, independente de onde está alocada):
+  // 'todas'|'mod' (direta)|'moi' (indireta)|'sem' (função ainda sem classificação).
+  var HIST_CLASSE='todas';
+  function classeLabel(c){ return c==='mod'?'Direta (MOD)':(c==='moi'?'Indireta (MOI)':'—'); }
   var HIST_OPEN={cadastro:false}; // o grupo "Cadastro histograma" começa recolhido — é configuração, não análise do dia a dia
   var REP_FROM=null, REP_TO=null, REP_TIPO='todos'; // relatório do período (semanas do projeto) e filtro de tipo
   var REAL_FILTER='todos';
@@ -1813,6 +1817,12 @@
   VIEWS['cr-hist']=function(){
     var hist=computeHistogram();
     var recDirty=Object.keys(REC_DIRTY).length;
+    function classeSel(r){
+      return '<select class="esel" data-field="classe" style="width:130px">'+
+        [['','—'],['mod','Direta (MOD)'],['moi','Indireta (MOI)']].map(function(o){
+          return '<option value="'+o[0]+'"'+((r.classe||'')===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')+'</select>';
+    }
     function recRowsOfType(tipo){
       return RECURSOS.map(function(r,ri){
         if(r.tipo!==tipo)return '';
@@ -1820,6 +1830,7 @@
         return '<tr data-ri="'+ri+'">'+
           '<td>'+sinp('nome',r.n,'260px')+'</td>'+
           '<td>'+sinp('categoria',r.cat,'130px')+'</td>'+
+          (tipo==='funcao'?'<td>'+classeSel(r)+'</td>':'')+
           '<td>'+sinp('unidade',r.u,'70px')+'</td>'+
           '<td class="r mono">'+fmtBR(peak)+'</td>'+
           '<td><button class="iconbtn" data-delrec="'+ri+'">✕</button></td></tr>';
@@ -1829,13 +1840,14 @@
     var nFuncoes=RECURSOS.filter(function(r){return r.tipo==='funcao';}).length;
     var nEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento';}).length;
     var catHead='<th style="min-width:260px">Nome</th><th>Categoria</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
-    var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria e unidade.',
+    var catHeadF='<th style="min-width:260px">Nome</th><th>Categoria</th><th title="Mão de obra direta (MOD) ou indireta (MOI) — característica da função, independente de estar num serviço ou no apoio">Classificação</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
+    var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria, classificação (MOD/MOI) e unidade.',
       '<button class="btn" id="histModelo">Modelo</button>'+
       '<button class="btn" id="histImportarFuncoes">↥ Importar Funções</button>'+
       '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
       '<button class="btn primary" id="addFuncao">+ Adicionar função</button>'+
       '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>',
-      nFuncoes?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+funcaoRows+'</tbody></table></div>':'<div class="note">Nenhuma função cadastrada ainda.</div>'
+      nFuncoes?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHeadF+'</tr></thead><tbody>'+funcaoRows+'</tbody></table></div>':'<div class="note">Nenhuma função cadastrada ainda.</div>'
     );
     var catalogoEquip=sectionCard('catEquip','Equipamentos ('+nEquip+')','Equipamentos cadastrados — nome, categoria e unidade.',
       '<button class="btn" id="histModeloEquip">Modelo</button>'+
@@ -1974,15 +1986,20 @@
       return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
     }).join('');
     var origemBtns=['todos','direto','indireto'].map(function(o){
-      var lbl=o==='todos'?'Todos':o==='direto'?'Direto (serviços)':'Indireto (apoio)';
+      var lbl=o==='todos'?'Todos':o==='direto'?'Alocado em serviços':'Alocado no apoio';
       return '<button class="subtab'+(HIST_ORIGEM===o?' active':'')+'" data-historigem="'+o+'">'+lbl+'</button>';
+    }).join('');
+    var nSemClasse=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!r.classe;}).length;
+    var classeBtns=[['todas','Todas'],['mod','Direta (MOD)'],['moi','Indireta (MOI)']].concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]).map(function(o){
+      return '<button class="subtab'+(HIST_CLASSE===o[0]?' active':'')+'" data-histclasse="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
       '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). "Direto" = mão de obra/equipamento de serviços; "Indireto" = Apoio Administrativo.</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da função no cadastro (MOD/MOI), independente da origem — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -3645,7 +3662,7 @@
       });
       document.querySelectorAll('table.edtbl tbody tr[data-ri]').forEach(function(tr){
         var ri=+tr.getAttribute('data-ri');
-        tr.querySelectorAll('[data-field]').forEach(function(inp){
+        tr.querySelectorAll('input[data-field],select[data-field]').forEach(function(inp){
           inp.addEventListener('change',function(){saveRecursoField(ri,inp);});
         });
         var del=tr.querySelector('[data-delrec]');
@@ -3746,6 +3763,9 @@
       });
       document.querySelectorAll('[data-historigem]').forEach(function(b){
         b.addEventListener('click',function(){HIST_ORIGEM=b.getAttribute('data-historigem'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-histclasse]').forEach(function(b){
+        b.addEventListener('click',function(){HIST_CLASSE=b.getAttribute('data-histclasse'); go('cr-hist');});
       });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
@@ -4175,7 +4195,12 @@
   function renderHistChart(){
     var el=document.getElementById('histSvg'); if(!el)return;
     var hist=computeHistogram(), tw=hist.tw;
-    var visRes=RECURSOS.filter(function(r){return HIST_FILTER==='todos'||r.tipo===HIST_FILTER;});
+    var visRes=RECURSOS.filter(function(r){
+      if(HIST_FILTER!=='todos'&&r.tipo!==HIST_FILTER)return false;
+      if(HIST_CLASSE==='todas')return true;
+      if(r.tipo!=='funcao')return false; // classificação MOD/MOI só existe pra mão de obra
+      return HIST_CLASSE==='sem'?!r.classe:(r.classe||'')===HIST_CLASSE;
+    });
     var legEl=document.getElementById('histLeg');
     if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
     // HIST_ORIGEM decompõe direto (serviços) × indireto (apoio administrativo). O previsto já
@@ -5090,6 +5115,7 @@
     else if(field==='unidade'){ r.u=val.trim()||'un'; }
     else if(field==='tipo'){ r.tipo=(val==='equipamento')?'equipamento':'funcao'; }
     else if(field==='categoria'){ r.cat=val.trim(); }
+    else if(field==='classe'){ r.classe=(val==='mod'||val==='moi')?val:''; }
     else return;
     REC_DIRTY[ri]=true;
     go('cr-hist');
@@ -5099,7 +5125,7 @@
     try{
       for(var i=0;i<idxs.length;i++){
         var r=RECURSOS[idxs[i]]; if(!r)continue;
-        await sbUpdateRecurso(r.id,{nome:r.n,tipo:r.tipo,unidade:r.u,categoria:r.cat||null});
+        await sbUpdateRecurso(r.id,{nome:r.n,tipo:r.tipo,unidade:r.u,categoria:r.cat||null,classe:r.classe||null});
       }
       REC_DIRTY={};
       go('cr-hist'); toast('Recursos salvos.');
@@ -5112,7 +5138,7 @@
     var patch={nome:tipo==='equipamento'?'Novo equipamento':'Nova função',tipo:tipo,unidade:'un',ordem:idx};
     try{
       var id=await sbCreateRecurso(selectedObra.id,patch);
-      RECURSOS.push({id:id,n:patch.nome,tipo:patch.tipo,u:patch.unidade,cat:''});
+      RECURSOS.push({id:id,n:patch.nome,tipo:patch.tipo,u:patch.unidade,cat:'',classe:'',aliases:[]});
       go('cr-hist'); toast('Recurso adicionado.');
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
@@ -5778,11 +5804,25 @@
     var addKey=function(k,r){ if(k&&!byKey[k])byKey[k]=r; };
     RECURSOS.forEach(function(r){ var k=normName(r.n); addKey(k,r); addKey(semSigla(k),r); (r.aliases||[]).forEach(function(a){ addKey(normName(a),r); addKey(semSigla(normName(a)),r); }); });
     var matchRes=function(nome){ return byKey[nome]||byKey[semSigla(nome)]||null; };
-    var sources=[], problems=[];
+    var sources=[], problems=[], classeVotes=null;
     if(wsDp){
       var aoa=sheetRows(wsDp), hdr=findHeaderRow(aoa,['ADMISSÃO','DEMISSÃO','FUNÇÃO OBRA']);
       if(!hdr)problems.push('Aba EFETIVO DP: não achei as colunas ADMISSÃO / DEMISSÃO / FUNÇÃO OBRA.');
-      else { var c=countPeriodsByWeek(aoa,hdr,['FUNÇÃO OBRA'],'ADMISSÃO','DEMISSÃO',tw,lastW,matchRes); sources.push({tipo:'funcao',label:'Mão de obra (DP)',counts:c.counts,rowsOk:c.rowsOk,semData:c.semData}); }
+      else {
+        var c=countPeriodsByWeek(aoa,hdr,['FUNÇÃO OBRA'],'ADMISSÃO','DEMISSÃO',tw,lastW,matchRes);
+        sources.push({tipo:'funcao',label:'Mão de obra (DP)',counts:c.counts,rowsOk:c.rowsOk,semData:c.semData});
+        // Classificação MOD/MOI: conta o TIPO de cada pessoa por função pra preencher recursos.classe
+        // que ainda estiver em branco (nunca sobrescreve o que já foi classificado à mão).
+        var hrowDp=(aoa[hdr.row]||[]).map(normName), jTipo=hrowDp.indexOf('TIPO'), jFun=hdr.ix['FUNÇÃO OBRA'];
+        if(jTipo>=0){
+          classeVotes={};
+          for(var iDp=hdr.row+1;iDp<aoa.length;iDp++){
+            var rowDp=aoa[iDp]||[], fn=normName(rowDp[jFun]), tp=normName(rowDp[jTipo]);
+            if(!fn||(tp!=='MOD'&&tp!=='MOI'))continue;
+            var v=classeVotes[fn]||(classeVotes[fn]={MOD:0,MOI:0}); v[tp]++;
+          }
+        }
+      }
     }
     if(wsCeq){
       // Equipamento: casa por qualquer uma das três colunas de tipo (TIPO TXC, TIPO V.A., Tipo)
@@ -5814,12 +5854,26 @@
       var r=matchRes(nome)||mapping[nome]; if(!r){ignored.push(src.counts[nome].orig||nome);return;}
       var arr=perRes[r.id]||(perRes[r.id]=[]); src.counts[nome].forEach(function(v,i){ arr[i]=(arr[i]||0)+(v||0); });
     }); });
+    // aplica a classificação MOD/MOI nas funções que ainda não tinham
+    var nClasse=0;
+    if(classeVotes){
+      var pend=[];
+      Object.keys(classeVotes).forEach(function(nome){
+        var r=matchRes(nome)||mapping[nome]; if(!r||r.tipo!=='funcao'||r.classe)return;
+        var v=classeVotes[nome], cl=v.MOD>=v.MOI?'mod':'moi';
+        r.classe=cl; nClasse++; pend.push({id:r.id,classe:cl,nome:r.n});
+      });
+      for(var ic=0;ic<pend.length;ic++){
+        try{ await sbUpdateRecurso(pend[ic].id,{classe:pend[ic].classe}); }
+        catch(e){ problems.push('Não consegui salvar a classificação de "'+pend[ic].nome+'": '+((e&&e.message)||e)+' (rodou a migração sql/16?)'); break; }
+      }
+    }
     var applied=0, nRes=0;
     Object.keys(perRes).forEach(function(id){ nRes++; for(var w=1;w<=lastW;w++){ var d=calWeekDate(w).toISOString().slice(0,10), v=perRes[id][w-1]||0; REALIZADO_REC[id+'::'+d]=v; REALIZADO_DIRTY[id+'::'+d]=v; applied++; } });
     HIST_OPEN.realizado=true;
     go('cr-hist');
     var resumo=sources.map(function(src){return src.label+': '+src.rowsOk+' linhas'+(src.semData?' ('+src.semData+' linhas sem data de entrada, ignoradas)':'');}).join(' · ');
-    var msg=nRes+' recurso(s) preenchidos até S'+isoWeek(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
+    var msg=nRes+' recurso(s) preenchidos até S'+isoWeek(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+(nClasse?' '+nClasse+' função(ões) classificadas como MOD/MOI pela coluna TIPO.':'')+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
     alert(msg);
   }
   /** De-para dos nomes da planilha que não casaram com nenhum recurso. Resolve com {nome: recurso|null} ou null se cancelar. */
