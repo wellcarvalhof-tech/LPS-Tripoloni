@@ -1522,6 +1522,8 @@
   }
   var HIST_OPEN={cadastro:false}; // o grupo "Cadastro histograma" começa recolhido — é configuração, não análise do dia a dia
   var REP_FROM=null, REP_TO=null, REP_TIPO='todos'; // relatório do período (semanas do projeto) e filtro de tipo
+  // Mesmos recortes do gráfico: origem (serviços × apoio) e classificação da mão de obra.
+  var REP_ORIGEM='todos', REP_CLASSE='todas';
   var REAL_FILTER='todos';
   var REAL_CAT_OPEN={};
   var TOT_FILTER='todos', TOT_OPEN={};
@@ -1540,12 +1542,18 @@
    * cadastrados — constante em todas as semanas do cronograma, já que não tem equipes próprias).
    * O realizado apontado por recurso é rateado entre TODAS as linhas que o usam naquela semana
    * (serviços e apoio juntos), proporcional ao previsto de cada uma. */
-  function computeServicePR(hist,tipoFilter){
-    tipoFilter=tipoFilter||'todos';
+  function computeServicePR(hist,tipoFilter,classeFilter){
+    tipoFilter=tipoFilter||'todos'; classeFilter=classeFilter||'todas';
+    function resMatch(r){
+      if(!r)return false;
+      if(tipoFilter!=='todos'&&r.tipo!==tipoFilter)return false;
+      if(classeFilter==='todas')return true;
+      if(r.tipo!=='funcao')return false; // classificação direto/indireto só existe pra mão de obra
+      return classeFilter==='sem'?!resClasse(r):resClasse(r)===classeFilter;
+    }
     function crewMatch(item){
-      if(tipoFilter==='todos')return true;
-      var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0];
-      return !!(r&&r.tipo===tipoFilter);
+      if(tipoFilter==='todos'&&classeFilter==='todas')return true;
+      return resMatch(RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]);
     }
     var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
     var previsto={}, realizado={};
@@ -1582,7 +1590,7 @@
     for(var w=1;w<=tw;w++){
       var d=calWeekDate(w).toISOString().slice(0,10);
       RECURSOS.forEach(function(r){
-        if(tipoFilter!=='todos'&&r.tipo!==tipoFilter)return;
+        if(!resMatch(r))return;
         var rv=REALIZADO_REC[r.id+'::'+d]||0; if(!rv)return;
         var totalPrev=0, shares=[];
         SERV.forEach(function(s,si){
@@ -1745,24 +1753,38 @@
     var tw=hist.tw||0; if(!tw)return null;
     var hoje=hojeCalWeek(tw)||1;
     var from=Math.min(tw,Math.max(1,REP_FROM||hoje)), to=Math.min(tw,Math.max(from,REP_TO||from));
-    var recs=RECURSOS.filter(function(r){return REP_TIPO==='todos'||r.tipo===REP_TIPO;});
+    var recs=RECURSOS.filter(function(r){
+      if(REP_TIPO!=='todos'&&r.tipo!==REP_TIPO)return false;
+      if(REP_CLASSE==='todas')return true;
+      if(r.tipo!=='funcao')return false;
+      return REP_CLASSE==='sem'?!resClasse(r):resClasse(r)===REP_CLASSE;
+    });
     var weeks=[]; for(var w=from;w<=to;w++)weeks.push(w);
     var dateOf={}; weeks.forEach(function(w){ dateOf[w]=calWeekDate(w).toISOString().slice(0,10); });
     var prevW={}, realW={}; weeks.forEach(function(w){prevW[w]=0;realW[w]=0;});
+    // Origem: "direto" = o que está na equipe típica dos serviços; "indireto" = Apoio
+    // Administrativo. O realizado apontado por recurso não vem separado por origem, então é
+    // rateado proporcional ao previsto de cada lado — mesma regra do gráfico do histograma.
     var porRecurso=recs.map(function(r){
-      var p=0, rv=0, arr=hist.byResource[r.id]||[];
-      weeks.forEach(function(w){ var pv=arr[w-1]||0, rr=REALIZADO_REC[r.id+'::'+dateOf[w]]||0; p+=pv; rv+=rr; prevW[w]+=pv; realW[w]+=rr; });
+      var p=0, rv=0, aD=hist.byResourceDireto[r.id]||[], aI=hist.byResourceIndireto[r.id]||[];
+      weeks.forEach(function(w){
+        var pd=aD[w-1]||0, pi=aI[w-1]||0, rTot=REALIZADO_REC[r.id+'::'+dateOf[w]]||0, pv, rr;
+        if(REP_ORIGEM==='direto'){ pv=pd; rr=(pd+pi>0)?rTot*(pd/(pd+pi)):0; }
+        else if(REP_ORIGEM==='indireto'){ pv=pi; rr=(pd+pi>0)?rTot*(pi/(pd+pi)):0; }
+        else { pv=pd+pi; rr=rTot; }
+        p+=pv; rv+=rr; prevW[w]+=pv; realW[w]+=rr;
+      });
       return {r:r,prev:p,real:rv};
     }).filter(function(x){return x.prev>0||x.real>0;});
-    var spr=computeServicePR(hist,REP_TIPO);
-    var porServico=SERV.map(function(s,si){
+    var spr=computeServicePR(hist,REP_TIPO,REP_CLASSE);
+    var porServico=(REP_ORIGEM==='indireto'?[]:SERV).map(function(s,si){
       var p=0, rv=0, pa=spr.previsto['s'+si]||[], ra=spr.realizado['s'+si]||[];
       weeks.forEach(function(w){ p+=pa[w-1]||0; rv+=ra[w-1]||0; });
       return {nome:s.n,cor:svcColor(s),prev:p,real:rv};
     }).filter(function(x){return x.prev>0||x.real>0;});
-    var pA=0, rA=0; weeks.forEach(function(w){ pA+=(spr.previsto.apoio||[])[w-1]||0; rA+=(spr.realizado.apoio||[])[w-1]||0; });
+    var pA=0, rA=0; if(REP_ORIGEM!=='direto')weeks.forEach(function(w){ pA+=(spr.previsto.apoio||[])[w-1]||0; rA+=(spr.realizado.apoio||[])[w-1]||0; });
     if(pA>0||rA>0)porServico.push({nome:'Apoio Administrativo (indireto)',cor:'var(--ink-2)',prev:pA,real:rA,italic:true});
-    var rS=0; weeks.forEach(function(w){ rS+=(spr.realizado.semprev||[])[w-1]||0; });
+    var rS=0; if(REP_ORIGEM==='todos')weeks.forEach(function(w){ rS+=(spr.realizado.semprev||[])[w-1]||0; });
     if(rS>0)porServico.push({nome:'Sem serviço previsto (recurso mobilizado fora do previsto)',cor:'var(--crit)',prev:0,real:rS,italic:true});
     var P=0,R=0; weeks.forEach(function(w){P+=prevW[w];R+=realW[w];});
     return {tw:tw,from:from,to:to,weeks:weeks,prevW:prevW,realW:realW,P:P,R:R,porRecurso:porRecurso,porServico:porServico};
@@ -1777,9 +1799,21 @@
     if(!d)return sectionCard('relatorio','Relatório do período',null,null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra gerar o relatório.</div>');
     var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
     var tipoBtns=['todos','funcao','equipamento'].map(function(f){
-      var lbl=f==='todos'?'Todos':f==='funcao'?'Mão de obra':'Equipamentos';
+      var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
       return '<button class="subtab'+(REP_TIPO===f?' active':'')+'" data-reptipo="'+f+'">'+lbl+'</button>';
     }).join('');
+    var origemBtnsR=['todos','direto','indireto'].map(function(o){
+      var lbl=o==='todos'?'Todos':o==='direto'?'Alocado em serviços':'Alocado no apoio';
+      return '<button class="subtab'+(REP_ORIGEM===o?' active':'')+'" data-reporigem="'+o+'">'+lbl+'</button>';
+    }).join('');
+    var nSemClasseR=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!resClasse(r);}).length;
+    var classeBtnsR=[['todas','Todas'],['direto','Direto'],['indireto','Indireto']].concat(nSemClasseR?[['sem','Sem classificação']]:[]).map(function(o){
+      return '<button class="subtab'+(REP_CLASSE===o[0]?' active':'')+'" data-repclasse="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+    var filtroTxt=[];
+    if(REP_TIPO!=='todos')filtroTxt.push(REP_TIPO==='funcao'?'só mão de obra':'só equipamentos');
+    if(REP_ORIGEM!=='todos')filtroTxt.push(REP_ORIGEM==='direto'?'só o alocado em serviços':'só o alocado no apoio');
+    if(REP_CLASSE!=='todas')filtroTxt.push(REP_CLASSE==='sem'?'só funções sem classificação':'só mão de obra '+(REP_CLASSE==='direto'?'direta':'indireta'));
     var periodoTxt=d.from===d.to?('Semana S'+isoWeek(calWeekDate(d.from))+' ('+fmtDate(calWeekDate(d.from))+')'):('S'+isoWeek(calWeekDate(d.from))+' a S'+isoWeek(calWeekDate(d.to))+' ('+fmtDate(calWeekDate(d.from))+' – '+fmtDate(calWeekDate(d.to))+', '+d.weeks.length+' semanas)');
     var diff=d.R-d.P;
     var kpis='<div class="grid g4" style="margin:10px 0 14px">'+
@@ -1795,7 +1829,7 @@
     var totRow='<tr style="font-weight:700;background:var(--elev)"><td>Total</td><td class="r mono">'+fmtBR(d.P)+'</td><td class="r mono">'+fmtBR(d.R)+'</td><td class="r mono">'+(diff>0?'+':'')+fmtBR(diff)+'</td><td class="r">'+iahHTML(d.P,d.R)+'</td></tr>';
     var body='<div class="rep-body">'+
       '<div class="print-only" style="font-weight:700;font-size:14px;margin-bottom:4px">'+escAttr((window._OBRA&&window._OBRA.nome)||'')+' — Relatório do histograma</div>'+
-      '<div class="note" style="margin-bottom:6px">Período: <b>'+periodoTxt+'</b>'+(REP_TIPO!=='todos'?' · '+(REP_TIPO==='funcao'?'só mão de obra':'só equipamentos'):'')+'. IAH = realizado ÷ previsto (verde entre 95% e 105%; amarelo abaixo; vermelho acima).</div>'+
+      '<div class="note" style="margin-bottom:6px">Período: <b>'+periodoTxt+'</b>'+(filtroTxt.length?' · '+filtroTxt.join(' · '):'')+'. IAH = realizado ÷ previsto (verde entre 95% e 105%; amarelo abaixo; vermelho acima).</div>'+
       kpis+
       '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras) · acumulado no período (eixo da direita)</div><svg class="chart" id="repSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg>'+
         '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--accent)"></span>Realizado (barras)</span><span><span class="swatch" style="background:var(--ink-2)"></span>Previsto (linha)</span><span><span class="swatch" style="background:var(--muted)"></span>Previsto acumulado (tracejado)</span><span><span class="swatch" style="background:var(--accent);border:2px solid var(--accent)"></span>Realizado acumulado (linha cheia)</span></div></div>'+
@@ -1806,8 +1840,12 @@
     var actions='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
       '<span class="note">De</span><select class="esel" id="repFrom">'+opts(d.from)+'</select>'+
       '<span class="note">até</span><select class="esel" id="repTo">'+opts(d.to)+'</select>'+
-      '<span style="display:flex;gap:2px">'+tipoBtns+'</span>'+
-      '<button class="btn" id="repPrint">🖨 Imprimir relatório</button></div>';
+      '<button class="btn" id="repPrint">🖨 Imprimir relatório</button></div>'+
+      '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;margin-top:6px">'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+tipoBtns+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtnsR+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtnsR+'</div>'+
+      '</div>';
     return '<div id="repCard">'+sectionCard('relatorio','Relatório do período',null,actions,body)+'</div>';
   }
   function realizadoHTML(hist){
@@ -3877,6 +3915,12 @@
       if(repTo)repTo.addEventListener('change',function(){ REP_TO=+repTo.value; if(REP_FROM&&REP_FROM>REP_TO)REP_FROM=REP_TO; go('cr-hist'); });
       document.querySelectorAll('[data-reptipo]').forEach(function(b){
         b.addEventListener('click',function(){REP_TIPO=b.getAttribute('data-reptipo'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-reporigem]').forEach(function(b){
+        b.addEventListener('click',function(){REP_ORIGEM=b.getAttribute('data-reporigem'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-repclasse]').forEach(function(b){
+        b.addEventListener('click',function(){REP_CLASSE=b.getAttribute('data-repclasse'); go('cr-hist');});
       });
       var repPrint=document.getElementById('repPrint');
       if(repPrint)repPrint.addEventListener('click',function(){
