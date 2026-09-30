@@ -5882,27 +5882,110 @@
     go('cr-hist');
     toast('Importado: '+appliedRows+' item(ns) de equipe em '+Object.keys(touchedSi).length+' serviço(s). Clique em "Salvar alterações" pra confirmar.');
   }
+  /** Lê a planilha de realizado sem depender da posição fixa das colunas: acha a linha de
+   *  cabeçalho, a coluna do nome do recurso e as colunas de semana (rótulo "S38", uma data, ou
+   *  qualquer coluna numérica depois do cabeçalho conhecido). */
+  function detectRealizadoLayout(aoa){
+    var FIXAS=['RECURSO','NOME','FUNCAO','FUNÇÃO','EQUIPAMENTO','CATEGORIA','TIPO','UNIDADE','UN','PICO','PICO SIMULTANEO','CLASSIFICACAO','DESCRICAO','DESCRIÇÃO','ITEM'];
+    for(var i=0;i<Math.min(aoa.length,12);i++){
+      var row=aoa[i]||[]; if(row.length<2)continue;
+      var nomeCol=-1, weekCols=[];
+      for(var c=0;c<row.length;c++){
+        var raw=row[c], t=normName(raw);
+        if(!t&&raw==null)continue;
+        var isSem=/^S\s*\d{1,2}$/.test(t)||/^SEMANA\s*\d*$/.test(t)||/^\d{4}-\d{2}-\d{2}/.test(String(raw))||(raw instanceof Date)||(typeof raw==='number'&&raw>40000&&raw<60000)||/^\d{2}\/\d{2}\/\d{2,4}$/.test(String(raw).trim());
+        if(isSem){ weekCols.push({c:c,label:String(raw instanceof Date?excelDateToIso(raw):raw).trim(),raw:raw}); continue; }
+        if(nomeCol<0&&FIXAS.indexOf(t)>=0&&(t==='RECURSO'||t==='NOME'||t==='FUNCAO'||t==='FUNÇÃO'||t==='EQUIPAMENTO'||t==='DESCRICAO'||t==='DESCRIÇÃO'||t==='ITEM'))nomeCol=c;
+      }
+      if(weekCols.length){ if(nomeCol<0)nomeCol=0; return {headerRow:i,nomeCol:nomeCol,weekCols:weekCols}; }
+    }
+    return null;
+  }
+  /** Qual semana do projeto tem esse rótulo/data? Devolve 0 quando não dá pra saber. */
+  function semanaDoRotulo(label,raw,tw){
+    var iso=excelDateToIso(raw);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(iso)){
+      var mon=mondayOfIso(iso);
+      for(var w=1;w<=tw;w++){ if(calWeekDate(w).toISOString().slice(0,10)===mon)return w; }
+      return 0;
+    }
+    var m=String(label||'').match(/(\d{1,2})/);
+    if(m){ var n=+m[1];
+      for(var w2=1;w2<=tw;w2++){ if(isoWeek(calWeekDate(w2))===n)return w2; }
+    }
+    return 0;
+  }
+  /** Pergunta em qual semana começa a importação (e se soma ou substitui). Resolve com
+   *  {startWeek,modo} ou null se cancelar. */
+  function openImportRealizadoDialog(info,tw,detectada){
+    return new Promise(function(resolve){
+      var back=document.createElement('div'); back.className='segmenu-backdrop';
+      var opts=''; for(var w=1;w<=tw;w++)opts+='<option value="'+w+'"'+(w===detectada?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>';
+      var colsTxt=info.weekCols.map(function(x){return escAttr(x.label||('coluna '+(x.c+1)));}).slice(0,10).join(', ')+(info.weekCols.length>10?'…':'');
+      back.innerHTML='<div class="segmenu-panel card" style="max-width:560px"><div class="eyebrow" style="margin-bottom:4px">Importar realizado — em qual semana?</div>'+
+        '<div class="note" style="margin-bottom:10px">Encontrei <b>'+info.weekCols.length+'</b> coluna(s) de período na planilha ('+colsTxt+'). Escolha a semana do cronograma que corresponde à <b>primeira</b> delas — as seguintes entram nas semanas seguintes, em ordem.</div>'+
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px"><span class="note">Primeira coluna =</span><select class="esel" id="impStart" style="max-width:260px">'+opts+'</select><span class="note" id="impRange"></span></div>'+
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">'+
+          '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px"><input type="radio" name="impModo" value="substituir" checked> Substituir o que já estiver nessas semanas</label>'+
+          '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px"><input type="radio" name="impModo" value="somar"> Somar ao que já existe</label>'+
+        '</div>'+
+        '<div class="note">Recursos da planilha que não existirem no cadastro são ignorados (o resumo avisa quais).</div>'+
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" id="impCancel">Cancelar</button><button class="btn primary" id="impOk">Importar</button></div></div>';
+      document.body.appendChild(back);
+      var sel=back.querySelector('#impStart'), rng=back.querySelector('#impRange');
+      function upd(){
+        var st=+sel.value, fim=Math.min(tw,st+info.weekCols.length-1);
+        rng.textContent=info.weekCols.length>1?('→ até S'+isoWeek(calWeekDate(fim))+(st+info.weekCols.length-1>tw?' (colunas além do fim do cronograma são ignoradas)':'')):'';
+      }
+      sel.addEventListener('change',upd); upd();
+      function close(){back.remove();}
+      back.querySelector('#impCancel').addEventListener('click',function(){close();resolve(null);});
+      back.querySelector('#impOk').addEventListener('click',function(){
+        var modo=(back.querySelector('input[name="impModo"]:checked')||{}).value||'substituir';
+        close(); resolve({startWeek:+sel.value,modo:modo});
+      });
+    });
+  }
   async function importRealizadoWorkbook(wb){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    if(isReadOnly()){alert('Seu perfil é só de visualização.');return;}
     var ws=wb.Sheets['Histograma']||wb.Sheets[wb.SheetNames[0]];
     if(!ws){alert('Planilha não reconhecida.');return;}
     var aoa=sheetRows(ws); if(aoa.length<2){alert('Planilha vazia.');return;}
-    var header=aoa[0];
-    var weekCols=[]; for(var c=5;c<header.length;c++){weekCols.push(c);} // pula Recurso/Categoria/Tipo/Unidade/Pico
-    var byName={}; RECURSOS.forEach(function(r){byName[r.n.trim().toLowerCase()]=r;});
-    var applied=0;
-    for(var i=1;i<aoa.length;i++){
-      var row=aoa[i]; if(!row||!row[0])continue;
-      var r=byName[String(row[0]).trim().toLowerCase()]; if(!r)continue;
-      for(var wi=0;wi<weekCols.length;wi++){
-        var w=wi+1, val=Number(row[weekCols[wi]]); if(!isFinite(val))continue;
-        var d=calWeekDate(w).toISOString().slice(0,10);
-        REALIZADO_REC[r.id+'::'+d]=val;
-        REALIZADO_DIRTY[r.id+'::'+d]=val;
+    var tw=computeHistogram().tw||0; if(!tw){alert('Monte o cronograma antes: o histograma ainda não tem semanas.');return;}
+    var info=detectRealizadoLayout(aoa);
+    if(!info){alert('Não achei colunas de semana na planilha.\n\nO cabeçalho precisa ter colunas com o número da semana (S38, S39…) ou a data da segunda-feira. Use o botão "Modelo" como referência.');return;}
+    var detectada=semanaDoRotulo(info.weekCols[0].label,info.weekCols[0].raw,tw)||hojeCalWeek(tw)||1;
+    var escolha=await openImportRealizadoDialog(info,tw,detectada);
+    if(!escolha)return;
+    var byName={};
+    RECURSOS.forEach(function(r){ byName[normName(r.n)]=r; (r.aliases||[]).forEach(function(a){ if(!byName[normName(a)])byName[normName(a)]=r; }); });
+    var applied=0, semRec=[], foraDoPrazo=0;
+    for(var i=info.headerRow+1;i<aoa.length;i++){
+      var row=aoa[i]; if(!row)continue;
+      var nome=String(row[info.nomeCol]==null?'':row[info.nomeCol]).trim(); if(!nome)continue;
+      var r=byName[normName(nome)];
+      if(!r){ if(semRec.indexOf(nome)<0)semRec.push(nome); continue; }
+      for(var wi=0;wi<info.weekCols.length;wi++){
+        var w=escolha.startWeek+wi; if(w>tw){foraDoPrazo++;continue;}
+        var cell=row[info.weekCols[wi].c];
+        if(cell===''||cell==null)continue;
+        var val=Number(String(cell).replace(/\./g,'').replace(',','.'));
+        if(!isFinite(val))continue;
+        var d=calWeekDate(w).toISOString().slice(0,10), k=r.id+'::'+d;
+        var novo=escolha.modo==='somar'?((+REALIZADO_REC[k]||0)+val):val;
+        REALIZADO_REC[k]=novo; REALIZADO_DIRTY[k]=novo;
         applied++;
       }
     }
-    go('cr-hist'); toast(applied+' apontamento(s) importado(s). Clique "Salvar apontamentos" pra confirmar.');
+    HIST_OPEN.realizado=true;
+    go('cr-hist');
+    var msg=applied+' apontamento(s) importado(s) a partir da semana S'+isoWeek(calWeekDate(escolha.startWeek))+
+      ' ('+(escolha.modo==='somar'?'somando ao que já existia':'substituindo')+').'+
+      (foraDoPrazo?' '+foraDoPrazo+' valor(es) caíram além do fim do cronograma e foram ignorados.':'')+
+      (semRec.length?'\n\nSem recurso correspondente no cadastro (ignorados): '+semRec.slice(0,12).join(', ')+(semRec.length>12?' e mais '+(semRec.length-12):'')+'.':'')+
+      '\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
+    alert(msg);
   }
 
   /* ---- Importação do realizado a partir da planilha de acompanhamento (DP + CEQ) ----
