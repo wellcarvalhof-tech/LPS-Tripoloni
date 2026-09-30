@@ -771,7 +771,7 @@
   }
   async function sbLoadCadastro(obraId){
     var res=await Promise.all([
-      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos').eq('id',obraId).single(),
+      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId),
@@ -805,7 +805,8 @@
     ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; EST_OPEN={};
     REC_DIRTY={}; REALIZADO_DIRTY={}; APOIO_DIRTY={}; APOIO_SELECTED={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
-    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
+    LB=null; LB_DIRTY=false; // estudo de linha de balanço desta obra (recarrega do banco)
+    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
 
   function showAuth(){var g=document.getElementById('authGate');if(g)g.hidden=false;}
@@ -863,7 +864,7 @@
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
       ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo'],['cad-acessos','Acessos']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
-      ['cr-matriz','Matriz Tempo-Caminho'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
+      ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
@@ -873,7 +874,7 @@
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
     'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
-    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
     'lp-medio':['Last Planner','Médio Prazo'],'lp-semana':['Last Planner','Programação Semanal'],'lp-ppc':['Last Planner','PPC & Causas']};
 
@@ -1000,7 +1001,7 @@
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
       Object.keys(QTY_DIRTY||{}).length>0 || Object.keys(LOT_PACOTE_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY ||
       Object.keys(REC_DIRTY||{}).length>0 || Object.keys(REALIZADO_DIRTY||{}).length>0 || Object.keys(ESTACA_QTY_DIRTY||{}).length>0 ||
-      Object.keys(APOIO_DIRTY||{}).length>0;
+      Object.keys(APOIO_DIRTY||{}).length>0 || !!LB_DIRTY;
   }
   function refreshTopSaveBtn(){
     var b=document.getElementById('topSaveBtn'); if(!b)return;
@@ -1023,6 +1024,7 @@
       if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length)await saveLotesAll();
       if(Object.keys(REC_DIRTY).length)await saveRecursosAll();
       if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
+      if(LB_DIRTY)await lbSalvar();
       if(Object.keys(ESTACA_QTY_DIRTY).length)await saveEstacaQtdAll();
       if(Object.keys(APOIO_DIRTY).length)await saveApoioAll();
       toast('Tudo salvo.');
@@ -1205,7 +1207,7 @@
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
 
-    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['lb','Linha de balanço'],['medio','Médio prazo','lp-medio'],
+    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['medio','Médio prazo','lp-medio'],
       ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     window._cronoTab=window._cronoTab||'tc';
@@ -3616,6 +3618,7 @@
   function afterRender(view){
     if(view==='torre'){setupTorre();}
     if(view==='torre-rel'){execReportDraw();}
+    if(view==='cr-lb'){wireLinhaBalanco();}
     if(view==='ac-curvas'){
       renderCurvaS();
       var curveSelEl=document.getElementById('cvCurveSel');
@@ -6852,16 +6855,6 @@
         go(current);
       });
     });
-    document.querySelectorAll('[data-lbsvc]').forEach(function(cb){
-      cb.addEventListener('change',function(){
-        var si=+cb.getAttribute('data-lbsvc');
-        if(cb.checked)delete LB_HIDDEN[si]; else LB_HIDDEN[si]=true;
-        renderCrono();
-      });
-    });
-    document.querySelectorAll('[data-lbmode]').forEach(function(b){
-      b.addEventListener('click',function(){ LB_MODE=b.getAttribute('data-lbmode'); renderCrono(); });
-    });
     document.querySelectorAll('[data-svcvis]').forEach(function(cb){
       cb.addEventListener('change',function(){
         var si=+cb.getAttribute('data-svcvis');
@@ -6873,82 +6866,185 @@
     if(showAll)showAll.addEventListener('click',function(){ TC_HIDDEN_SVC={}; go(current); });
   }
 
-  /* ================= Linha de balanço =================
-   * Vista clássica de obra linear: cada serviço vira uma faixa que caminha pelos lotes ao longo
-   * do tempo (eixo X = lotes na ordem da obra, eixo Y = semanas). A inclinação da faixa é o
-   * ritmo: linhas paralelas = ritmos casados; linhas que se cruzam = interferência entre
-   * serviços. Lê o mesmo cronograma do Tempo-Caminho (buildSchedule) — não muda nada nele.
-   * LB_HIDDEN guarda os serviços ocultos só nesta aba. */
-  var LB_HIDDEN={}, LB_MODE='faixa'; // 'faixa' = início e fim; 'linha' = só o término
-  function linhaBalancoSVG(){
-    var segsAll=buildSchedule(), segs=viewSegs(segsAll);
-    var lotIdxs=viewLotIdxs();
-    if(!segs.length||!lotIdxs.length)return '<div class="note">Sem cronograma pra desenhar.</div>';
-    var tw=1; segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
-    var posOf={}; lotIdxs.forEach(function(li,i){posOf[li]=i;});
-    var n=lotIdxs.length;
-    var W=1000, labelH=Math.min(120,Math.max(40,(function(){var m=0;lotIdxs.forEach(function(li){m=Math.max(m,String(LOTS[li]||'').length);});return m*5.2+14;})()));
-    var pl=52, pr=16, pt=16, pb=labelH+18, H=620, iw=W-pl-pr, ih=H-pt-pb;
-    var xx=function(li){ return pl+(n<=1?iw/2:iw*posOf[li]/(n-1)); };
-    var yy=function(w){ return pt+ih*(w-1)/Math.max(1,tw); };
+  /* ================= Linha de Balanço (tela própria) =================
+   * Estudo independente do Tempo-Caminho: o usuário escolhe os lotes (eixo vertical) e monta
+   * as atividades na mão — início, duração por lote e ritmo (intervalo entre lotes). O gráfico
+   * tem TEMPO na horizontal e LOTES na vertical. Nada aqui mexe no cronograma calculado; fica
+   * guardado em obras.linha_balanco (migração 20) e depois dá pra ligar os dois. */
+  var LB=null;        // {lotes:[loteId], atividades:[{id,nome,cor,inicio,dur,passo,de,ate}]}
+  var LB_DIRTY=false;
+  var LB_PAL=['#c0392b','#e67e22','#f1c40f','#27ae60','#2980b9','#8e44ad','#16a085','#7f8c8d'];
+  function lbLoteIds(){ return window._LOTIDS||[]; }
+  function lbNomeLote(id){ var ids=lbLoteIds(), i=ids.indexOf(id); return i>=0?(LOTS[i]||id):id; }
+  function lbData(){
+    if(LB)return LB;
+    var raw=(window._OBRA&&window._OBRA.linha_balanco)||null;
+    if(raw&&typeof raw==='object'&&Array.isArray(raw.lotes)){
+      LB={lotes:raw.lotes.slice(),atividades:(raw.atividades||[]).map(function(a){return Object.assign({},a);})};
+    } else {
+      // Começa com todos os lotes da obra e nenhuma atividade.
+      LB={lotes:lbLoteIds().slice(),atividades:[]};
+    }
+    return LB;
+  }
+  function lbMarkDirty(){ LB_DIRTY=true; refreshTopSaveBtn(); }
+  async function lbSalvar(){
+    if(!selectedObra||!LB)return;
+    try{
+      await sbUpdateObra(selectedObra.id,{linha_balanco:{lotes:LB.lotes,atividades:LB.atividades}});
+      LB_DIRTY=false; go('cr-lb'); toast('Linha de balanço salva.');
+    }catch(e){
+      var m=(e&&e.message)||e;
+      alert('Falha ao salvar: '+m+(/linha_balanco/.test(String(m))?'\n\nRode a migração sql/20_add_linha_balanco.sql no Supabase.':''));
+    }
+  }
+  function lbNovaAtividade(nome,cor){
+    var d=lbData();
+    d.atividades.push({id:'a'+Date.now()+Math.floor(Math.random()*999),nome:nome||'Nova atividade',
+      cor:cor||LB_PAL[d.atividades.length%LB_PAL.length],inicio:1,dur:2,passo:1,de:0,ate:Math.max(0,d.lotes.length-1)});
+    lbMarkDirty(); go('cr-lb');
+  }
+  /** Semana de início e fim de cada lote de uma atividade (índices relativos à lista de lotes). */
+  function lbSpans(a,nLotes){
+    var de=Math.max(0,Math.min(nLotes-1,+a.de||0)), ate=Math.max(de,Math.min(nLotes-1,a.ate==null?nLotes-1:+a.ate));
+    var passo=(+a.passo||0), dur=Math.max(0.1,+a.dur||1), ini=Math.max(1,+a.inicio||1);
+    var out=[];
+    for(var i=de;i<=ate;i++){ var st=ini+(i-de)*passo; out.push({i:i,start:st,end:st+dur}); }
+    return out;
+  }
+  function lbSVG(){
+    var d=lbData(), lotes=d.lotes.filter(function(id){return lbLoteIds().indexOf(id)>=0;});
+    if(!lotes.length)return '<div class="note">Escolha pelo menos um lote abaixo.</div>';
+    if(!d.atividades.length)return '<div class="note">Adicione uma atividade pra desenhar a linha de balanço.</div>';
+    var n=lotes.length, twMax=1;
+    d.atividades.forEach(function(a){ lbSpans(a,n).forEach(function(sp){ twMax=Math.max(twMax,sp.end); }); });
+    var tw=Math.ceil(twMax)+1;
+    var labelW=Math.min(170,Math.max(60,(function(){var m=0;lotes.forEach(function(id){m=Math.max(m,String(lbNomeLote(id)).length);});return m*6.4+16;})()));
+    var W=1060, pl=labelW, pr=18, pt=26, pb=44, rowH=Math.max(14,Math.min(30,Math.floor(520/n)));
+    var ih=n*rowH, H=pt+ih+pb, iw=W-pl-pr;
+    var xx=function(w){ return pl+iw*(w-1)/Math.max(1,tw-1); };
+    var yy=function(i){ return pt+ih-(i+0.5)*rowH; }; // 1º lote embaixo (a obra sobe)
     var s='';
-    // grade de semanas (a cada N) + meses
+    // faixas dos lotes
+    lotes.forEach(function(id,i){
+      var y=pt+ih-(i+1)*rowH;
+      if(i%2===0)s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
+      s+='<text class="axm" x="'+(pl-8)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+(rowH<18?8:10)+'px">'+escAttr(lbNomeLote(id))+'</text>';
+    });
+    // grade de semanas + meses
     var stepW=Math.max(1,Math.ceil(tw/26));
     for(var w=1;w<=tw;w+=stepW){
-      s+='<line x1="'+pl+'" y1="'+yy(w).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(w).toFixed(1)+'" stroke="var(--line)"/>'+
-        '<text class="axm" x="'+(pl-6)+'" y="'+(yy(w)+3).toFixed(1)+'" text-anchor="end">S'+isoWeek(mondayOf(w))+'</text>';
+      s+='<line x1="'+xx(w).toFixed(1)+'" y1="'+pt+'" x2="'+xx(w).toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>';
     }
-    // linhas verticais dos lotes + rótulos na vertical
-    lotIdxs.forEach(function(li){
-      var x=xx(li);
-      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)" opacity=".5"/>'+
-        '<text class="axm" font-size="8" transform="translate('+(x+3).toFixed(1)+','+(pt+ih+6)+') rotate(90)" text-anchor="start">'+escAttr(LOTS[li]||'')+'</text>';
-    });
+    var wn=[]; for(var wi=1;wi<=tw;wi++)wn.push(wi);
+    s+=weekAxisSVG(wn,function(i){return xx(i+1);},iw/Math.max(1,tw-1),pt+ih,pl,W-pr,mondayOf);
     // hoje
     var hojeW=hojeWeekNumber(tw);
-    if(hojeW>0&&hojeW<=tw)s+='<line x1="'+pl+'" y1="'+yy(hojeW).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(hojeW).toFixed(1)+'" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 3"><title>Hoje — S'+isoWeek(mondayOf(hojeW))+'</title></line>';
-    // uma faixa por serviço × equipe (equipes do mesmo serviço viram linhas separadas)
-    var porSvcTeam={};
-    segs.forEach(function(sg){
-      if(LB_HIDDEN[sg.si])return;
-      if(posOf[sg.li]==null)return;
-      var k=sg.si+'::'+sg.team;
-      (porSvcTeam[k]||(porSvcTeam[k]=[])).push(sg);
+    if(hojeW>0&&hojeW<=tw)s+='<line x1="'+xx(hojeW).toFixed(1)+'" y1="'+pt+'" x2="'+xx(hojeW).toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 3"><title>Hoje</title></line>';
+    // atividades
+    d.atividades.forEach(function(a){
+      var sp=lbSpans(a,n); if(!sp.length)return;
+      var cor=a.cor||'#888';
+      var pIni=sp.map(function(x){ return xx(x.start).toFixed(1)+','+yy(x.i).toFixed(1); });
+      var pFim=sp.map(function(x){ return xx(x.end).toFixed(1)+','+yy(x.i).toFixed(1); });
+      s+='<polygon points="'+pIni.join(' ')+' '+pFim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".25"/>';
+      s+='<polyline points="'+pIni.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2"/>';
+      s+='<polyline points="'+pFim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2"/>';
+      sp.forEach(function(x){
+        s+='<rect x="'+xx(x.start).toFixed(1)+'" y="'+(yy(x.i)-rowH*0.28).toFixed(1)+'" width="'+Math.max(2,xx(x.end)-xx(x.start)).toFixed(1)+'" height="'+(rowH*0.56).toFixed(1)+'" rx="2" fill="'+cor+'" opacity=".85"><title>'+escAttr(a.nome)+'\n'+escAttr(lbNomeLote(lotes[x.i]))+'\nS'+isoWeek(mondayOf(Math.round(x.start)))+' → S'+isoWeek(mondayOf(Math.max(1,Math.round(x.end)-1)))+'</title></rect>';
+      });
+      var mid=sp[Math.floor(sp.length/2)];
+      s+='<text x="'+xx(mid.start+((+a.dur||1)/2)).toFixed(1)+'" y="'+(yy(mid.i)-rowH*0.45).toFixed(1)+'" text-anchor="middle" style="font-size:9px;fill:'+cor+';font-weight:700">'+escAttr(a.nome)+'</text>';
     });
-    Object.keys(porSvcTeam).forEach(function(k){
-      var arr=porSvcTeam[k].slice().sort(function(a,b){return a.start-b.start||posOf[a.li]-posOf[b.li];});
-      var sv=SERV[arr[0].si], cor=arr[0].color||svcColor(sv);
-      var ini=arr.map(function(sg){return xx(sg.li).toFixed(1)+','+yy(sg.start).toFixed(1);});
-      var fim=arr.map(function(sg){return xx(sg.li).toFixed(1)+','+yy(sg.start+sg.dur-1+1).toFixed(1);});
-      if(LB_MODE==='faixa'&&arr.length){
-        s+='<polygon points="'+ini.join(' ')+' '+fim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".22"/>';
-      }
-      if(LB_MODE==='faixa')s+='<polyline points="'+ini.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.5" opacity=".9"/>';
-      s+='<polyline points="'+fim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2.5"/>';
-      arr.forEach(function(sg){
-        s+='<circle cx="'+xx(sg.li).toFixed(1)+'" cy="'+yy(sg.start+sg.dur).toFixed(1)+'" r="2.6" fill="'+cor+'"><title>'+escAttr(sv.n)+' · Equipe '+sg.team+'\n'+escAttr(LOTS[sg.li]||'')+'\nS'+isoWeek(mondayOf(sg.start))+' a S'+isoWeek(mondayOf(sg.start+sg.dur-1))+' ('+sg.dur+' sem)\n'+fmtBR(sg.qty)+' '+escAttr(sv.u||'')+'</title></circle>';
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:860px">'+s+'</svg>';
+  }
+  VIEWS['cr-lb']=function(){
+    if(!LOTS.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os lotes da obra primeiro (Tempo Caminho → Lotes & Quantidades).</div></div>';
+    var d=lbData(), ids=lbLoteIds();
+    var nAt=d.atividades.length;
+    var svcOpts='<option value="">+ Adicionar do serviço…</option>'+SERV.map(function(sv,si){return '<option value="'+si+'">'+escAttr(sv.n)+'</option>';}).join('');
+    var loteChips=ids.map(function(id,i){
+      var on=d.lotes.indexOf(id)>=0;
+      return '<label class="lotchip'+(on?' on':' other')+'"><input type="checkbox" data-lblote="'+escAttr(id)+'"'+(on?' checked':'')+'>'+escAttr(LOTS[i]||id)+'</label>';
+    }).join('');
+    var opLotes=d.lotes.map(function(id,i){ return {v:i,t:lbNomeLote(id)}; });
+    var selLote=function(name,val,ai){
+      return '<select class="esel" data-lbat="'+ai+'" data-lbf="'+name+'" style="width:110px">'+
+        opLotes.map(function(o){ return '<option value="'+o.v+'"'+(o.v===val?' selected':'')+'>'+escAttr(o.t)+'</option>'; }).join('')+'</select>';
+    };
+    var rows=d.atividades.map(function(a,ai){
+      var de=Math.max(0,Math.min(d.lotes.length-1,+a.de||0)), ate=Math.max(de,Math.min(d.lotes.length-1,a.ate==null?d.lotes.length-1:+a.ate));
+      return '<tr>'+
+        '<td><input class="einp" data-lbat="'+ai+'" data-lbf="nome" value="'+escAttr(a.nome)+'" style="width:190px"></td>'+
+        '<td><input type="color" data-lbat="'+ai+'" data-lbf="cor" value="'+escAttr(a.cor||'#888888')+'" style="width:42px;height:26px;padding:0;border:0;background:none"></td>'+
+        '<td>'+selLote('de',de,ai)+'</td><td>'+selLote('ate',ate,ai)+'</td>'+
+        '<td><input class="einp" type="number" min="1" data-lbat="'+ai+'" data-lbf="inicio" value="'+(+a.inicio||1)+'" style="width:64px"></td>'+
+        '<td><input class="einp" type="number" min="0.5" step="0.5" data-lbat="'+ai+'" data-lbf="dur" value="'+(+a.dur||1)+'" style="width:64px"></td>'+
+        '<td><input class="einp" type="number" min="0" step="0.5" data-lbat="'+ai+'" data-lbf="passo" value="'+(a.passo==null?1:+a.passo)+'" style="width:64px"></td>'+
+        '<td><button class="iconbtn" data-lbup="'+ai+'" title="Subir">↑</button><button class="iconbtn" data-lbdn="'+ai+'" title="Descer">↓</button><button class="iconbtn" data-lbdel="'+ai+'" title="Excluir">✕</button></td></tr>';
+    }).join('');
+    return head('Linha de Balanço','Estudo de ritmo independente do Tempo-Caminho.',
+        '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
+      '<div class="card" style="margin-bottom:14px">'+
+        '<div class="tc-head" style="margin-bottom:6px"><div><h3>Linha de Balanço</h3>'+
+        '<p>Tempo na horizontal, lotes na vertical (o primeiro lote embaixo). Cada atividade começa numa semana, leva N semanas em cada lote e avança de lote em lote no ritmo que você definir — a inclinação da faixa é esse ritmo. '+
+        'É um estudo à parte: nada aqui altera a Matriz Tempo-Caminho.</p></div></div>'+
+        '<div class="tc-wrap" style="padding:6px">'+lbSVG()+'</div>'+
+        '<div class="legend" style="margin-top:8px"><span><span class="swatch" style="background:var(--accent)"></span>Linha tracejada = hoje</span></div>'+
+      '</div>'+
+      '<div class="card" style="margin-bottom:14px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
+          '<div><div class="eyebrow" style="margin:0">Atividades ('+nAt+')</div><div class="note">Início = semana do projeto no primeiro lote · Duração = semanas em cada lote · Ritmo = semanas entre um lote e o seguinte (0 = todos juntos).</div></div>'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap"><select class="esel" id="lbAddSvc">'+svcOpts+'</select>'+
+          '<button class="btn primary" id="lbAddLivre">+ Atividade</button></div>'+
+        '</div>'+
+        (nAt?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Atividade</th><th>Cor</th><th>Do lote</th><th>Até o lote</th><th>Início (sem)</th><th>Duração/lote</th><th>Ritmo (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhuma atividade ainda — use "+ Atividade" ou puxe um serviço já cadastrado.</div>')+
+      '</div>'+
+      '<div class="card">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Lotes da linha de balanço ('+d.lotes.length+' de '+ids.length+')</div>'+
+        '<div class="note" style="margin-bottom:8px">Marque quais lotes entram no estudo. A ordem é a mesma do cadastro de lotes; o primeiro marcado fica embaixo no gráfico.</div>'+
+        '<div class="lotchips">'+loteChips+'</div>'+
+      '</div>';
+  };
+  function wireLinhaBalanco(){
+    var root=document.getElementById('content'); if(!root)return;
+    var d=lbData();
+    root.querySelectorAll('[data-lblote]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var id=cb.getAttribute('data-lblote');
+        if(cb.checked){ if(d.lotes.indexOf(id)<0){ // mantém a ordem do cadastro
+            var ids=lbLoteIds(); d.lotes=ids.filter(function(x){ return x===id||d.lotes.indexOf(x)>=0; }); } }
+        else d.lotes=d.lotes.filter(function(x){return x!==id;});
+        lbMarkDirty(); go('cr-lb');
       });
     });
-    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:820px">'+s+'</svg>';
-  }
-  function linhaBalancoHTML(){
-    if(!SERV.length||!LOTS.length)return '<div class="note">Cadastre serviços, lotes e quantidades pra ver a linha de balanço.</div>';
-    var toggles='<div class="tc-svctoggle">'+SERV.map(function(sv,si){
-      var off=!!LB_HIDDEN[si];
-      return '<label class="lotchip'+(off?' other':' on')+'"><input type="checkbox" data-lbsvc="'+si+'"'+(off?'':' checked')+'><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</label>';
-    }).join('')+'</div>';
-    var modos=[['faixa','Faixa (início → fim)'],['linha','Só a linha de término']].map(function(m){
-      return '<button class="subtab'+(LB_MODE===m[0]?' active':'')+'" data-lbmode="'+m[0]+'">'+m[1]+'</button>';
-    }).join('');
-    return '<div class="tc-head" style="margin-bottom:6px"><div><h3>Linha de balanço</h3>'+
-      '<p>Cada serviço caminhando pelos lotes ao longo do tempo — eixo horizontal = lotes na ordem da obra, vertical = semanas (começo em cima). '+
-      'Inclinação = ritmo: linhas paralelas indicam ritmos casados; linhas que se aproximam ou cruzam indicam serviço alcançando o da frente. '+
-      'Vem do mesmo cronograma do Tempo-Caminho — esta aba só mostra, não altera nada.</p></div></div>'+
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'+modos+'</div>'+
-      toggles+
-      '<div class="tc-wrap" id="tcWrap" style="padding:6px">'+linhaBalancoSVG()+'</div>'+
-      '<div class="legend" style="margin-top:8px"><span><span class="swatch" style="background:var(--accent)"></span>Linha tracejada = hoje</span>'+
-      '<span class="note">Passe o mouse nos pontos pra ver lote, equipe, semanas e quantidade.</span></div>';
+    root.querySelectorAll('[data-lbat]').forEach(function(el){
+      el.addEventListener('change',function(){
+        var a=d.atividades[+el.getAttribute('data-lbat')]; if(!a)return;
+        var f=el.getAttribute('data-lbf'), v=el.value;
+        if(f==='nome')a.nome=v.trim()||'Atividade';
+        else if(f==='cor')a.cor=v;
+        else if(f==='de'||f==='ate')a[f]=parseInt(v,10)||0;
+        else a[f]=Math.max(f==='inicio'?1:0,parseFloat(v)||0);
+        if(a.ate<a.de)a.ate=a.de;
+        lbMarkDirty(); go('cr-lb');
+      });
+    });
+    root.querySelectorAll('[data-lbdel]').forEach(function(b){
+      b.addEventListener('click',function(){ d.atividades.splice(+b.getAttribute('data-lbdel'),1); lbMarkDirty(); go('cr-lb'); });
+    });
+    var mover=function(i,dir){ var j=i+dir; if(j<0||j>=d.atividades.length)return; var t=d.atividades[i]; d.atividades[i]=d.atividades[j]; d.atividades[j]=t; lbMarkDirty(); go('cr-lb'); };
+    root.querySelectorAll('[data-lbup]').forEach(function(b){ b.addEventListener('click',function(){ mover(+b.getAttribute('data-lbup'),-1); }); });
+    root.querySelectorAll('[data-lbdn]').forEach(function(b){ b.addEventListener('click',function(){ mover(+b.getAttribute('data-lbdn'),1); }); });
+    var addLivre=document.getElementById('lbAddLivre');
+    if(addLivre)addLivre.addEventListener('click',function(){ lbNovaAtividade(); });
+    var addSvc=document.getElementById('lbAddSvc');
+    if(addSvc)addSvc.addEventListener('change',function(){
+      var si=addSvc.value; if(si==='')return;
+      var sv=SERV[+si]; lbNovaAtividade(sv?sv.n:'', sv?svcColor(sv):null);
+    });
+    var save=document.getElementById('lbSave');
+    if(save)save.addEventListener('click',lbSalvar);
   }
   function editarPorEquipeHTML(){
     var segs=buildSchedule().slice().sort(function(a,b){return a.si-b.si||a.team-b.team||a.start-b.start;});
@@ -7001,7 +7097,7 @@
    *  botões do ajuste manual, que ficam fora do bloco do cronograma. */
   function fsBarHTML(){
     var tab=window._cronoTab||'tc';
-    var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['lb','Linha de balanço'],['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt']]
+    var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt']]
       .filter(function(t){ return !(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe')); })
       .map(function(t){ return '<button class="subtab'+(tab===t[0]?' active':'')+'" data-fstab="'+t[0]+'">'+t[1]+'</button>'; }).join('');
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'';
@@ -7026,7 +7122,6 @@
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
-    if(tab==='lb') return fsBarHTML()+linhaBalancoHTML();
     if(tab==='equipe') return fsBarHTML()+editarPorEquipeHTML();
     if(tab==='resumo') return fsBarHTML()+resumoHTML();
     if(tab==='gantt') return fsBarHTML()+ganttHTML();

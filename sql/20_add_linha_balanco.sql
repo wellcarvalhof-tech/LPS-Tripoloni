@@ -1,0 +1,21 @@
+-- ============================================================
+-- Linha de Balanço (tela própria, ao lado da Matriz Tempo-Caminho).
+--
+-- É um estudo INDEPENDENTE do cronograma: o usuário escolhe quais lotes e quais
+-- atividades entram, e define início, duração por lote e intervalo entre lotes na
+-- mão. Nada aqui altera o Tempo-Caminho — a ideia é poder desenhar o ritmo desejado
+-- antes (ou ao lado) do cronograma calculado, e no futuro ligar os dois.
+--
+-- Formato de obras.linha_balanco:
+-- {
+--   "lotes": ["<lote_id>", ...],                      -- ordem de baixo pra cima no gráfico
+--   "atividades": [
+--     {"id":"a1","nome":"Terraplenagem","cor":"#c0392b",
+--      "inicio":1,          -- semana do projeto em que a atividade começa no 1º lote
+--      "dur":2,             -- semanas que ela leva em cada lote
+--      "passo":1,           -- semanas entre o início de um lote e o do seguinte (ritmo)
+--      "de":0,"ate":9}      -- índices (na lista de lotes acima) do trecho que ela percorre
+--   ]
+-- }
+-- ============================================================
+alter table public.obras add column if not exists linha_balanco jsonb;

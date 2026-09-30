@@ -23,5 +23,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `17_add_admin_desenvolvedor.sql` | Registra a sua conta como **desenvolvedor (admin global)**: enxerga e edita todas as obras, inclusive as criadas por outras pessoas. Troque o e-mail no topo do arquivo antes de rodar. | ⚠️ novo — rodar com o seu e-mail |
 | `18_limita_criacao_de_obras.sql` | Só desenvolvedor (ilimitado) e planejador (uma obra do zero) podem criar obra; gestor e visualizador não criam | ⚠️ novo — rodar depois da 17 |
 | `19_add_realizado_terceiro.sql` | Coluna `apontamento_recursos.quantidade_terceiro` — parcela de terceiros dentro do realizado (total = próprio + terceiro); preenchida pela coluna Locador na importação CEQ | ⚠️ novo — rodar pra separar próprio × terceiro |
+| `20_add_linha_balanco.sql` | Coluna `obras.linha_balanco` — estudo de linha de balanço (lotes, atividades, início, duração e ritmo), independente do Tempo-Caminho | ⚠️ novo — rodar pra usar a tela Linha de Balanço |
+| `20_add_linha_balanco.sql` | Coluna `obras.linha_balanco` — estudo de linha de balanço (lotes, atividades, início, duração e ritmo), independente do Tempo-Caminho | ⚠️ novo — rodar pra usar a tela Linha de Balanço |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.
