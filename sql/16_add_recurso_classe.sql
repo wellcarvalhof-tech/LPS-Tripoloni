@@ -1,7 +1,9 @@
 -- ============================================================
 -- Histograma: classificação da mão de obra (MOD / MOI).
 --
--- recursos.classe = 'mod' (direta) / 'moi' (indireta) / null — definido por CATEGORIA no app.
+-- recursos.classe, definida por CATEGORIA no app:
+--   mão de obra  -> 'direto' | 'indireto' | 'terceirizado'
+--   equipamento  -> 'proprio' (frota Tripoloni) | 'terceiro' (locado)
 -- A escolha é feita por CATEGORIA (a mesma já cadastrada em cada função) e todas as
 -- funções da categoria herdam — a coluna guarda o resultado em cada recurso.
 -- É independente de onde a função está alocada: a mesma função pode aparecer na equipe
@@ -10,6 +12,7 @@
 -- e "Mão de obra" (MOD × MOI).
 --
 -- A importação DP + CEQ preenche esta coluna sozinha quando estiver vazia, usando a
--- coluna TIPO (MOD/MOI) da aba "Dados EFETIVO DP", pela predominância em cada categoria.
+-- coluna TIPO (MOD/MOI) da aba "Dados EFETIVO DP" e a coluna Locador da aba "DADOS
+-- Realizado CEQ" (TRIPOLONI = própria; outra empresa = terceiro), pela predominância na categoria.
 -- ============================================================
 alter table public.recursos add column if not exists classe text;

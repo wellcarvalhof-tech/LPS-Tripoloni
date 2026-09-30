@@ -784,7 +784,7 @@
     LOTE_COMPR=lot.map(function(r){return r.comprimento_m!=null?Number(r.comprimento_m):null;});
     LOTE_ESPAC=lot.map(function(r){return r.espacamento_estaca_m!=null?Number(r.espacamento_estaca_m):20;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
-    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',classe:normClasse(r.classe),aliases:Array.isArray(r.aliases)?r.aliases:[]};});
+    RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',classe:normClasse(r.classe,r.tipo||'funcao'),aliases:Array.isArray(r.aliases)?r.aliases:[]};});
     REALIZADO_REC={}; apr.forEach(function(r){REALIZADO_REC[r.recurso_id+'::'+r.data_semana]=Number(r.quantidade)||0;});
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
@@ -1485,14 +1485,34 @@
   var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
   // Classificação da mão de obra (característica da função, independente de onde está alocada):
   // 'todas'|'mod' (direta)|'moi' (indireta)|'sem' (função ainda sem classificação).
-  var HIST_CLASSE='todas';
-  function normClasse(v){
+  var HIST_CLASSE='todas';   // mão de obra: todas|direto|indireto|terceirizado|sem
+  var HIST_CLASSE_EQ='todos'; // equipamentos: todos|proprio|terceiro|sem
+  /** Classificação de um recurso, por domínio:
+   *   mão de obra  -> 'direto' | 'indireto' | 'terceirizado'
+   *   equipamento  -> 'proprio' (Tripoloni) | 'terceiro' (locado)
+   *  Entende o texto da categoria, da coluna TIPO do DP (MOD/MOI) e do Locador do CEQ. */
+  function normClasse(v,tipo){
     var t=String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+    if(tipo==='equipamento'){
+      if(/TERCEIR|LOCAD|ALUGAD/.test(t))return 'terceiro';
+      if(/TRIPOLONI|PROPRI|FROTA/.test(t))return 'proprio';
+      return '';
+    }
+    if(/TERCEIR|^PJ$/.test(t))return 'terceirizado';
     if(/INDIRET|^MOI$/.test(t))return 'indireto';
     if(/DIRET|^MOD$/.test(t))return 'direto';
     return '';
   }
-  function classeLabel(c){ return c==='direto'?'Direto':(c==='indireto'?'Indireto':'—'); }
+  function classeLabel(c){
+    return c==='direto'?'Direto':(c==='indireto'?'Indireto':(c==='terceirizado'?'Terceirizada':
+      (c==='proprio'?'Tripoloni':(c==='terceiro'?'Terceiro':'—'))));
+  }
+  function classeCor(c){ return (c==='direto'||c==='proprio')?'var(--good)':(c?'var(--warn)':'var(--muted)'); }
+  /** Opções de classificação disponíveis pra cada tipo de recurso. */
+  function classeOpcoes(tipo){
+    return tipo==='equipamento'?[['','—'],['proprio','Tripoloni'],['terceiro','Terceiro']]
+      :[['','—'],['direto','Direto'],['indireto','Indireto'],['terceirizado','Terceirizada']];
+  }
   /** A classificação MOD/MOI é definida por CATEGORIA (a mesma já cadastrada em cada função):
    *  todas as funções de "Serventes" são MOD, todas de "Encarregados - Escritório" são MOI, etc.
    *  Guardamos em cada recurso (recursos.classe), mas quem manda é a categoria — mudar a
@@ -1501,31 +1521,40 @@
   /** A categoria da obra já pode dizer tudo ("DIRETO"/"INDIRETO"): nesse caso a classificação sai
    *  direto dela, sem ninguém precisar escolher nada. Categorias com outro nome ("Serventes",
    *  "Encarregados - Escritório") usam a escolha guardada em recursos.classe. */
-  function classeFromCat(cat){ return normClasse(cat); }
-  function resClasse(r){ return (r&&r.classe)||classeFromCat(r&&r.cat); }
-  function classeOfCat(cat){
-    cat=(cat||'').trim();
-    var pelaCat=classeFromCat(cat); if(pelaCat)return pelaCat;
+  function classeFromCat(cat,tipo){ return normClasse(cat,tipo||'funcao'); }
+  function resClasse(r){ return (r&&r.classe)||classeFromCat(r&&r.cat,r&&r.tipo); }
+  function classeOfCat(cat,tipo){
+    cat=(cat||'').trim(); tipo=tipo||'funcao';
+    var pelaCat=classeFromCat(cat,tipo); if(pelaCat)return pelaCat;
     var found='';
-    RECURSOS.forEach(function(r){ if(r.tipo==='funcao'&&catKey(r)===cat&&r.classe&&!found)found=r.classe; });
+    RECURSOS.forEach(function(r){ if(r.tipo===tipo&&catKey(r)===cat&&r.classe&&!found)found=r.classe; });
     return found;
   }
-  /** Categorias de mão de obra cadastradas, na ordem em que aparecem. */
-  function funcaoCats(){
+  /** Categorias cadastradas de um tipo de recurso, na ordem em que aparecem. */
+  function catsDoTipo(tipo){
     var seen={}, out=[];
-    RECURSOS.forEach(function(r){ if(r.tipo!=='funcao')return; var c=catKey(r); if(seen[c])return; seen[c]=1; out.push(c); });
+    RECURSOS.forEach(function(r){ if(r.tipo!==tipo)return; var c=catKey(r); if(seen[c])return; seen[c]=1; out.push(c); });
     return out;
   }
-  function setClasseCat(cat,classe){
-    classe=normClasse(classe);
+  function setClasseCat(cat,classe,tipo){
+    tipo=tipo||'funcao'; classe=normClasse(classe,tipo);
     var n=0;
-    RECURSOS.forEach(function(r,ri){ if(r.tipo!=='funcao'||catKey(r)!==(cat||'').trim())return; if((r.classe||'')===(classe||''))return; r.classe=classe||''; REC_DIRTY[ri]=true; n++; });
+    RECURSOS.forEach(function(r,ri){ if(r.tipo!==tipo||catKey(r)!==(cat||'').trim())return; if((r.classe||'')===(classe||''))return; r.classe=classe||''; REC_DIRTY[ri]=true; n++; });
     return n;
+  }
+  /** O recurso passa pelos filtros de classificação (um pra mão de obra, outro pra equipamento)? */
+  function passaClasse(r,cMO,cEQ){
+    if(r.tipo==='equipamento'){
+      if(!cEQ||cEQ==='todos')return true;
+      return cEQ==='sem'?!resClasse(r):resClasse(r)===cEQ;
+    }
+    if(!cMO||cMO==='todas')return true;
+    return cMO==='sem'?!resClasse(r):resClasse(r)===cMO;
   }
   var HIST_OPEN={cadastro:false}; // o grupo "Cadastro histograma" começa recolhido — é configuração, não análise do dia a dia
   var REP_FROM=null, REP_TO=null, REP_TIPO='todos'; // relatório do período (semanas do projeto) e filtro de tipo
   // Mesmos recortes do gráfico: origem (serviços × apoio) e classificação da mão de obra.
-  var REP_ORIGEM='todos', REP_CLASSE='todas';
+  var REP_ORIGEM='todos', REP_CLASSE='todas', REP_CLASSE_EQ='todos';
   // Plano de mobilização: semana do previsto (alvo) × semana do realizado (situação atual).
   var REP_MOB_PREV=null, REP_MOB_REAL=null;
   var REAL_FILTER='todos';
@@ -1546,17 +1575,15 @@
    * cadastrados — constante em todas as semanas do cronograma, já que não tem equipes próprias).
    * O realizado apontado por recurso é rateado entre TODAS as linhas que o usam naquela semana
    * (serviços e apoio juntos), proporcional ao previsto de cada uma. */
-  function computeServicePR(hist,tipoFilter,classeFilter){
-    tipoFilter=tipoFilter||'todos'; classeFilter=classeFilter||'todas';
+  function computeServicePR(hist,tipoFilter,classeMO,classeEQ){
+    tipoFilter=tipoFilter||'todos'; classeMO=classeMO||'todas'; classeEQ=classeEQ||'todos';
     function resMatch(r){
       if(!r)return false;
       if(tipoFilter!=='todos'&&r.tipo!==tipoFilter)return false;
-      if(classeFilter==='todas')return true;
-      if(r.tipo!=='funcao')return false; // classificação direto/indireto só existe pra mão de obra
-      return classeFilter==='sem'?!resClasse(r):resClasse(r)===classeFilter;
+      return passaClasse(r,classeMO,classeEQ);
     }
     function crewMatch(item){
-      if(tipoFilter==='todos'&&classeFilter==='todas')return true;
+      if(tipoFilter==='todos'&&classeMO==='todas'&&classeEQ==='todos')return true;
       return resMatch(RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]);
     }
     var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService;
@@ -1759,9 +1786,7 @@
     var from=Math.min(tw,Math.max(1,REP_FROM||hoje)), to=Math.min(tw,Math.max(from,REP_TO||from));
     var recs=RECURSOS.filter(function(r){
       if(REP_TIPO!=='todos'&&r.tipo!==REP_TIPO)return false;
-      if(REP_CLASSE==='todas')return true;
-      if(r.tipo!=='funcao')return false;
-      return REP_CLASSE==='sem'?!resClasse(r):resClasse(r)===REP_CLASSE;
+      return passaClasse(r,REP_CLASSE,REP_CLASSE_EQ);
     });
     var weeks=[]; for(var w=from;w<=to;w++)weeks.push(w);
     var dateOf={}; weeks.forEach(function(w){ dateOf[w]=calWeekDate(w).toISOString().slice(0,10); });
@@ -1780,7 +1805,7 @@
       });
       return {r:r,prev:p,real:rv};
     }).filter(function(x){return x.prev>0||x.real>0;});
-    var spr=computeServicePR(hist,REP_TIPO,REP_CLASSE);
+    var spr=computeServicePR(hist,REP_TIPO,REP_CLASSE,REP_CLASSE_EQ);
     var porServico=(REP_ORIGEM==='indireto'?[]:SERV).map(function(s,si){
       var p=0, rv=0, pa=spr.previsto['s'+si]||[], ra=spr.realizado['s'+si]||[];
       weeks.forEach(function(w){ p+=pa[w-1]||0; rv+=ra[w-1]||0; });
@@ -1812,9 +1837,7 @@
     var dReal=calWeekDate(real).toISOString().slice(0,10);
     var recs=RECURSOS.filter(function(r){
       if(REP_TIPO!=='todos'&&r.tipo!==REP_TIPO)return false;
-      if(REP_CLASSE==='todas')return true;
-      if(r.tipo!=='funcao')return false;
-      return REP_CLASSE==='sem'?!resClasse(r):resClasse(r)===REP_CLASSE;
+      return passaClasse(r,REP_CLASSE,REP_CLASSE_EQ);
     });
     var linhas=recs.map(function(r){
       var aD=hist.byResourceDireto[r.id]||[], aI=hist.byResourceIndireto[r.id]||[];
@@ -1875,13 +1898,18 @@
       return '<button class="subtab'+(REP_ORIGEM===o?' active':'')+'" data-reporigem="'+o+'">'+lbl+'</button>';
     }).join('');
     var nSemClasseR=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!resClasse(r);}).length;
-    var classeBtnsR=[['todas','Todas'],['direto','Direto'],['indireto','Indireto']].concat(nSemClasseR?[['sem','Sem classificação']]:[]).map(function(o){
+    var classeBtnsR=[['todas','Todas'],['direto','Direto'],['indireto','Indireto'],['terceirizado','Terceirizada']].concat(nSemClasseR?[['sem','Sem classificação']]:[]).map(function(o){
       return '<button class="subtab'+(REP_CLASSE===o[0]?' active':'')+'" data-repclasse="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+    var nSemClasseEqR=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!resClasse(r);}).length;
+    var classeEqBtnsR=[['todos','Todos'],['proprio','Tripoloni'],['terceiro','Terceiro']].concat(nSemClasseEqR?[['sem','Sem classificação']]:[]).map(function(o){
+      return '<button class="subtab'+(REP_CLASSE_EQ===o[0]?' active':'')+'" data-repclasseeq="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
     var filtroTxt=[];
     if(REP_TIPO!=='todos')filtroTxt.push(REP_TIPO==='funcao'?'só mão de obra':'só equipamentos');
     if(REP_ORIGEM!=='todos')filtroTxt.push(REP_ORIGEM==='direto'?'só o alocado em serviços':'só o alocado no apoio');
-    if(REP_CLASSE!=='todas')filtroTxt.push(REP_CLASSE==='sem'?'só funções sem classificação':'só mão de obra '+(REP_CLASSE==='direto'?'direta':'indireta'));
+    if(REP_CLASSE!=='todas')filtroTxt.push(REP_CLASSE==='sem'?'só funções sem classificação':'só mão de obra '+(REP_CLASSE==='direto'?'direta':(REP_CLASSE==='indireto'?'indireta':'terceirizada')));
+    if(REP_CLASSE_EQ!=='todos')filtroTxt.push(REP_CLASSE_EQ==='sem'?'só equipamentos sem classificação':'só equipamento '+(REP_CLASSE_EQ==='proprio'?'Tripoloni':'de terceiro'));
     var periodoTxt=d.from===d.to?('Semana S'+isoWeek(calWeekDate(d.from))+' ('+fmtDate(calWeekDate(d.from))+')'):('S'+isoWeek(calWeekDate(d.from))+' a S'+isoWeek(calWeekDate(d.to))+' ('+fmtDate(calWeekDate(d.from))+' – '+fmtDate(calWeekDate(d.to))+', '+d.weeks.length+' semanas)');
     var diff=d.R-d.P;
     var kpis='<div class="grid g4" style="margin:10px 0 14px">'+
@@ -1914,6 +1942,7 @@
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+tipoBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtnsR+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtnsR+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Equipamentos:</span>'+classeEqBtnsR+'</div>'+
       '</div>';
     return '<div id="repCard">'+sectionCard('relatorio','Relatório do período',null,actions,body)+'</div>';
   }
@@ -2000,7 +2029,7 @@
     // A classificação não é editada aqui: ela vem da categoria (bloco abaixo da tabela).
     function classeCell(r){
       var c=resClasse(r);
-      return '<span class="note"'+(c?' style="color:'+(c==='direto'?'var(--good)':'var(--warn)')+';font-weight:600"':'')+'>'+(c?classeLabel(c):'—')+'</span>';
+      return '<span class="note"'+(c?' style="color:'+classeCor(c)+';font-weight:600"':'')+'>'+(c?classeLabel(c):'—')+'</span>';
     }
     function recRowsOfType(tipo){
       return RECURSOS.map(function(r,ri){
@@ -2009,7 +2038,7 @@
         return '<tr data-ri="'+ri+'">'+
           '<td>'+sinp('nome',r.n,'260px')+'</td>'+
           '<td>'+sinp('categoria',r.cat,'130px')+'</td>'+
-          (tipo==='funcao'?'<td>'+classeCell(r)+'</td>':'')+
+          '<td>'+classeCell(r)+'</td>'+
           '<td>'+sinp('unidade',r.u,'70px')+'</td>'+
           '<td class="r mono">'+fmtBR(peak)+'</td>'+
           '<td><button class="iconbtn" data-delrec="'+ri+'">✕</button></td></tr>';
@@ -2018,22 +2047,33 @@
     var funcaoRows=recRowsOfType('funcao'), equipRows=recRowsOfType('equipamento');
     var nFuncoes=RECURSOS.filter(function(r){return r.tipo==='funcao';}).length;
     var nEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento';}).length;
-    var catHead='<th style="min-width:260px">Nome</th><th>Categoria</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
-    var catHeadF='<th style="min-width:260px">Nome</th><th>Categoria</th><th title="Direto ou indireto — vem da categoria da função (categorias chamadas Direto/Indireto já classificam sozinhas)">Classificação</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>';
-    // Quadro de classificação por categoria: uma escolha por categoria vale pra todas as funções dela.
-    var catsF=funcaoCats();
-    var classePorCat=!catsF.length?'':'<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">'+
-      '<div class="eyebrow" style="margin-bottom:2px">Classificação da mão de obra por categoria</div>'+
-      '<div class="note" style="margin-bottom:8px">Categoria chamada "Direto" ou "Indireto" já vale como classificação — não precisa mexer. Nas outras, escolha aqui e todas as funções da categoria herdam (depois clique em 💾 Salvar alterações).</div>'+
-      '<div class="tbl-wrap"><table class="edtbl crew-tbl"><thead><tr><th>Categoria</th><th class="r">Funções</th><th>Classificação</th></tr></thead><tbody>'+
-      catsF.map(function(c){
-        var n=RECURSOS.filter(function(r){return r.tipo==='funcao'&&catKey(r)===c;}).length, cur=classeOfCat(c), auto=classeFromCat(c);
-        return '<tr><td>'+(c?escAttr(c):'<i>Sem categoria</i>')+'</td><td class="r mono">'+n+'</td><td>'+
-          (auto?'<span class="note" style="color:'+(auto==='direto'?'var(--good)':'var(--warn)')+';font-weight:600">'+classeLabel(auto)+'</span> <span class="note">(pelo nome da categoria)</span>':
-            '<select class="esel" data-catclasse="'+escAttr(c)+'" style="width:150px">'+
-            [['','—'],['direto','Direto'],['indireto','Indireto']].map(function(o){ return '<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+
-            '</select>')+'</td></tr>';
-      }).join('')+'</tbody></table></div></div>';
+    var catHeadBase=function(titulo){ return '<th style="min-width:260px">Nome</th><th>Categoria</th><th title="'+titulo+'">Classificação</th><th>Unidade</th><th class="r">Pico simultâneo</th><th></th>'; };
+    var catHead=catHeadBase('Tripoloni ou terceiro — vem da categoria do equipamento, ou da coluna Locador na importação CEQ');
+    var catHeadF=catHeadBase('Direto, indireto ou terceirizada — vem da categoria da função (categorias com esses nomes já classificam sozinhas)');
+    /** Quadro de classificação por categoria — uma escolha por categoria vale pra todos os
+     *  recursos dela. Serve pra mão de obra (direto/indireto/terceirizada) e pra equipamento
+     *  (Tripoloni/terceiro). */
+    function classePorCatHTML(tipo){
+      var cats=catsDoTipo(tipo); if(!cats.length)return '';
+      var opts=classeOpcoes(tipo);
+      var titulo=tipo==='equipamento'?'Classificação dos equipamentos por categoria':'Classificação da mão de obra por categoria';
+      var nota=tipo==='equipamento'
+        ?'Categoria chamada "Tripoloni"/"Próprio" ou "Terceiro"/"Locado" já vale como classificação. Nas outras, escolha aqui — a importação CEQ também preenche sozinha pela coluna <b>Locador</b>.'
+        :'Categoria chamada "Direto", "Indireto" ou "Terceirizada" já vale como classificação. Nas outras, escolha aqui e todas as funções da categoria herdam.';
+      return '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">'+
+        '<div class="eyebrow" style="margin-bottom:2px">'+titulo+'</div>'+
+        '<div class="note" style="margin-bottom:8px">'+nota+' Depois clique em 💾 Salvar alterações.</div>'+
+        '<div class="tbl-wrap"><table class="edtbl crew-tbl"><thead><tr><th>Categoria</th><th class="r">Itens</th><th>Classificação</th></tr></thead><tbody>'+
+        cats.map(function(c){
+          var n=RECURSOS.filter(function(r){return r.tipo===tipo&&catKey(r)===c;}).length, cur=classeOfCat(c,tipo), auto=classeFromCat(c,tipo);
+          return '<tr><td>'+(c?escAttr(c):'<i>Sem categoria</i>')+'</td><td class="r mono">'+n+'</td><td>'+
+            (auto?'<span class="note" style="color:'+classeCor(auto)+';font-weight:600">'+classeLabel(auto)+'</span> <span class="note">(pelo nome da categoria)</span>':
+              '<select class="esel" data-catclasse="'+escAttr(c)+'" data-cattipo="'+tipo+'" style="width:160px">'+
+              opts.map(function(o){ return '<option value="'+o[0]+'"'+(cur===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+
+              '</select>')+'</td></tr>';
+        }).join('')+'</tbody></table></div></div>';
+    }
+    var classePorCat=classePorCatHTML('funcao'), classePorCatEq=classePorCatHTML('equipamento');
     var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria, classificação (direto/indireto, vinda da categoria) e unidade.',
       '<button class="btn" id="histModelo">Modelo</button>'+
       '<button class="btn" id="histImportarFuncoes">↥ Importar Funções</button>'+
@@ -2042,11 +2082,11 @@
       '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>',
       nFuncoes?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHeadF+'</tr></thead><tbody>'+funcaoRows+'</tbody></table></div>'+classePorCat:'<div class="note">Nenhuma função cadastrada ainda.</div>'
     );
-    var catalogoEquip=sectionCard('catEquip','Equipamentos ('+nEquip+')','Equipamentos cadastrados — nome, categoria e unidade.',
+    var catalogoEquip=sectionCard('catEquip','Equipamentos ('+nEquip+')','Equipamentos cadastrados — nome, categoria, classificação (Tripoloni/terceiro) e unidade.',
       '<button class="btn" id="histModeloEquip">Modelo</button>'+
       '<button class="btn" id="histImportarEquip">↥ Importar Equipamentos</button>'+
       '<button class="btn primary" id="addEquip">+ Adicionar equipamento</button>',
-      nEquip?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+equipRows+'</tbody></table></div>':'<div class="note">Nenhum equipamento cadastrado ainda.</div>'
+      nEquip?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+equipRows+'</tbody></table></div>'+classePorCatEq:'<div class="note">Nenhum equipamento cadastrado ainda.</div>'
     );
 
     var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
@@ -2183,16 +2223,21 @@
       return '<button class="subtab'+(HIST_ORIGEM===o?' active':'')+'" data-historigem="'+o+'">'+lbl+'</button>';
     }).join('');
     var nSemClasse=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!resClasse(r);}).length;
-    var classeBtns=[['todas','Todas'],['direto','Direto'],['indireto','Indireto']].concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]).map(function(o){
+    var classeBtns=[['todas','Todas'],['direto','Direto'],['indireto','Indireto'],['terceirizado','Terceirizada']].concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]).map(function(o){
       return '<button class="subtab'+(HIST_CLASSE===o[0]?' active':'')+'" data-histclasse="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+    var nSemClasseEq=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!resClasse(r);}).length;
+    var classeEqBtns=[['todos','Todos'],['proprio','Tripoloni'],['terceiro','Terceiro']].concat(nSemClasseEq?[['sem','Sem classificação ('+nSemClasseEq+')']]:[]).map(function(o){
+      return '<button class="subtab'+(HIST_CLASSE_EQ===o[0]?' active':'')+'" data-histclasseeq="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
       '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Equipamentos:</span>'+classeEqBtns+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (Direto/Indireto), independente da origem — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> e <b>Equipamentos</b> = classificação da categoria no cadastro (direto/indireto/terceirizada e Tripoloni/terceiro), independente da origem — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -3973,12 +4018,15 @@
       });
       document.querySelectorAll('[data-catclasse]').forEach(function(sel){
         sel.addEventListener('change',function(){
-          setClasseCat(sel.getAttribute('data-catclasse'),sel.value);
+          setClasseCat(sel.getAttribute('data-catclasse'),sel.value,sel.getAttribute('data-cattipo')||'funcao');
           go('cr-hist');
         });
       });
       document.querySelectorAll('[data-histclasse]').forEach(function(b){
         b.addEventListener('click',function(){HIST_CLASSE=b.getAttribute('data-histclasse'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-histclasseeq]').forEach(function(b){
+        b.addEventListener('click',function(){HIST_CLASSE_EQ=b.getAttribute('data-histclasseeq'); go('cr-hist');});
       });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
@@ -4007,6 +4055,9 @@
       if(mobReal)mobReal.addEventListener('change',function(){ REP_MOB_REAL=+mobReal.value; go('cr-hist'); });
       document.querySelectorAll('[data-repclasse]').forEach(function(b){
         b.addEventListener('click',function(){REP_CLASSE=b.getAttribute('data-repclasse'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-repclasseeq]').forEach(function(b){
+        b.addEventListener('click',function(){REP_CLASSE_EQ=b.getAttribute('data-repclasseeq'); go('cr-hist');});
       });
       var repPrint=document.getElementById('repPrint');
       if(repPrint)repPrint.addEventListener('click',function(){
@@ -4419,9 +4470,7 @@
     var hist=computeHistogram(), tw=hist.tw;
     var visRes=RECURSOS.filter(function(r){
       if(HIST_FILTER!=='todos'&&r.tipo!==HIST_FILTER)return false;
-      if(HIST_CLASSE==='todas')return true;
-      if(r.tipo!=='funcao')return false; // classificação MOD/MOI só existe pra mão de obra
-      return HIST_CLASSE==='sem'?!resClasse(r):resClasse(r)===HIST_CLASSE;
+      return passaClasse(r,HIST_CLASSE,HIST_CLASSE_EQ);
     });
     var legEl=document.getElementById('histLeg');
     if(!tw||!visRes.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
@@ -5348,7 +5397,7 @@
     if(field==='nome'){ val=val.trim(); if(!val){inp.value=r.n;return;} r.n=val; }
     else if(field==='unidade'){ r.u=val.trim()||'un'; }
     else if(field==='tipo'){ r.tipo=(val==='equipamento')?'equipamento':'funcao'; }
-    else if(field==='categoria'){ r.cat=val.trim(); if(r.tipo==='funcao')r.classe=classeOfCat(r.cat); }
+    else if(field==='categoria'){ r.cat=val.trim(); r.classe=classeOfCat(r.cat,r.tipo); }
     else return;
     REC_DIRTY[ri]=true;
     go('cr-hist');
@@ -6114,21 +6163,27 @@
   /** colNomes = colunas candidatas ao nome (a 1ª é a principal). A linha é agrupada pela primeira
    *  coluna cujo valor casa com um recurso do app (matchRes); se nenhuma casar, pela principal
    *  — assim o de-para mostra o nome principal. */
-  function countPeriodsByWeek(aoa,hdr,colNomes,colIni,colFim,tw,lastW,matchRes){
+  /** dica(row) (opcional) devolve a classificação da linha (ex.: Locador "TRIPOLONI" -> 'proprio').
+   *  Com ela, se o cadastro tiver um recurso daquele tipo COM essa classificação, a linha vai pra
+   *  ele — assim dá pra separar "CAMINHÃO BASCULANTE (Tripoloni)" de "(Terceiro)" no histograma. */
+  function countPeriodsByWeek(aoa,hdr,colNomes,colIni,colFim,tw,lastW,matchRes,dica){
     var counts={}, rowsOk=0, semData=0;
     if(!Array.isArray(colNomes))colNomes=[colNomes];
     for(var i=hdr.row+1;i<aoa.length;i++){
       var row=aoa[i]||[];
       var cands=colNomes.map(function(c){ var j=hdr.ix[c]; return j>=0?String(row[j]==null?'':row[j]).trim():''; }).filter(Boolean);
       if(!cands.length)continue;
-      var orig=cands[0]; for(var ci=0;ci<cands.length;ci++){ if(matchRes&&matchRes(normName(cands[ci]))){orig=cands[ci];break;} }
+      var hint=dica?dica(row):'';
+      var orig=cands[0], res=null;
+      for(var ci=0;ci<cands.length;ci++){ var m=matchRes?matchRes(normName(cands[ci]),hint):null; if(m){res=m;orig=cands[ci];break;} }
       var nome=normName(orig); if(!nome)continue;
+      var chave=res?('#'+res.id):nome;
       var ini=excelDateToIso(row[hdr.ix[colIni]]), fim=excelDateToIso(row[hdr.ix[colFim]]);
       if(!/^\d{4}-\d{2}-\d{2}$/.test(ini)){semData++;continue;}
       if(!/^\d{4}-\d{2}-\d{2}$/.test(fim))fim=null; // vazio = ainda na obra
       rowsOk++;
-      if(!counts[nome]){ counts[nome]=[]; for(var z=0;z<lastW;z++)counts[nome].push(0); counts[nome].orig=orig; }
-      var arr=counts[nome];
+      if(!counts[chave]){ counts[chave]=[]; for(var z=0;z<lastW;z++)counts[chave].push(0); counts[chave].orig=orig; counts[chave].nome=nome; counts[chave].res=res; }
+      var arr=counts[chave];
       for(var w=1;w<=lastW;w++){
         var monD=calWeekDate(w), sunD=new Date(monD.getTime()); sunD.setDate(sunD.getDate()+6);
         var mon=monD.toISOString().slice(0,10), sun=sunD.toISOString().slice(0,10);
@@ -6157,11 +6212,19 @@
     // O cadastro costuma ter sigla antes do nome ("CP - CAMINHAO PIPA"); a planilha vem sem
     // ("CAMINHÃO PIPA"). Casa também sem a sigla, dos dois lados.
     var semSigla=function(n){ return n.replace(/^[A-Z0-9]{1,5}\s*[-–]\s*/,''); };
-    var byKey={};
+    var byKey={}, byKeyC={};
     var addKey=function(k,r){ if(k&&!byKey[k])byKey[k]=r; };
-    RECURSOS.forEach(function(r){ var k=normName(r.n); addKey(k,r); addKey(semSigla(k),r); (r.aliases||[]).forEach(function(a){ addKey(normName(a),r); addKey(semSigla(normName(a)),r); }); });
-    var matchRes=function(nome){ return byKey[nome]||byKey[semSigla(nome)]||null; };
-    var sources=[], problems=[], classeVotes=null;
+    var addKeyC=function(k,r){ var c=resClasse(r); if(!c||!k)return; if(!byKeyC[c+'|'+k])byKeyC[c+'|'+k]=r; };
+    RECURSOS.forEach(function(r){
+      var k=normName(r.n); addKey(k,r); addKey(semSigla(k),r); addKeyC(k,r); addKeyC(semSigla(k),r);
+      (r.aliases||[]).forEach(function(a){ var ka=normName(a); addKey(ka,r); addKey(semSigla(ka),r); addKeyC(ka,r); addKeyC(semSigla(ka),r); });
+    });
+    // Com a dica de classificação (Locador), procura primeiro um recurso daquela classe.
+    var matchRes=function(nome,hint){
+      if(hint&&(byKeyC[hint+'|'+nome]||byKeyC[hint+'|'+semSigla(nome)]))return byKeyC[hint+'|'+nome]||byKeyC[hint+'|'+semSigla(nome)];
+      return byKey[nome]||byKey[semSigla(nome)]||null;
+    };
+    var sources=[], problems=[], classeVotes=null, locVotes=null;
     if(wsDp){
       var aoa=sheetRows(wsDp), hdr=findHeaderRow(aoa,['ADMISSÃO','DEMISSÃO','FUNÇÃO OBRA']);
       if(!hdr)problems.push('Aba EFETIVO DP: não achei as colunas ADMISSÃO / DEMISSÃO / FUNÇÃO OBRA.');
@@ -6188,13 +6251,30 @@
       else {
         var hrow=(aoa2[hdr2.row]||[]).map(normName);
         hdr2.ix['TIPO V.A.']=hrow.indexOf('TIPO V.A.'); hdr2.ix['TIPO']=hrow.indexOf('TIPO');
-        var c2=countPeriodsByWeek(aoa2,hdr2,['TIPO TXC','TIPO V.A.','TIPO'],'MOBILIZAÇÃO','DESMOBILIZAÇÃO',tw,lastW,matchRes);
+        // Coluna Locador: "TRIPOLONI" = frota própria; qualquer outra empresa = terceiro.
+        var jLoc=hrow.indexOf('LOCADOR');
+        var dicaLoc=jLoc>=0?function(row){ var t=normName(row[jLoc]); if(!t)return ''; return /TRIPOLONI/.test(t)?'proprio':'terceiro'; }:null;
+        var c2=countPeriodsByWeek(aoa2,hdr2,['TIPO TXC','TIPO V.A.','TIPO'],'MOBILIZAÇÃO','DESMOBILIZAÇÃO',tw,lastW,matchRes,dicaLoc);
         sources.push({tipo:'equipamento',label:'Equipamentos (CEQ)',counts:c2.counts,rowsOk:c2.rowsOk,semData:c2.semData});
+        // Votos de Tripoloni × terceiro por tipo de equipamento, pra classificar as categorias
+        // que ainda estiverem em branco e avisar quando o mesmo tipo tem os dois.
+        if(jLoc>=0){
+          locVotes={};
+          for(var iC=hdr2.row+1;iC<aoa2.length;iC++){
+            var rowC=aoa2[iC]||[], nomeC='';
+            ['TIPO TXC','TIPO V.A.','TIPO'].forEach(function(cn){ if(nomeC)return; var j=hdr2.ix[cn]; if(j>=0&&rowC[j])nomeC=normName(rowC[j]); });
+            var cl=dicaLoc(rowC); if(!nomeC||!cl)continue;
+            var vv=locVotes[nomeC]||(locVotes[nomeC]={proprio:0,terceiro:0}); vv[cl]++;
+          }
+        }
       }
     }
     if(!sources.length){alert(problems.join('\n'));return;}
     var unmatched=[];
-    sources.forEach(function(src){ Object.keys(src.counts).forEach(function(nome){ if(!matchRes(nome))unmatched.push({nome:nome,orig:src.counts[nome].orig||nome,tipo:src.tipo,label:src.label,peak:src.counts[nome].reduce(function(m,v){return Math.max(m,v||0);},0)}); }); });
+    sources.forEach(function(src){ Object.keys(src.counts).forEach(function(k){
+      var b=src.counts[k]; if(b.res||matchRes(b.nome))return;
+      unmatched.push({nome:b.nome,orig:b.orig||b.nome,tipo:src.tipo,label:src.label,peak:b.reduce(function(m,v){return Math.max(m,v||0);},0)});
+    }); });
     var mapping={}; // nome normalizado -> recurso (ou null = ignorar)
     if(unmatched.length){
       mapping=await openDeParaDialog(unmatched);
@@ -6207,9 +6287,10 @@
     }
     // Aplica: soma por recurso (dois nomes podem cair no mesmo recurso), sobrescreve só recursos que vieram do arquivo
     var perRes={}, ignored=[];
-    sources.forEach(function(src){ Object.keys(src.counts).forEach(function(nome){
-      var r=matchRes(nome)||mapping[nome]; if(!r){ignored.push(src.counts[nome].orig||nome);return;}
-      var arr=perRes[r.id]||(perRes[r.id]=[]); src.counts[nome].forEach(function(v,i){ arr[i]=(arr[i]||0)+(v||0); });
+    sources.forEach(function(src){ Object.keys(src.counts).forEach(function(k){
+      var b=src.counts[k], r=b.res||matchRes(b.nome)||mapping[b.nome];
+      if(!r){ignored.push(b.orig||b.nome);return;}
+      var arr=perRes[r.id]||(perRes[r.id]=[]); b.forEach(function(v,i){ arr[i]=(arr[i]||0)+(v||0); });
     }); });
     // Classificação MOD/MOI: os votos vêm das pessoas (coluna TIPO), mas a decisão é por
     // CATEGORIA — cada categoria ainda sem classificação recebe a predominante e todas as
@@ -6236,6 +6317,31 @@
       }
       if(!problems.length)REC_DIRTY={};
     }
+    // Equipamentos: categoria ainda sem classificação recebe Tripoloni/terceiro pela predominância
+    // do Locador. Tipos que aparecem dos dois lados viram aviso (pra cadastrar separado, se quiser).
+    var nClasseEq=0, nCatsEq=0, mistos=[];
+    if(locVotes){
+      var votosCatEq={}, pendEq=[];
+      Object.keys(locVotes).forEach(function(nome){
+        var r=matchRes(nome)||mapping[nome]; if(!r||r.tipo!=='equipamento')return;
+        var v=locVotes[nome];
+        if(v.proprio>0&&v.terceiro>0&&mistos.length<8)mistos.push(r.n+' ('+v.proprio+' Tripoloni / '+v.terceiro+' terceiro)');
+        var c=catKey(r), acc=votosCatEq[c]||(votosCatEq[c]={proprio:0,terceiro:0});
+        acc.proprio+=v.proprio; acc.terceiro+=v.terceiro;
+      });
+      Object.keys(votosCatEq).forEach(function(c){
+        if(classeOfCat(c,'equipamento'))return;
+        var v=votosCatEq[c]; if(!(v.proprio+v.terceiro))return;
+        var cl=v.proprio>=v.terceiro?'proprio':'terceiro';
+        nClasseEq+=setClasseCat(c,cl,'equipamento'); nCatsEq++;
+        RECURSOS.forEach(function(r){ if(r.tipo==='equipamento'&&catKey(r)===c)pendEq.push({id:r.id,classe:cl,nome:r.n}); });
+      });
+      for(var ie=0;ie<pendEq.length;ie++){
+        try{ await sbUpdateRecurso(pendEq[ie].id,{classe:pendEq[ie].classe}); }
+        catch(e){ problems.push('Não consegui salvar a classificação de "'+pendEq[ie].nome+'": '+((e&&e.message)||e)+' (rodou a migração sql/16?)'); break; }
+      }
+      if(!problems.length)REC_DIRTY={};
+    }
     var applied=0, nRes=0, protegidos=0, semanasPuladas={};
     Object.keys(perRes).forEach(function(id){
       nRes++;
@@ -6252,7 +6358,9 @@
     var resumo=sources.map(function(src){return src.label+': '+src.rowsOk+' linhas'+(src.semData?' ('+src.semData+' linhas sem data de entrada, ignoradas)':'');}).join(' · ');
     var puladasTxtD=Object.keys(semanasPuladas).map(function(w){return 'S'+isoWeek(calWeekDate(+w));}).join(', ');
     var msg=nRes+' recurso(s) preenchidos até S'+isoWeek(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+
-      (protegidos?' '+protegidos+' valor(es) preservados em semanas que já tinham apontamento ('+puladasTxtD+') — pra atualizar, importe de novo marcando essas semanas.':'')+(nClasse?' '+nCats+' categoria(s) classificadas como direto/indireto pela coluna TIPO ('+nClasse+' função(ões)).':'')+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
+      (protegidos?' '+protegidos+' valor(es) preservados em semanas que já tinham apontamento ('+puladasTxtD+') — pra atualizar, importe de novo marcando essas semanas.':'')+(nClasse?' '+nCats+' categoria(s) de mão de obra classificadas pela coluna TIPO ('+nClasse+' função(ões)).':'')+
+      (nClasseEq?' '+nCatsEq+' categoria(s) de equipamento classificadas como Tripoloni/terceiro pela coluna Locador ('+nClasseEq+' item(ns)).':'')+
+      (mistos.length?'\n\nTipos com unidades próprias E de terceiros na mesma planilha: '+mistos.join('; ')+'. O total ficou junto no recurso; pra separar no histograma, cadastre dois recursos (um Tripoloni e um Terceiro) — a importação passa a dividir sozinha pelo Locador.':'')+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
     alert(msg);
   }
   /** De-para dos nomes da planilha que não casaram com nenhum recurso. Resolve com {nome: recurso|null} ou null se cancelar. */
