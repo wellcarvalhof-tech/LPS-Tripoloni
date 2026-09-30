@@ -1925,12 +1925,16 @@
     '</div>';
     var row=function(nomeHtml,x){ var df=x.real-x.prev; return '<tr><td>'+nomeHtml+'</td><td class="r mono">'+fmtBR(x.prev)+'</td><td class="r mono">'+fmtBR(x.real)+'</td><td class="r mono" style="color:'+(df<0?'var(--warn)':(df>0?'var(--crit)':'var(--good)'))+'">'+(df>0?'+':'')+fmtBR(df)+'</td><td class="r">'+iahHTML(x.prev,x.real)+'</td></tr>'; };
     var thead='<thead><tr><th>__N__</th><th class="r">Previsto</th><th class="r">Realizado</th><th class="r">Diferença</th><th class="r">IAH</th></tr></thead>';
-    var theadRec='<thead><tr><th>Recurso</th><th class="r">Previsto</th><th class="r">Realizado</th><th class="r" title="Quanto do realizado é de terceiro (o resto é próprio)">Terceiro</th><th class="r">Diferença</th><th class="r">IAH</th></tr></thead>';
+    // Realizado aberto em próprio × terceiro (a soma é o realizado total), igual à tabela de apontamento.
+    var theadRec='<thead><tr><th rowspan="2">Recurso</th><th class="r" rowspan="2">Previsto</th><th class="r" colspan="3">Realizado</th><th class="r" rowspan="2">Diferença</th><th class="r" rowspan="2">IAH</th></tr>'+
+      '<tr><th class="r" style="font-size:10px">Próprio</th><th class="r" style="font-size:10px">Terceiro</th><th class="r" style="font-size:10px">Total</th></tr></thead>';
     var rowRec=function(x){
-      var df=x.real-x.prev, prop=Math.max(0,x.real-(x.terc||0));
+      var df=x.real-x.prev, terc=x.terc||0, prop=Math.max(0,x.real-terc);
       return '<tr><td>'+x.r.n+' <span class="note">'+(x.r.tipo==='funcao'?(resClasse(x.r)?classeLabel(resClasse(x.r)):'Função'):'Equipamento')+'</span></td>'+
-        '<td class="r mono">'+fmtBR(x.prev)+'</td><td class="r mono">'+fmtBR(x.real)+'</td>'+
-        '<td class="r mono" title="próprio: '+fmtBR(prop)+'">'+((x.terc||0)>0?fmtBR(x.terc):'—')+'</td>'+
+        '<td class="r mono">'+fmtBR(x.prev)+'</td>'+
+        '<td class="r mono">'+(prop>0?fmtBR(prop):'—')+'</td>'+
+        '<td class="r mono">'+(terc>0?fmtBR(terc):'—')+'</td>'+
+        '<td class="r mono" style="font-weight:600">'+fmtBR(x.real)+'</td>'+
         '<td class="r mono" style="color:'+(df<0?'var(--warn)':(df>0?'var(--crit)':'var(--good)'))+'">'+(df>0?'+':'')+fmtBR(df)+'</td><td class="r">'+iahHTML(x.prev,x.real)+'</td></tr>';
     };
     var totTerc=0; d.porRecurso.forEach(function(x){ totTerc+=x.terc||0; });
@@ -1946,7 +1950,9 @@
       mobilizacaoHTML(hist)+
       '<div class="grid g2" style="gap:14px">'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por função / equipamento</div>'+(recRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+theadRec+'<tbody>'+recRows+
-          '<tr style="font-weight:700;background:var(--elev)"><td>Total</td><td class="r mono">'+fmtBR(d.P)+'</td><td class="r mono">'+fmtBR(d.R)+'</td><td class="r mono">'+(totTerc>0?fmtBR(totTerc):'—')+'</td><td class="r mono">'+(diff>0?'+':'')+fmtBR(diff)+'</td><td class="r">'+iahHTML(d.P,d.R)+'</td></tr>'+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
+          '<tr style="font-weight:700;background:var(--elev)"><td>Total</td><td class="r mono">'+fmtBR(d.P)+'</td>'+
+          '<td class="r mono">'+((d.R-totTerc)>0?fmtBR(d.R-totTerc):'—')+'</td><td class="r mono">'+(totTerc>0?fmtBR(totTerc):'—')+'</td><td class="r mono">'+fmtBR(d.R)+'</td>'+
+          '<td class="r mono">'+(diff>0?'+':'')+fmtBR(diff)+'</td><td class="r">'+iahHTML(d.P,d.R)+'</td></tr>'+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por serviço</div>'+(svcRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Serviço')+'<tbody>'+svcRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
       '</div></div>';
     var actions='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
