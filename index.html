@@ -1526,6 +1526,8 @@
   var REP_FROM=null, REP_TO=null, REP_TIPO='todos'; // relatório do período (semanas do projeto) e filtro de tipo
   // Mesmos recortes do gráfico: origem (serviços × apoio) e classificação da mão de obra.
   var REP_ORIGEM='todos', REP_CLASSE='todas';
+  // Plano de mobilização: semana do previsto (alvo) × semana do realizado (situação atual).
+  var REP_MOB_PREV=null, REP_MOB_REAL=null;
   var REAL_FILTER='todos';
   var REAL_CAT_OPEN={};
   var TOT_FILTER='todos', TOT_OPEN={};
@@ -1791,12 +1793,76 @@
     var P=0,R=0; weeks.forEach(function(w){P+=prevW[w];R+=realW[w];});
     return {tw:tw,from:from,to:to,weeks:weeks,prevW:prevW,realW:realW,P:P,R:R,porRecurso:porRecurso,porServico:porServico};
   }
+  /** Última semana com algum apontamento (a "situação atual" da obra). 0 se não houver. */
+  function ultimaSemanaApontada(tw){
+    var last=0;
+    for(var w=1;w<=tw;w++){
+      var d=calWeekDate(w).toISOString().slice(0,10);
+      for(var i=0;i<RECURSOS.length;i++){ if((+REALIZADO_REC[RECURSOS[i].id+'::'+d]||0)>0){ last=w; break; } }
+    }
+    return last;
+  }
+  /** Plano de mobilização: o que falta (ou sobra) pra sair do efetivo de hoje e chegar no
+   *  previsto de uma semana escolhida. Respeita os mesmos filtros do relatório (tipo, origem
+   *  e classificação da mão de obra). */
+  function mobilizacaoData(hist){
+    var tw=hist.tw||0; if(!tw)return null;
+    var real=Math.min(tw,Math.max(1,REP_MOB_REAL||ultimaSemanaApontada(tw)||hojeCalWeek(tw)||1));
+    var prev=Math.min(tw,Math.max(1,REP_MOB_PREV||Math.min(tw,real+1)));
+    var dReal=calWeekDate(real).toISOString().slice(0,10);
+    var recs=RECURSOS.filter(function(r){
+      if(REP_TIPO!=='todos'&&r.tipo!==REP_TIPO)return false;
+      if(REP_CLASSE==='todas')return true;
+      if(r.tipo!=='funcao')return false;
+      return REP_CLASSE==='sem'?!resClasse(r):resClasse(r)===REP_CLASSE;
+    });
+    var linhas=recs.map(function(r){
+      var aD=hist.byResourceDireto[r.id]||[], aI=hist.byResourceIndireto[r.id]||[];
+      var pdP=aD[prev-1]||0, piP=aI[prev-1]||0, pdR=aD[real-1]||0, piR=aI[real-1]||0;
+      var rTot=+REALIZADO_REC[r.id+'::'+dReal]||0, p, rv;
+      if(REP_ORIGEM==='direto'){ p=pdP; rv=(pdR+piR>0)?rTot*(pdR/(pdR+piR)):0; }
+      else if(REP_ORIGEM==='indireto'){ p=piP; rv=(pdR+piR>0)?rTot*(piR/(pdR+piR)):0; }
+      else { p=pdP+piP; rv=rTot; }
+      return {r:r,prev:p,real:rv,dif:p-rv};
+    }).filter(function(x){return x.prev>0||x.real>0;});
+    var mob=0, desmob=0;
+    linhas.forEach(function(x){ if(x.dif>0)mob+=x.dif; else desmob+=-x.dif; });
+    return {tw:tw,semanaPrev:prev,semanaReal:real,linhas:linhas,mob:mob,desmob:desmob};
+  }
+  function mobilizacaoHTML(hist){
+    var m=mobilizacaoData(hist); if(!m)return '';
+    var opts=function(sel){ var o=''; for(var w=1;w<=m.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
+    var lbP='S'+isoWeek(calWeekDate(m.semanaPrev)), lbR='S'+isoWeek(calWeekDate(m.semanaReal));
+    var rows=m.linhas.sort(function(a,b){return b.dif-a.dif||(a.r.tipo+a.r.n).localeCompare(b.r.tipo+b.r.n);}).map(function(x){
+      var d=Math.round(x.dif), acao=d>0?('<b style="color:var(--crit)">Mobilizar '+fmtBR(d)+'</b>'):(d<0?('<b style="color:var(--warn)">Desmobilizar '+fmtBR(-d)+'</b>'):'<span class="note">Manter</span>');
+      return '<tr><td>'+x.r.n+' <span class="note">'+(x.r.tipo==='funcao'?(resClasse(x.r)?classeLabel(resClasse(x.r)):'Função'):'Equipamento')+'</span></td>'+
+        '<td class="r mono">'+fmtBR(x.real)+'</td><td class="r mono">'+fmtBR(x.prev)+'</td>'+
+        '<td class="r mono" style="color:'+(d>0?'var(--crit)':(d<0?'var(--warn)':'var(--good)'))+'">'+(d>0?'+':'')+fmtBR(d)+'</td><td>'+acao+'</td></tr>';
+    }).join('');
+    var totR=0, totP=0; m.linhas.forEach(function(x){ totR+=x.real; totP+=x.prev; });
+    var totRow='<tr style="font-weight:700;background:var(--elev)"><td>Total</td><td class="r mono">'+fmtBR(totR)+'</td><td class="r mono">'+fmtBR(totP)+'</td><td class="r mono">'+((totP-totR)>0?'+':'')+fmtBR(totP-totR)+'</td><td></td></tr>';
+    return '<div class="card" style="padding:10px 14px;margin-bottom:14px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+        '<div><div class="eyebrow" style="margin:0">Plano de mobilização — previsto de '+lbP+' × efetivo atual ('+lbR+')</div>'+
+        '<div class="note">Diferença positiva = falta mobilizar até '+lbP+'; negativa = sobra pra desmobilizar. Usa os mesmos filtros do relatório.</div></div>'+
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+          '<span class="note">Previsto da semana</span><select class="esel" id="mobPrev">'+opts(m.semanaPrev)+'</select>'+
+          '<span class="note">× realizado de</span><select class="esel" id="mobReal">'+opts(m.semanaReal)+'</select>'+
+        '</div>'+
+      '</div>'+
+      '<div class="grid g2" style="gap:10px;margin:10px 0">'+
+        kpi('crit','A mobilizar',fmtBR(m.mob),'até '+lbP)+
+        kpi('warn','A desmobilizar',fmtBR(m.desmob),'sobra em relação a '+lbP)+
+      '</div>'+
+      (rows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr><th>Recurso</th><th class="r">Realizado '+lbR+'</th><th class="r">Previsto '+lbP+'</th><th class="r">Diferença</th><th>Ação</th></tr></thead><tbody>'+rows+totRow+'</tbody></table></div>':'<div class="note">Nenhum recurso com previsto ou realizado nessas semanas.</div>')+
+    '</div>';
+  }
   function iahHTML(p,r){
     if(!(p>0))return '<span class="note">—</span>';
     var v=r/p*100, col=v>=95&&v<=105?'var(--good)':(v<95?'var(--warn)':'var(--crit)');
     return '<b style="color:'+col+'">'+Math.round(v)+'%</b>';
   }
-  function relatorioPeriodoHTML(hist){
+  function relatorioPeriodoHTML(hist){ // hist é usado também pelo plano de mobilização
     var d=relatorioPeriodoData(hist);
     if(!d)return sectionCard('relatorio','Relatório do período',null,null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra gerar o relatório.</div>');
     var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
@@ -1835,6 +1901,7 @@
       kpis+
       '<div class="card" style="padding:10px 14px;margin-bottom:14px"><div class="eyebrow" style="margin-bottom:2px">Semana a semana — previsto (linha) × realizado (barras) · acumulado no período (eixo da direita)</div><svg class="chart" id="repSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg>'+
         '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--accent)"></span>Realizado (barras)</span><span><span class="swatch" style="background:var(--ink-2)"></span>Previsto (linha)</span><span><span class="swatch" style="background:var(--muted)"></span>Previsto acumulado (tracejado)</span><span><span class="swatch" style="background:var(--accent);border:2px solid var(--accent)"></span>Realizado acumulado (linha cheia)</span></div></div>'+
+      mobilizacaoHTML(hist)+
       '<div class="grid g2" style="gap:14px">'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por função / equipamento</div>'+(recRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Recurso')+'<tbody>'+recRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
         '<div class="card" style="padding:10px 14px"><div class="eyebrow">Por serviço</div>'+(svcRows?'<div class="tbl-wrap"><table class="edtbl" style="font-size:12px">'+thead.replace('__N__','Serviço')+'<tbody>'+svcRows+totRow+'</tbody></table></div>':'<div class="note">Nada previsto nem apontado nesse período.</div>')+'</div>'+
@@ -3935,6 +4002,9 @@
       document.querySelectorAll('[data-reporigem]').forEach(function(b){
         b.addEventListener('click',function(){REP_ORIGEM=b.getAttribute('data-reporigem'); go('cr-hist');});
       });
+      var mobPrev=document.getElementById('mobPrev'), mobReal=document.getElementById('mobReal');
+      if(mobPrev)mobPrev.addEventListener('change',function(){ REP_MOB_PREV=+mobPrev.value; go('cr-hist'); });
+      if(mobReal)mobReal.addEventListener('change',function(){ REP_MOB_REAL=+mobReal.value; go('cr-hist'); });
       document.querySelectorAll('[data-repclasse]').forEach(function(b){
         b.addEventListener('click',function(){REP_CLASSE=b.getAttribute('data-repclasse'); go('cr-hist');});
       });
