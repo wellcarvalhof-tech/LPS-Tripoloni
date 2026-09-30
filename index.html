@@ -1205,7 +1205,7 @@
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
 
-    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['medio','Médio prazo','lp-medio'],
+    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['lb','Linha de balanço'],['medio','Médio prazo','lp-medio'],
       ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     window._cronoTab=window._cronoTab||'tc';
@@ -2793,7 +2793,7 @@
     var patch={}; patch[field]=val;
     s.cfg=Object.assign({},s.cfg,patch);
     SVC_DIRTY[si]=true;
-    go('cad-serv');
+    go(current); // o mesmo campo aparece em Serviços e no painel de Ajuste manual
   }
   function togglePredecessor(si,predId){
     var s=SERV[si]; if(!s)return;
@@ -2833,10 +2833,12 @@
         '<label><input type="checkbox" data-cfgbool="parallelWithPredecessor" data-si="'+si+'"'+(cfg.parallelWithPredecessor?' checked':'')+'>Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
         '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
         '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua — evita equipe ociosa; chuva ainda reduz produção)</label>'+
+        '<label><input type="checkbox" data-cfgbool="seqManual" data-si="'+si+'"'+(cfg.seqManual?' checked':'')+'>Seguir a sequência de lotes definida (em Ajuste manual) em vez de reordenar automaticamente</label>'+
         '<label>Semana do ano de início: <input class="einp" type="number" data-cfgcalweek="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:70px"> <span style="color:var(--muted)">(não inicia antes desta semana, ex.: 37 = S37)</span></label>'+
         '<label>Semana do ano alvo de término: <input class="einp" type="number" data-cfgcalweek="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:70px"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
       '</div>'+
       (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
+      (cfg.seqManual?'<div class="note" style="margin-top:6px">Sequência manual ligada: os lotes deste serviço são executados exatamente na ordem definida em <b>Ajuste manual → Lotes e sequência de execução por equipe</b>'+(queueOn?' (a equipe de cada lote continua sendo escolhida pelo app)':'')+'. A equipe pode ficar ociosa esperando um lote liberar — é o preço de fixar a ordem.</div>':'')+
       targetInfo;
   }
   function miniTable(hs,rows){
@@ -4937,6 +4939,10 @@
       var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s);
       if(teams<=0||prod<=0)return;
       var noInt=!!(s.cfg&&s.cfg.noInterruption);
+      // Sequência manual: a ordem definida em "Lotes e sequência de execução por equipe" manda.
+      // Sem isso, com "sem paralisações" (ou fila dinâmica) o app reordena sozinho os lotes pra
+      // evitar equipe ociosa — bom no automático, ruim quando a ordem é uma decisão de obra.
+      var seqFixa=!!(s.cfg&&s.cfg.seqManual);
       var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
       // Posição mais cedo em que o lote pode começar: predecessor concluído, defasagem manual
       // do lote e a semana de início do serviço (o que vier depois vale).
@@ -5040,6 +5046,7 @@
           var o=ovrGet(li,si);
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
+        if(seqFixa)remaining.sort(function(a,b){return a.seq-b.seq;});
         var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(0);
         var teamLastLi=[]; for(var t0b=0;t0b<teams;t0b++)teamLastLi.push(null);
         // Cache do "melhor candidato" por equipe — resultado idêntico ao recalcular do zero a
@@ -5051,6 +5058,17 @@
         var teamBest=[]; for(var t0c=0;t0c<teams;t0c++)teamBest.push(null);
         while(remaining.length){
           var bestOverall=null, bestTeam=0;
+          if(seqFixa){
+            // Ordem dos lotes é a definida; o app só escolhe qual equipe pega o próximo.
+            var prox=[remaining[0]];
+            for(var tf=0;tf<teams;tf++){
+              var candF=bestCandidate(prox,teamPos[tf],teamProds[tf]>0?teamProds[tf]:prod,teamLastLi[tf]);
+              if(!bestOverall||candF.endPos<bestOverall.endPos-1e-9||(Math.abs(candF.endPos-bestOverall.endPos)<1e-9&&candF.dist<bestOverall.dist-1e-9)){
+                bestOverall=candF; bestTeam=tf;
+              }
+            }
+            bestOverall.idx=0;
+          } else
           for(var tt=0;tt<teams;tt++){
             if(!teamBest[tt]){
               var teamProdT=teamProds[tt]>0?teamProds[tt]:prod;
@@ -5090,11 +5108,11 @@
             teamLots[t2-1].push({li:li,seq:seq,ready:readyPosFor(li),qtyOverride:teamsArr.length>1?qtyEach:null});
           });
         });
-        if(!noInt)teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
+        if(!noInt||seqFixa)teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
         teamLots.forEach(function(lotIdxs,tIdx){
           var team=tIdx+1, tPos=0, lastLi=null;
           var teamProd=teamProds[tIdx]>0?teamProds[tIdx]:prod;
-          if(noInt){
+          if(noInt&&!seqFixa){
             var remainingT=lotIdxs.slice();
             while(remainingT.length){
               var pick=bestCandidate(remainingT,tPos,teamProd,lastLi);
@@ -6834,6 +6852,16 @@
         go(current);
       });
     });
+    document.querySelectorAll('[data-lbsvc]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var si=+cb.getAttribute('data-lbsvc');
+        if(cb.checked)delete LB_HIDDEN[si]; else LB_HIDDEN[si]=true;
+        renderCrono();
+      });
+    });
+    document.querySelectorAll('[data-lbmode]').forEach(function(b){
+      b.addEventListener('click',function(){ LB_MODE=b.getAttribute('data-lbmode'); renderCrono(); });
+    });
     document.querySelectorAll('[data-svcvis]').forEach(function(cb){
       cb.addEventListener('change',function(){
         var si=+cb.getAttribute('data-svcvis');
@@ -6845,6 +6873,83 @@
     if(showAll)showAll.addEventListener('click',function(){ TC_HIDDEN_SVC={}; go(current); });
   }
 
+  /* ================= Linha de balanço =================
+   * Vista clássica de obra linear: cada serviço vira uma faixa que caminha pelos lotes ao longo
+   * do tempo (eixo X = lotes na ordem da obra, eixo Y = semanas). A inclinação da faixa é o
+   * ritmo: linhas paralelas = ritmos casados; linhas que se cruzam = interferência entre
+   * serviços. Lê o mesmo cronograma do Tempo-Caminho (buildSchedule) — não muda nada nele.
+   * LB_HIDDEN guarda os serviços ocultos só nesta aba. */
+  var LB_HIDDEN={}, LB_MODE='faixa'; // 'faixa' = início e fim; 'linha' = só o término
+  function linhaBalancoSVG(){
+    var segsAll=buildSchedule(), segs=viewSegs(segsAll);
+    var lotIdxs=viewLotIdxs();
+    if(!segs.length||!lotIdxs.length)return '<div class="note">Sem cronograma pra desenhar.</div>';
+    var tw=1; segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
+    var posOf={}; lotIdxs.forEach(function(li,i){posOf[li]=i;});
+    var n=lotIdxs.length;
+    var W=1000, labelH=Math.min(120,Math.max(40,(function(){var m=0;lotIdxs.forEach(function(li){m=Math.max(m,String(LOTS[li]||'').length);});return m*5.2+14;})()));
+    var pl=52, pr=16, pt=16, pb=labelH+18, H=620, iw=W-pl-pr, ih=H-pt-pb;
+    var xx=function(li){ return pl+(n<=1?iw/2:iw*posOf[li]/(n-1)); };
+    var yy=function(w){ return pt+ih*(w-1)/Math.max(1,tw); };
+    var s='';
+    // grade de semanas (a cada N) + meses
+    var stepW=Math.max(1,Math.ceil(tw/26));
+    for(var w=1;w<=tw;w+=stepW){
+      s+='<line x1="'+pl+'" y1="'+yy(w).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(w).toFixed(1)+'" stroke="var(--line)"/>'+
+        '<text class="axm" x="'+(pl-6)+'" y="'+(yy(w)+3).toFixed(1)+'" text-anchor="end">S'+isoWeek(mondayOf(w))+'</text>';
+    }
+    // linhas verticais dos lotes + rótulos na vertical
+    lotIdxs.forEach(function(li){
+      var x=xx(li);
+      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)" opacity=".5"/>'+
+        '<text class="axm" font-size="8" transform="translate('+(x+3).toFixed(1)+','+(pt+ih+6)+') rotate(90)" text-anchor="start">'+escAttr(LOTS[li]||'')+'</text>';
+    });
+    // hoje
+    var hojeW=hojeWeekNumber(tw);
+    if(hojeW>0&&hojeW<=tw)s+='<line x1="'+pl+'" y1="'+yy(hojeW).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(hojeW).toFixed(1)+'" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 3"><title>Hoje — S'+isoWeek(mondayOf(hojeW))+'</title></line>';
+    // uma faixa por serviço × equipe (equipes do mesmo serviço viram linhas separadas)
+    var porSvcTeam={};
+    segs.forEach(function(sg){
+      if(LB_HIDDEN[sg.si])return;
+      if(posOf[sg.li]==null)return;
+      var k=sg.si+'::'+sg.team;
+      (porSvcTeam[k]||(porSvcTeam[k]=[])).push(sg);
+    });
+    Object.keys(porSvcTeam).forEach(function(k){
+      var arr=porSvcTeam[k].slice().sort(function(a,b){return a.start-b.start||posOf[a.li]-posOf[b.li];});
+      var sv=SERV[arr[0].si], cor=arr[0].color||svcColor(sv);
+      var ini=arr.map(function(sg){return xx(sg.li).toFixed(1)+','+yy(sg.start).toFixed(1);});
+      var fim=arr.map(function(sg){return xx(sg.li).toFixed(1)+','+yy(sg.start+sg.dur-1+1).toFixed(1);});
+      if(LB_MODE==='faixa'&&arr.length){
+        s+='<polygon points="'+ini.join(' ')+' '+fim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".22"/>';
+      }
+      if(LB_MODE==='faixa')s+='<polyline points="'+ini.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.5" opacity=".9"/>';
+      s+='<polyline points="'+fim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2.5"/>';
+      arr.forEach(function(sg){
+        s+='<circle cx="'+xx(sg.li).toFixed(1)+'" cy="'+yy(sg.start+sg.dur).toFixed(1)+'" r="2.6" fill="'+cor+'"><title>'+escAttr(sv.n)+' · Equipe '+sg.team+'\n'+escAttr(LOTS[sg.li]||'')+'\nS'+isoWeek(mondayOf(sg.start))+' a S'+isoWeek(mondayOf(sg.start+sg.dur-1))+' ('+sg.dur+' sem)\n'+fmtBR(sg.qty)+' '+escAttr(sv.u||'')+'</title></circle>';
+      });
+    });
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:820px">'+s+'</svg>';
+  }
+  function linhaBalancoHTML(){
+    if(!SERV.length||!LOTS.length)return '<div class="note">Cadastre serviços, lotes e quantidades pra ver a linha de balanço.</div>';
+    var toggles='<div class="tc-svctoggle">'+SERV.map(function(sv,si){
+      var off=!!LB_HIDDEN[si];
+      return '<label class="lotchip'+(off?' other':' on')+'"><input type="checkbox" data-lbsvc="'+si+'"'+(off?'':' checked')+'><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</label>';
+    }).join('')+'</div>';
+    var modos=[['faixa','Faixa (início → fim)'],['linha','Só a linha de término']].map(function(m){
+      return '<button class="subtab'+(LB_MODE===m[0]?' active':'')+'" data-lbmode="'+m[0]+'">'+m[1]+'</button>';
+    }).join('');
+    return '<div class="tc-head" style="margin-bottom:6px"><div><h3>Linha de balanço</h3>'+
+      '<p>Cada serviço caminhando pelos lotes ao longo do tempo — eixo horizontal = lotes na ordem da obra, vertical = semanas (começo em cima). '+
+      'Inclinação = ritmo: linhas paralelas indicam ritmos casados; linhas que se aproximam ou cruzam indicam serviço alcançando o da frente. '+
+      'Vem do mesmo cronograma do Tempo-Caminho — esta aba só mostra, não altera nada.</p></div></div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">'+modos+'</div>'+
+      toggles+
+      '<div class="tc-wrap" id="tcWrap" style="padding:6px">'+linhaBalancoSVG()+'</div>'+
+      '<div class="legend" style="margin-top:8px"><span><span class="swatch" style="background:var(--accent)"></span>Linha tracejada = hoje</span>'+
+      '<span class="note">Passe o mouse nos pontos pra ver lote, equipe, semanas e quantidade.</span></div>';
+  }
   function editarPorEquipeHTML(){
     var segs=buildSchedule().slice().sort(function(a,b){return a.si-b.si||a.team-b.team||a.start-b.start;});
     var rows=segs.map(function(sg){
@@ -6896,7 +7001,7 @@
    *  botões do ajuste manual, que ficam fora do bloco do cronograma. */
   function fsBarHTML(){
     var tab=window._cronoTab||'tc';
-    var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt']]
+    var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['lb','Linha de balanço'],['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt']]
       .filter(function(t){ return !(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe')); })
       .map(function(t){ return '<button class="subtab'+(tab===t[0]?' active':'')+'" data-fstab="'+t[0]+'">'+t[1]+'</button>'; }).join('');
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'';
@@ -6921,6 +7026,7 @@
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
+    if(tab==='lb') return fsBarHTML()+linhaBalancoHTML();
     if(tab==='equipe') return fsBarHTML()+editarPorEquipeHTML();
     if(tab==='resumo') return fsBarHTML()+resumoHTML();
     if(tab==='gantt') return fsBarHTML()+ganttHTML();
@@ -7491,6 +7597,9 @@
     p.querySelectorAll('[data-asgtoggle]').forEach(function(b){
       b.addEventListener('click',function(){ assignToggle(b.getAttribute('data-asgtoggle')); });
     });
+    p.querySelectorAll('[data-cfgbool]').forEach(function(cb){
+      cb.addEventListener('change',function(){ saveSvcCfgField(+cb.getAttribute('data-si'),cb.getAttribute('data-cfgbool'),cb.checked); });
+    });
   }
   function renderAssignPanel(){
     var p=document.getElementById('assignPanel');if(!p)return;
@@ -7556,7 +7665,9 @@
       (!OPEN.panel?'':
         '<div class="note" style="margin:8px 0 4px;display:flex;align-items:center;gap:6px">'+asgBtn('chips')+'Lotes desta equipe (marque/desmarque pra reatribuir — marque o mesmo lote em mais de uma equipe pra dividir ele entre elas)'+(OPEN.chips?':':' — '+nLotes+' lote(s)')+'</div>'+
         (OPEN.chips?'<div class="lotchips">'+chips+'</div>':'')+
-        '<div class="note" style="margin:10px 0 4px;display:flex;align-items:center;gap:6px">'+asgBtn('seq')+'Sequência de execução da Equipe '+team+' — do primeiro ao último lote (arraste ⋮ ou use as setas)'+(OPEN.seq?':':' — '+nChips+' lote(s)')+'</div>'+
+        '<div class="note" style="margin:10px 0 4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'+asgBtn('seq')+'Sequência de execução da Equipe '+team+' — do primeiro ao último lote (arraste ⋮ ou use as setas)'+(OPEN.seq?':':' — '+nChips+' lote(s)')+
+          '<label style="display:flex;align-items:center;gap:5px;margin-left:auto;font-size:12px" title="Sem isso, quando o serviço está com &quot;sem paralisações&quot; ou fila dinâmica, o app reordena os lotes sozinho pra não deixar equipe parada"><input type="checkbox" data-cfgbool="seqManual" data-si="'+si+'"'+((s.cfg&&s.cfg.seqManual)?' checked':'')+'>Seguir esta sequência</label>'+
+        '</div>'+
         (OPEN.seq?(seqItems.length?'<div class="seqlist">'+seqRows+'</div>':'<div class="note">Nenhum lote atribuído a esta equipe ainda.</div>'):''));
     wireAssignToggles(p);
     var sel=document.getElementById('assignSvc');
