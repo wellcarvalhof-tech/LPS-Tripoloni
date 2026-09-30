@@ -1562,7 +1562,6 @@
   // Plano de mobilização: semana do previsto (alvo) × semana do realizado (situação atual).
   var REP_MOB_PREV=null, REP_MOB_REAL=null;
   var REAL_FILTER='todos';
-  var REAL_LANC='total'; // o que os campos da tabela Realizado editam: 'total' ou 'terceiro'
   var REAL_CAT_OPEN={};
   var TOT_FILTER='todos', TOT_OPEN={};
   var SVCPR_FILTER='todos', SVCPR_OPEN={};
@@ -1983,37 +1982,45 @@
       groups[cat].push(r);
     });
     var w, th='<th style="min-width:150px">Recurso</th>';
-    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(calWeekDate(w))+'</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="4">S'+isoWeek(calWeekDate(w))+'</th>';
     var th2='<th></th>';
-    for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
-    var totP=[],totR=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);}
+    for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600" title="Previsto">P</th>'+
+      '<th class="r" style="font-size:9px;font-weight:600" title="Realizado com recurso próprio">Próp</th>'+
+      '<th class="r" style="font-size:9px;font-weight:600" title="Realizado com recurso de terceiro">Terc</th>'+
+      '<th class="r" style="font-size:9px;font-weight:600" title="Realizado total = próprio + terceiro">Total</th>';
+    var totP=[],totR=[],totT=[]; for(w=0;w<tw;w++){totP.push(0);totR.push(0);totT.push(0);}
     var rows='';
     order.forEach(function(cat){
       var catOpen=REAL_CAT_OPEN[cat]!==false;
-      var catP=[],catR=[]; for(var wc=0;wc<tw;wc++){catP.push(0);catR.push(0);}
+      var catP=[],catR=[],catT=[]; for(var wc=0;wc<tw;wc++){catP.push(0);catR.push(0);catT.push(0);}
       var rowsInner='';
       groups[cat].forEach(function(r){
         var cells='';
         for(var w2=1;w2<=tw;w2++){
           var d=calWeekDate(w2).toISOString().slice(0,10);
           var p=(hist.byResource[r.id]||[])[w2-1]||0;
-          var rv=realRec(r.id,d,'todos'), rt=realRec(r.id,d,'terceiro');
-          totP[w2-1]+=p; totR[w2-1]+=rv;
-          catP[w2-1]+=p; catR[w2-1]+=rv;
-          var edit=REAL_LANC==='terceiro'?rt:rv;
-          var bg=REAL_LANC==='terceiro'?'transparent':(rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)'));
-          var fg=REAL_LANC==='terceiro'?'var(--ink-2)':(rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)'));
+          var rv=realRec(r.id,d,'todos'), rt=realRec(r.id,d,'terceiro'), rp=realRec(r.id,d,'proprio');
+          totP[w2-1]+=p; totR[w2-1]+=rv; totT[w2-1]+=rt;
+          catP[w2-1]+=p; catR[w2-1]+=rv; catT[w2-1]+=rt;
+          var bg=rv>p?'var(--crit-bg)':(rv<p?'var(--warn-bg)':'var(--good-bg)');
+          var fg=rv>p?'var(--crit)':(rv<p?'var(--warn)':'var(--good)');
+          var inpCel=function(campo,valor){
+            return '<td><input class="einp" type="number" min="0" data-realres="'+r.id+'" data-realdate="'+d+'" data-realcampo="'+campo+'" value="'+(valor||0)+'" style="width:42px;background:transparent;border-color:transparent;color:var(--ink);text-align:right;padding:2px 3px;font-size:10.5px"></td>';
+          };
           cells+='<td class="r mono" style="color:var(--muted);font-size:10.5px">'+(p>0?fmtBR(p):'—')+'</td>'+
-            '<td style="background:'+bg+'"><input class="einp" type="number" data-realres="'+r.id+'" data-realdate="'+d+'" data-realcampo="'+REAL_LANC+'" value="'+(edit||0)+'" style="width:52px;background:transparent;border-color:transparent;color:'+fg+';font-weight:700;text-align:right;padding:2px 4px"></td>';
+            inpCel('proprio',rp)+inpCel('terceiro',rt)+
+            '<td class="r mono" style="background:'+bg+';color:'+fg+';font-weight:700;font-size:10.5px">'+(rv>0?fmtBR(rv):'—')+'</td>';
         }
         rowsInner+='<tr><td>'+r.n+'</td>'+cells+'</tr>';
       });
       var catCells='';
       for(var wc2=1;wc2<=tw;wc2++){
-        var pC=catP[wc2-1], rC=catR[wc2-1];
+        var pC=catP[wc2-1], rC=catR[wc2-1], tC=catT[wc2-1];
         var bgC=rC>pC?'var(--crit-bg)':(rC<pC?'var(--warn-bg)':'var(--good-bg)');
         var fgC=rC>pC?'var(--crit)':(rC<pC?'var(--warn)':'var(--good)');
         catCells+='<td class="r mono" style="font-weight:700">'+(pC>0?fmtBR(pC):'—')+'</td>'+
+          '<td class="r mono" style="font-weight:700">'+((rC-tC)>0?fmtBR(rC-tC):'—')+'</td>'+
+          '<td class="r mono" style="font-weight:700">'+(tC>0?fmtBR(tC):'—')+'</td>'+
           '<td class="r mono" style="background:'+bgC+';color:'+fgC+';font-weight:700">'+(rC>0?fmtBR(rC):'—')+'</td>';
       }
       rows+='<tr style="background:var(--elev)"><td style="font-weight:700"><button class="iconbtn" data-realcat="'+escAttr(cat)+'" style="margin-right:4px">'+(catOpen?'▾':'▸')+'</button>'+cat+'</td>'+catCells+'</tr>';
@@ -2022,10 +2029,12 @@
     if(list.length){
       var totCells='';
       for(var w3=1;w3<=tw;w3++){
-        var p3=totP[w3-1], r3=totR[w3-1];
+        var p3=totP[w3-1], r3=totR[w3-1], t3=totT[w3-1];
         var bg3=r3>p3?'var(--crit-bg)':(r3<p3?'var(--warn-bg)':'var(--good-bg)');
         var fg3=r3>p3?'var(--crit)':(r3<p3?'var(--warn)':'var(--good)');
         totCells+='<td class="r mono" style="font-weight:700">'+(p3>0?fmtBR(p3):'—')+'</td>'+
+          '<td class="r mono" style="font-weight:700">'+((r3-t3)>0?fmtBR(r3-t3):'—')+'</td>'+
+          '<td class="r mono" style="font-weight:700">'+(t3>0?fmtBR(t3):'—')+'</td>'+
           '<td class="r mono" style="background:'+bg3+';color:'+fg3+';font-weight:700">'+(r3>0?fmtBR(r3):'—')+'</td>';
       }
       rows+='<tr style="background:var(--elev)"><td style="font-weight:700">Total geral</td>'+totCells+'</tr>';
@@ -2035,12 +2044,8 @@
       return '<button class="subtab'+(REAL_FILTER===f?' active':'')+'" data-realfilter="'+f+'">'+lbl+'</button>';
     }).join('');
     return sectionCard('realizado','Realizado (previsto × realizado)',
-      'Mostra só recursos com previsto ou realizado apontado. P = previsto (cronograma × equipe típica). R = realizado (total, próprio + terceiro) — acima do previsto fica vermelho, abaixo fica amarelo, igual fica verde. Em <b>Apontar: Só terceiro</b> os campos passam a editar quanto daquele total é de terceiro (o previsto é geral e não separa os dois).'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
-      filtBtns+
-      '<span style="display:flex;gap:2px;align-items:center;margin-left:8px"><span class="note" style="margin:0 6px 0 0">Apontar:</span>'+
-        [['total','Total'],['terceiro','Só terceiro']].map(function(o){ return '<button class="subtab'+(REAL_LANC===o[0]?' active':'')+'" data-reallanc="'+o[0]+'">'+o[1]+'</button>'; }).join('')+
-      '</span>'+
-      '<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn" id="histDpCeqImp" title="Planilha de acompanhamento com as abas Dados EFETIVO DP e DADOS Realizado CEQ">↥ Importar DP + CEQ</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
+      'Cada semana tem <b>P</b> (previsto), <b>Próp</b> e <b>Terc</b> (realizado com recurso próprio e de terceiro — os dois editáveis) e <b>Total</b> (soma, comparada com o previsto: acima fica vermelho, abaixo amarelo, igual verde). O previsto é geral — no planejamento não se sabe o que será locado.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
+      filtBtns+'<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn" id="histDpCeqImp" title="Planilha de acompanhamento com as abas Dados EFETIVO DP e DADOS Realizado CEQ">↥ Importar DP + CEQ</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
       list.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum recurso com previsto ou realizado apontado ainda.</div>'
     );
   }
@@ -4048,9 +4053,6 @@
       document.querySelectorAll('[data-histclasseeq]').forEach(function(b){
         b.addEventListener('click',function(){HIST_CLASSE_EQ=b.getAttribute('data-histclasseeq'); go('cr-hist');});
       });
-      document.querySelectorAll('[data-reallanc]').forEach(function(b){
-        b.addEventListener('click',function(){REAL_LANC=b.getAttribute('data-reallanc'); go('cr-hist');});
-      });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
       });
@@ -5465,15 +5467,14 @@
     go('cr-hist');
   }
   /** Grava o campo editado na tabela Realizado. campo = 'total' (padrão) ou 'terceiro'. */
+  /** Grava o campo editado na tabela Realizado. campo = 'proprio' | 'terceiro' | 'total'.
+   *  O banco guarda total e terceiro; próprio é a diferença. */
   function saveRealizadoField(recursoId,dataSemana,val,campo){
     var v=Math.max(0,parseFloat(val)||0), k=recursoId+'::'+dataSemana;
-    if(campo==='terceiro'){
-      REALIZADO_TERC[k]=v;
-      if((+REALIZADO_REC[k]||0)<v)REALIZADO_REC[k]=v; // terceiro não pode passar do total
-    } else {
-      REALIZADO_REC[k]=v;
-      if((+REALIZADO_TERC[k]||0)>v)REALIZADO_TERC[k]=v;
-    }
+    var tot=+REALIZADO_REC[k]||0, terc=Math.min(tot,+REALIZADO_TERC[k]||0), prop=Math.max(0,tot-terc);
+    if(campo==='proprio'){ REALIZADO_REC[k]=v+terc; REALIZADO_TERC[k]=terc; }
+    else if(campo==='terceiro'){ REALIZADO_REC[k]=prop+v; REALIZADO_TERC[k]=v; }
+    else { REALIZADO_REC[k]=v; if(terc>v)REALIZADO_TERC[k]=v; }
     REALIZADO_DIRTY[k]=true;
     go('cr-hist');
   }
