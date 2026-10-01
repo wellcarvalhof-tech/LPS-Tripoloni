@@ -389,6 +389,8 @@
   .print-page .tcm-badge{font-size:7px}
   @media print{
     @page{size:landscape;margin:10mm}
+    @page lbRetrato{size:portrait;margin:12mm}
+    body.printing-lb{page:lbRetrato}
     *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
     .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign,.tc-svctoggle,.cv-toolbar{display:none!important}
     .cv-compact svg.chart{max-height:none!important}
@@ -410,10 +412,11 @@
     body.printing-lb #lbPrint .lbp-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:10px}
     body.printing-lb #lbPrint h2{margin:0;font-family:"Archivo",sans-serif;font-size:17px}
     body.printing-lb #lbPrint .lbp-sub{font-size:11px;color:#555}
-    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:11cm}
+    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:9.5cm}
     body.printing-lb #lbPrint .lbp-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;margin:6px 0 12px}
     body.printing-lb #lbPrint .lbp-legend .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:4px}
-    body.printing-lb #lbPrint table{width:100%;border-collapse:collapse;font-size:10px}
+    body.printing-lb #lbPrint table{width:100%;border-collapse:collapse;font-size:9.5px;table-layout:fixed}
+    body.printing-lb #lbPrint table th:first-child,body.printing-lb #lbPrint table td:first-child{width:42%;word-break:break-word}
     body.printing-lb #lbPrint th,body.printing-lb #lbPrint td{border:1px solid #bbb;padding:2px 6px}
     body.printing-lb #lbPrint thead th{background:#eee;font-weight:700}
     body.printing-lb #lbPrint tbody tr{break-inside:avoid;page-break-inside:avoid}
@@ -7239,7 +7242,7 @@
     }
     var hex=function(cor){ var m=String(cor||'#888888').replace('#',''); return 'FF'+(m.length===3?m[0]+m[0]+m[1]+m[1]+m[2]+m[2]:m).toUpperCase(); };
     var wb=new ExcelJS.Workbook();
-    var ws=wb.addWorksheet('Linha de Balanço',{views:[{state:'frozen',ySplit:3}],pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0}});
+    var ws=wb.addWorksheet('Linha de Balanço',{views:[{state:'frozen',ySplit:3}],pageSetup:{orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:0.5,right:0.5,top:0.6,bottom:0.6,header:0.3,footer:0.3}}});
     ws.columns=[{key:'nome',width:46},{key:'sigla',width:8},{key:'ini',width:13},{key:'fim',width:13},{key:'dur',width:9},{key:'eq',width:14}];
     var t1=ws.addRow([obra+' — Linha de Balanço']); t1.font={bold:true,size:14};
     ws.mergeCells(t1.number,1,t1.number,6);
@@ -7297,9 +7300,14 @@
       }).join('')+'</div>'+
       '<div class="lbp-table">'+lbProjectHTML()+'</div>';
     document.body.appendChild(box);
+    // O app imprime em paisagem (matriz); aqui a folha é retrato — a regra entra só durante a
+    // impressão e sai depois, pra não afetar as outras telas.
+    var est=document.createElement('style'); est.id='lbPageStyle';
+    est.textContent='@media print{@page{size:portrait;margin:12mm}}';
+    document.head.appendChild(est);
     document.body.classList.add('printing-lb');
     var t=document.title; document.title='Linha de Balanco - '+obra+' - '+((sv&&sv.n)||'');
-    window.onafterprint=function(){ document.body.classList.remove('printing-lb'); var b=document.getElementById('lbPrint'); if(b)b.remove(); document.title=t; window.onafterprint=null; };
+    window.onafterprint=function(){ document.body.classList.remove('printing-lb'); var b=document.getElementById('lbPrint'); if(b)b.remove(); var e2=document.getElementById('lbPageStyle'); if(e2)e2.remove(); document.title=t; window.onafterprint=null; };
     window.print();
   }
   /** Curva S da linha de balanço: % acumulado do trabalho (soma das durações etapa×lote). */
