@@ -910,6 +910,7 @@
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     LB=null; LB_DIRTY=false; // estudo de linha de balanço desta obra (recarrega do banco)
     LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
+    PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO='';
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
 
@@ -2492,10 +2493,6 @@
     '<div id="mpRoot"></div>';
   };
 
-  VIEWS['lp-semana']=function(){
-    return head('Programação Semanal','Lista das semanas — cadastre uma nova programação com os previstos; o PPC é puxado conforme o avanço, com causas de não cumprimento.',impBtn())+
-    '<div id="progRoot"></div>';
-  };
 
   VIEWS['lp-ppc']=function(){
     return head('PPC & Causas','Percentual de Planejamento Concluído e Pareto das causas de não cumprimento',impBtn())+
@@ -3232,45 +3229,260 @@
     });
   }
 
-  /* ---- Programação Semanal (PPC + causas) ---- */
-  window.PROG=window.PROG||[
-    {sem:'S33',ini:'2026-08-10',fim:'2026-08-16',items:[
-      {desc:'Concluir corte Lote 03',serv:1,lote:2,prev:12000,status:'concluido',causa:''},
-      {desc:'Drenagem Lote 02',serv:3,lote:1,prev:340,status:'nao',causa:'Material / suprimento'},
-      {desc:'Base Lote 01 — 2ª camada',serv:2,lote:0,prev:610,status:'parcial',causa:'Clima (chuva)'}
-    ]},
-    {sem:'S34',ini:'2026-08-17',fim:'2026-08-23',items:[
-      {desc:'Iniciar CBUQ Lote 01',serv:4,lote:0,prev:200,status:'planejado',causa:''}
-    ]}
-  ];
-  window._progSel=window._progSel==null?0:window._progSel;
-  function progPPC(p){var t=p.items.length||0,c=p.items.filter(function(x){return x.status==='concluido';}).length;return t?Math.round(100*c/t):0;}
-  function renderProg(){
-    var root=document.getElementById('progRoot');if(!root)return;
-    var listRows=window.PROG.map(function(p,i){var ppc=progPPC(p),col=ppc>=85?'good':ppc>=70?'warn':'crit';
-      return '<tr'+(i===window._progSel?' style="background:var(--elev)"':'')+'><td><b>'+p.sem+'</b></td><td class="mono">'+brDate(p.ini)+' – '+brDate(p.fim)+'</td><td class="r num">'+p.items.length+'</td><td class="r"><span class="pill '+col+'">'+ppc+'%</span></td><td><button class="btn" style="padding:4px 9px" data-progopen="'+i+'">Abrir</button></td></tr>';}).join('');
-    var list='<div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="eyebrow" style="margin:0">Semanas programadas</div><button class="btn primary" id="progNew">+ Nova programação</button></div>'+
-      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Semana</th><th>Período</th><th class="r">Compromissos</th><th class="r">PPC</th><th></th></tr></thead><tbody>'+listRows+'</tbody></table></div></div>';
-    var p=window.PROG[window._progSel],detail='';
-    if(p){
-      var irows=p.items.map(function(it,idx){
-        var stName={planejado:'Planejado',concluido:'Concluído',nao:'Não concluído',parcial:'Parcial'};
-        var sel='<select class="esel" data-pstat="'+idx+'">'+['planejado','concluido','nao','parcial'].map(function(v){return '<option value="'+v+'"'+(it.status===v?' selected':'')+'>'+stName[v]+'</option>';}).join('')+'</select>';
-        var showC=(it.status==='nao'||it.status==='parcial');
-        var causa='<select class="esel" data-pcausa="'+idx+'"'+(showC?'':' style="display:none"')+'><option value="">— causa —</option>'+PNC.map(function(c){return '<option'+(it.causa===c?' selected':'')+'>'+c+'</option>';}).join('')+'</select>';
-        return '<tr><td>'+tinp(it.desc,'190px')+'</td><td>'+(it.serv!=null?SERV[it.serv].n:'—')+'</td><td>'+(it.lote!=null?LOTS[it.lote]:'—')+'</td><td class="r num">'+fmtBR(it.prev)+'</td><td>'+sel+'</td><td>'+causa+'</td><td><button class="iconbtn" data-pdel="'+idx+'">✕</button></td></tr>';
+  /* ================= Programação Semanal =================
+   * O que o Tempo-Caminho e a Linha de Balanço dizem da semana entra aqui como SUGESTÃO: o
+   * botão "Puxar sugestões" cria as linhas, e dali em diante elas são da programação — editar,
+   * apagar ou acrescentar não mexe em cronograma nenhum. Campos do previsto: serviço/etapa,
+   * grupo (livre), lote início, lote fim, detalhamento e quantidade prevista; do acompanhamento:
+   * status, quantidade realizada e causa de não cumprimento. */
+  var PROG_PLANOS=[], PROG_PLANO=null, PROG_ITENS=[], PROG_CAUSAS=[], PROG_ERRO='', PROG_CARREGANDO=false;
+  var PROG_STATUS=[['planejado','Planejado'],['concluido','Concluído'],['parcial','Parcial'],['nao_concluido','Não concluído']];
+  async function sbProgPlanos(obraId){
+    var r=await SB.from('planos_semanais').select('id,semana_iso,data_inicio,data_fim').eq('obra_id',obraId).order('data_inicio',{ascending:false});
+    if(r.error)throw r.error; return r.data||[];
+  }
+  async function sbProgCriarPlano(obraId,semanaIso,ini,fim){
+    var id=newUuid();
+    var r=await SB.from('planos_semanais').insert({id:id,obra_id:obraId,semana_iso:semanaIso,data_inicio:ini,data_fim:fim});
+    if(r.error)throw r.error; return id;
+  }
+  async function sbProgItens(planoId){
+    var r=await SB.from('compromissos').select('id,servico_id,etapa,grupo,lote_id,lote_fim_id,detalhamento,quantidade_prevista,quantidade_realizada,status,causa_id,origem,ordem,descricao').eq('plano_id',planoId).order('ordem',{ascending:true});
+    if(r.error)throw r.error; return r.data||[];
+  }
+  async function sbProgSalvarItem(item){
+    var r=await SB.from('compromissos').upsert(item,{onConflict:'id'});
+    if(r.error)throw r.error;
+  }
+  async function sbProgApagarItem(id){
+    var r=await SB.from('compromissos').delete().eq('id',id);
+    if(r.error)throw r.error;
+  }
+  async function sbProgCausas(obraId){
+    var r=await SB.from('causas_nao_cumprimento').select('id,nome,categoria').or('obra_id.is.null,obra_id.eq.'+obraId).order('nome',{ascending:true});
+    if(r.error)return [];
+    return r.data||[];
+  }
+  /** Semana do projeto -> {iso,ini,fim} (segunda a domingo). */
+  function progSemanaInfo(w){
+    var seg=mondayOf(w), dom=new Date(seg.getTime()); dom.setDate(dom.getDate()+6);
+    return {w:w,iso:'S'+isoWeek(seg)+'/'+seg.getFullYear(),ini:seg.toISOString().slice(0,10),fim:dom.toISOString().slice(0,10),seg:seg};
+  }
+  function progSemanaDoPlano(p){
+    if(!p||!p.data_inicio)return null;
+    for(var w=1;w<=520;w++){ if(mondayOf(w).toISOString().slice(0,10)===p.data_inicio)return w; }
+    return null;
+  }
+  /** Junta lotes consecutivos (na ordem da obra) em trechos "do lote X ao lote Y". */
+  function progTrechos(idxs){
+    var ord=idxs.slice().sort(function(a,b){return a-b;}), out=[], ini=null, ant=null;
+    ord.forEach(function(li){
+      if(ini===null){ ini=li; ant=li; return; }
+      if(li===ant+1){ ant=li; return; }
+      out.push([ini,ant]); ini=li; ant=li;
+    });
+    if(ini!==null)out.push([ini,ant]);
+    return out;
+  }
+  /** Sugestões da semana: o que o Tempo-Caminho e a Linha de Balanço preveem. Só leitura. */
+  function progSugestoes(w){
+    var sug=[], ids=window._LOTIDS||[];
+    // --- Tempo-Caminho: serviços ativos na semana, agrupados por trecho de lotes ---
+    var segs=viewSegs(buildSchedule());
+    var porSvc={};
+    segs.forEach(function(sg){
+      var i=w-sg.start; if(i<0||i>=sg.dur)return;
+      var q=sg.wq[i]||0;
+      var acc=porSvc[sg.si]||(porSvc[sg.si]={lotes:[],qtd:0,equipes:{}});
+      if(acc.lotes.indexOf(sg.li)<0)acc.lotes.push(sg.li);
+      acc.qtd+=q; acc.equipes[sg.team]=1;
+    });
+    Object.keys(porSvc).forEach(function(si){
+      var s=SERV[si], acc=porSvc[si];
+      progTrechos(acc.lotes).forEach(function(tr){
+        var qtd=acc.qtd*( (tr[1]-tr[0]+1) / acc.lotes.length ); // rateio simples quando há vários trechos
+        sug.push({origem:'tc',servico_id:s.id||null,etapa:null,descricao:s.n,
+          grupo:'',lote_id:ids[tr[0]]||null,lote_fim_id:ids[tr[1]]||null,
+          detalhamento:'Tempo-Caminho · equipe(s) '+Object.keys(acc.equipes).join(', ')+' · '+LOTS[tr[0]]+(tr[1]!==tr[0]?(' a '+LOTS[tr[1]]):''),
+          quantidade_prevista:Math.round(qtd*100)/100});
+      });
+    });
+    // --- Linha de Balanço: etapas que caem na semana, por serviço detalhado ---
+    var root=lbRoot();
+    Object.keys(root.servicos||{}).forEach(function(svId){
+      var antes=root.servicoSel; root.servicoSel=svId;
+      var calc=null; try{ calc=lbCalc(); }catch(e){}
+      root.servicoSel=antes;
+      if(!calc||!calc.itens.length)return;
+      var c=calc.c, sv=SERV[lbSvcIdx(svId)];
+      var d0=(w-(+c.inicio||1))*DIAS_SEM, d1=d0+DIAS_SEM;
+      if(d1<=0)return;
+      var porEtapa={};
+      calc.itens.forEach(function(it){
+        if(it.fim<=d0||it.ini>=d1)return;
+        var e=(c.etapas.filter(function(x){return x.id===it.eid;})[0])||{};
+        var acc=porEtapa[it.eid]||(porEtapa[it.eid]={nome:e.nome||'Etapa',lotes:[],dias:0});
+        var li=ids.indexOf(it.lote); if(li>=0&&acc.lotes.indexOf(li)<0)acc.lotes.push(li);
+        acc.dias+=Math.max(0,Math.min(it.fim,d1)-Math.max(it.ini,d0));
+      });
+      Object.keys(porEtapa).forEach(function(eid){
+        var acc=porEtapa[eid];
+        progTrechos(acc.lotes).forEach(function(tr){
+          sug.push({origem:'lb',servico_id:(sv&&sv.id)||null,etapa:acc.nome,descricao:acc.nome,
+            grupo:(sv&&sv.n)||'',lote_id:ids[tr[0]]||null,lote_fim_id:ids[tr[1]]||null,
+            detalhamento:'Linha de balanço · '+((sv&&sv.n)||'')+' · '+(Math.round(acc.dias*10)/10)+' dia(s) nesta semana',
+            quantidade_prevista:null});
+        });
+      });
+    });
+    return sug;
+  }
+  function progNomeItem(it){
+    if(it.etapa)return it.etapa;
+    var s=SERV.filter(function(x){return x.id===it.servico_id;})[0];
+    return (s&&s.n)||it.descricao||'—';
+  }
+  function progLoteSel(it,campo){
+    var ids=window._LOTIDS||[], atual=it[campo]||'';
+    return '<select class="esel" data-pitem="'+it.id+'" data-pcampo="'+campo+'" style="width:110px"><option value="">—</option>'+
+      ids.map(function(id,i){ return '<option value="'+escAttr(id)+'"'+(id===atual?' selected':'')+'>'+escAttr(LOTS[i]||id)+'</option>'; }).join('')+'</select>';
+  }
+  function progPPCAtual(){
+    var t=PROG_ITENS.length; if(!t)return null;
+    var ok=PROG_ITENS.filter(function(i){return i.status==='concluido';}).length;
+    return Math.round(ok/t*100);
+  }
+  VIEWS['lp-semana']=function(){
+    if(!selectedObra)return head('Programação Semanal','',null)+'<div class="card"><div class="note">Abra uma obra.</div></div>';
+    var acoes='<button class="btn" id="progNova">+ Nova semana</button>'+
+      (PROG_PLANO?'<button class="btn" id="progPuxar" title="Traz o que o Tempo-Caminho e a Linha de Balanço preveem pra esta semana — depois é só editar">↓ Puxar sugestões</button>'+
+        '<button class="btn primary" id="progAdd">+ Linha</button>':'');
+    var semSel=PROG_PLANOS.length?('<select class="esel" id="progSel" style="min-width:220px">'+PROG_PLANOS.map(function(p){
+        return '<option value="'+p.id+'"'+((PROG_PLANO&&PROG_PLANO.id===p.id)?' selected':'')+'>'+escAttr(p.semana_iso)+' · '+brDate(p.data_inicio)+' a '+brDate(p.data_fim)+'</option>';
+      }).join('')+'</select>'):'<span class="note">Nenhuma semana criada ainda.</span>';
+    var ppc=progPPCAtual();
+    var corpo;
+    if(PROG_ERRO){
+      corpo='<div class="banner" style="border-color:var(--crit)">Não deu pra carregar a programação: '+escAttr(PROG_ERRO)+
+        '<br>Se a mensagem fala em coluna que não existe, rode a migração <b>sql/24_programacao_semanal.sql</b>.</div>';
+    } else if(PROG_CARREGANDO){ corpo='<div class="note">Carregando…</div>'; }
+    else if(!PROG_PLANO){ corpo='<div class="note">Crie uma semana pra começar a programar.</div>'; }
+    else if(!PROG_ITENS.length){ corpo='<div class="note">Semana sem linhas. Use <b>↓ Puxar sugestões</b> pra trazer o previsto do cronograma, ou <b>+ Linha</b> pra lançar na mão.</div>'; }
+    else {
+      var linhas=PROG_ITENS.map(function(it){
+        var svcOpts='<option value="">— livre —</option>'+SERV.map(function(s){ return '<option value="'+escAttr(s.id||'')+'"'+(s.id===it.servico_id?' selected':'')+'>'+escAttr(s.n)+'</option>'; }).join('');
+        var mostraCausa=(it.status==='nao_concluido'||it.status==='parcial');
+        var causaSel='<select class="esel" data-pitem="'+it.id+'" data-pcampo="causa_id" style="width:160px"'+(mostraCausa?'':' disabled')+'><option value="">— causa —</option>'+
+          PROG_CAUSAS.map(function(cz){ return '<option value="'+cz.id+'"'+(cz.id===it.causa_id?' selected':'')+'>'+escAttr(cz.nome)+'</option>'; }).join('')+'</select>';
+        var tag=it.origem==='tc'?'<span class="pill" title="Sugerido pelo Tempo-Caminho">TC</span>':(it.origem==='lb'?'<span class="pill" title="Sugerido pela Linha de Balanço">LB</span>':'');
+        return '<tr>'+
+          '<td style="min-width:200px">'+tag+' <input class="einp" data-pitem="'+it.id+'" data-pcampo="etapa" value="'+escAttr(it.etapa||'')+'" placeholder="etapa (livre)" style="width:150px">'+
+            '<div style="margin-top:3px"><select class="esel" data-pitem="'+it.id+'" data-pcampo="servico_id" style="width:170px">'+svcOpts+'</select></div></td>'+
+          '<td><input class="einp" data-pitem="'+it.id+'" data-pcampo="grupo" value="'+escAttr(it.grupo||'')+'" placeholder="grupo" style="width:120px"></td>'+
+          '<td>'+progLoteSel(it,'lote_id')+'</td>'+
+          '<td>'+progLoteSel(it,'lote_fim_id')+'</td>'+
+          '<td><input class="einp" data-pitem="'+it.id+'" data-pcampo="detalhamento" value="'+escAttr(it.detalhamento||'')+'" placeholder="o que será feito" style="width:230px"></td>'+
+          '<td><input class="einp" type="number" step="0.01" data-pitem="'+it.id+'" data-pcampo="quantidade_prevista" value="'+(it.quantidade_prevista==null?'':it.quantidade_prevista)+'" style="width:90px"></td>'+
+          '<td><select class="esel" data-pitem="'+it.id+'" data-pcampo="status" style="width:130px">'+PROG_STATUS.map(function(st){ return '<option value="'+st[0]+'"'+(it.status===st[0]?' selected':'')+'>'+st[1]+'</option>'; }).join('')+'</select></td>'+
+          '<td><input class="einp" type="number" step="0.01" data-pitem="'+it.id+'" data-pcampo="quantidade_realizada" value="'+(it.quantidade_realizada==null?'':it.quantidade_realizada)+'" style="width:90px"></td>'+
+          '<td>'+causaSel+'</td>'+
+          '<td><button class="iconbtn" data-pdel="'+it.id+'" title="Excluir linha">✕</button></td></tr>';
       }).join('');
-      detail='<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">Programação '+p.sem+' — PPC '+progPPC(p)+'%</h3><button class="btn" id="progAddItem">+ Compromisso</button></div>'+
-        '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Compromisso (previsto)</th><th>Serviço</th><th>Lote</th><th class="r">Qtd prev.</th><th>Status</th><th>Causa (se não cumpriu)</th><th></th></tr></thead><tbody>'+irows+'</tbody></table></div>'+
-        '<div class="note" style="margin-top:8px">O PPC vem dos status; as causas de não cumprimento alimentam o Pareto de PNC.</div></div>';
+      corpo='<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead>'+
+        '<tr><th colspan="6" style="text-align:center;background:var(--elev)">Previsto</th><th colspan="3" style="text-align:center;background:var(--elev)">Acompanhamento</th><th></th></tr>'+
+        '<tr><th>Serviço / etapa</th><th>Grupo</th><th>Lote início</th><th>Lote fim</th><th>Detalhamento</th><th class="r">Qtd prevista</th>'+
+        '<th>Status</th><th class="r">Qtd realizada</th><th>Causa (se não cumpriu)</th><th></th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
+        '<div class="note" style="margin-top:8px">As sugestões (TC/LB) viram linhas comuns da programação — mudar aqui não altera o Tempo-Caminho nem a Linha de Balanço.</div>';
     }
-    root.innerHTML=list+detail;
-    root.querySelectorAll('[data-progopen]').forEach(function(b){b.addEventListener('click',function(){window._progSel=+b.getAttribute('data-progopen');renderProg();});});
-    var nw=document.getElementById('progNew');if(nw)nw.addEventListener('click',function(){window.PROG.push({sem:'S'+(window.PROG.length+33),ini:'',fim:'',items:[]});window._progSel=window.PROG.length-1;renderProg();});
-    var ai=document.getElementById('progAddItem');if(ai)ai.addEventListener('click',function(){window.PROG[window._progSel].items.push({desc:'Novo compromisso',serv:null,lote:null,prev:0,status:'planejado',causa:''});renderProg();});
-    root.querySelectorAll('[data-pstat]').forEach(function(sel){sel.addEventListener('change',function(){window.PROG[window._progSel].items[+sel.getAttribute('data-pstat')].status=sel.value;renderProg();});});
-    root.querySelectorAll('[data-pcausa]').forEach(function(sel){sel.addEventListener('change',function(){window.PROG[window._progSel].items[+sel.getAttribute('data-pcausa')].causa=sel.value;});});
-    root.querySelectorAll('[data-pdel]').forEach(function(b){b.addEventListener('click',function(){window.PROG[window._progSel].items.splice(+b.getAttribute('data-pdel'),1);renderProg();});});
+    return head('Programação Semanal','O previsto do cronograma vira sugestão; a programação é sua.',acoes)+
+      '<div class="card">'+
+        '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+          '<span class="lab" style="margin:0">Semana</span>'+semSel+
+          (ppc!=null?'<span class="pill'+(ppc>=85?' good':(ppc>=70?' warn':' crit'))+'">PPC '+ppc+'%</span>':'')+
+          (PROG_ITENS.length?'<span class="note">'+PROG_ITENS.length+' linha(s)</span>':'')+
+        '</div>'+corpo+
+      '</div>';
+  };
+  async function progCarregar(planoId){
+    if(!selectedObra)return;
+    PROG_ERRO=''; PROG_CARREGANDO=true; if(current==='lp-semana')go('lp-semana');
+    try{
+      PROG_PLANOS=await sbProgPlanos(selectedObra.id);
+      if(!PROG_CAUSAS.length)PROG_CAUSAS=await sbProgCausas(selectedObra.id);
+      PROG_PLANO=planoId?(PROG_PLANOS.filter(function(p){return p.id===planoId;})[0]||null):(PROG_PLANOS[0]||null);
+      PROG_ITENS=PROG_PLANO?await sbProgItens(PROG_PLANO.id):[];
+    }catch(e){ PROG_ERRO=(e&&e.message)||String(e); }
+    PROG_CARREGANDO=false;
+    if(current==='lp-semana')go('lp-semana');
+  }
+  async function progNovaSemana(){
+    var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
+    var hoje=hojeWeekNumber(tw)||1;
+    var txt=prompt('Semana do projeto (1 = primeira semana da obra). Hoje é a semana '+hoje+'.',String(hoje));
+    if(txt===null)return;
+    var w=Math.max(1,parseInt(txt,10)||hoje), info=progSemanaInfo(w);
+    if(PROG_PLANOS.some(function(p){return p.data_inicio===info.ini;})){ alert('Essa semana já está programada.'); return; }
+    try{ var id=await sbProgCriarPlano(selectedObra.id,info.iso,info.ini,info.fim); await progCarregar(id); toast('Semana '+info.iso+' criada.'); }
+    catch(e){ alert('Falha ao criar a semana: '+((e&&e.message)||e)); }
+  }
+  async function progPuxarSugestoes(){
+    if(!PROG_PLANO)return;
+    var w=progSemanaDoPlano(PROG_PLANO);
+    if(!w){ alert('Não consegui situar essa semana no cronograma.'); return; }
+    var sug=progSugestoes(w);
+    if(!sug.length){ alert('O cronograma não prevê nada pra esta semana.'); return; }
+    var jaTem={};
+    PROG_ITENS.forEach(function(it){ jaTem[(it.servico_id||'')+'|'+(it.etapa||'')+'|'+(it.lote_id||'')+'|'+(it.lote_fim_id||'')]=1; });
+    var novos=sug.filter(function(s){ return !jaTem[(s.servico_id||'')+'|'+(s.etapa||'')+'|'+(s.lote_id||'')+'|'+(s.lote_fim_id||'')]; });
+    if(!novos.length){ alert('As sugestões desta semana já estão na programação.'); return; }
+    if(!confirm('Trazer '+novos.length+' linha(s) sugerida(s) pelo cronograma? Elas viram linhas normais da programação — dá pra editar ou apagar depois.'))return;
+    try{
+      var base=PROG_ITENS.length;
+      for(var i=0;i<novos.length;i++){
+        await sbProgSalvarItem(Object.assign({id:newUuid(),obra_id:selectedObra.id,plano_id:PROG_PLANO.id,status:'planejado',ordem:base+i},novos[i]));
+      }
+      await progCarregar(PROG_PLANO.id); toast(novos.length+' sugestão(ões) adicionada(s).');
+    }catch(e){ alert('Falha ao trazer as sugestões: '+((e&&e.message)||e)); }
+  }
+  async function progAddLinha(){
+    if(!PROG_PLANO)return;
+    try{
+      await sbProgSalvarItem({id:newUuid(),obra_id:selectedObra.id,plano_id:PROG_PLANO.id,origem:'manual',
+        status:'planejado',ordem:PROG_ITENS.length,etapa:'',grupo:'',detalhamento:''});
+      await progCarregar(PROG_PLANO.id);
+    }catch(e){ alert('Falha ao incluir: '+((e&&e.message)||e)); }
+  }
+  function wireProg(){
+    var sel=document.getElementById('progSel');
+    if(sel)sel.addEventListener('change',function(){ progCarregar(sel.value); });
+    var nova=document.getElementById('progNova'); if(nova)nova.addEventListener('click',progNovaSemana);
+    var pux=document.getElementById('progPuxar'); if(pux)pux.addEventListener('click',progPuxarSugestoes);
+    var add=document.getElementById('progAdd'); if(add)add.addEventListener('click',progAddLinha);
+    document.querySelectorAll('[data-pitem]').forEach(function(el){
+      el.addEventListener('change',async function(){
+        var id=el.getAttribute('data-pitem'), campo=el.getAttribute('data-pcampo');
+        var it=PROG_ITENS.filter(function(x){return x.id===id;})[0]; if(!it)return;
+        var v=el.value;
+        if(campo==='quantidade_prevista'||campo==='quantidade_realizada')v=(v===''?null:Math.max(0,parseFloat(v)||0));
+        if(campo==='servico_id'||campo==='lote_id'||campo==='lote_fim_id'||campo==='causa_id')v=v||null;
+        it[campo]=v;
+        if(campo==='status'&&v!=='nao_concluido'&&v!=='parcial')it.causa_id=null;
+        try{
+          await sbProgSalvarItem({id:it.id,obra_id:selectedObra.id,plano_id:PROG_PLANO.id,servico_id:it.servico_id||null,etapa:it.etapa||null,
+            grupo:it.grupo||null,lote_id:it.lote_id||null,lote_fim_id:it.lote_fim_id||null,detalhamento:it.detalhamento||null,
+            quantidade_prevista:it.quantidade_prevista,quantidade_realizada:it.quantidade_realizada,status:it.status||'planejado',
+            causa_id:it.causa_id||null,origem:it.origem||'manual',ordem:it.ordem||0,descricao:progNomeItem(it)});
+          if(campo==='status')go('lp-semana');
+        }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+      });
+    });
+    document.querySelectorAll('[data-pdel]').forEach(function(b){
+      b.addEventListener('click',async function(){
+        if(!confirm('Excluir esta linha da programação?'))return;
+        try{ await sbProgApagarItem(b.getAttribute('data-pdel')); await progCarregar(PROG_PLANO.id); }
+        catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+      });
+    });
   }
 
   /* ---- Produção Diária: lista / tempo-caminho / matriz de estacas ---- */
@@ -3861,7 +4073,7 @@
       });
     }
     if(view==='lp-medio'){renderMedio();}
-    if(view==='lp-semana'){renderProg();}
+    if(view==='lp-semana'){ wireProg(); if(!PROG_PLANOS.length&&!PROG_ERRO&&!PROG_CARREGANDO)progCarregar(); }
     if(view==='ac-prod'){renderProd();}
     if(view==='lp-ppc'){ppcBars('ppcb2');pareto();}
     if(view==='cad-serv'){

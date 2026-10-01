@@ -27,6 +27,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `21_add_perfil_controle.sql` | Novo perfil **Controle** (edita só nas abas liberadas, igual ao gestor) nos membros, convites e na RLS | ⚠️ novo — rodar pra usar o perfil Controle |
 | `22_add_presenca.sql` | Tabela `presenca` — mostra quem está usando o app agora (obra e tela), com sinal de vida a cada minuto | ⚠️ novo — rodar pra ver quem está online |
 | `23_add_auditoria.sql` | Tabela `auditoria` + triggers nas tabelas da obra — registra quem alterou o quê e quando (antes/depois), lido em Cadastro → Histórico de alterações | ⚠️ novo — rodar pra ter o histórico |
+| `24_programacao_semanal.sql` | Campos novos nos `compromissos` (grupo, etapa, lote final, detalhamento, origem, ordem) — Programação Semanal com sugestões do Tempo-Caminho e da Linha de Balanço | ⚠️ novo — rodar pra usar a Programação Semanal |
 | `20_add_linha_balanco.sql` | Coluna `obras.linha_balanco` — estudo de linha de balanço (lotes, atividades, início, duração e ritmo), independente do Tempo-Caminho | ⚠️ novo — rodar pra usar a tela Linha de Balanço |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.
