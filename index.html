@@ -389,8 +389,8 @@
   .print-page .tcm-badge{font-size:7px}
   @media print{
     @page{size:landscape;margin:10mm}
-    @page lbRetrato{size:portrait;margin:12mm}
-    body.printing-lb{page:lbRetrato}
+    @page lbFolha{size:auto;margin:10mm}
+    body.printing-lb{page:lbFolha}
     *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
     .side,.topbar,.tc-zoom,#cronoToolbar,.banner,.page-actions,.subtabs,.legend,.wip,.apptoast,.assign,.tc-svctoggle,.cv-toolbar{display:none!important}
     .cv-compact svg.chart{max-height:none!important}
@@ -413,7 +413,7 @@
     body.printing-lb #lbPrint h2{margin:0;font-family:"Archivo",sans-serif;font-size:17px}
     body.printing-lb #lbPrint .lbp-sub{font-size:11px;color:#555}
     body.printing-lb #lbPrint .lbp-chart{break-after:page;page-break-after:always}
-    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:21.5cm}
+    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:82vh}
     body.printing-lb #lbPrint .lbp-chart .lbp-legend{margin-top:6px}
     body.printing-lb #lbPrint .lbp-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;margin:0 0 12px}
     body.printing-lb #lbPrint .lbp-legend .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:4px}
@@ -7166,7 +7166,7 @@
     var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
     // Na tela: colunas tarefa | início | término | duração. Na impressão (compacto): só o rótulo,
     // proporção de folha retrato e altura por linha calculada pra tudo caber numa página só.
-    var colT=compacto?150:330, colD=compacto?46:78;
+    var colT=compacto?212:330, colD=compacto?46:78;
     var labelW=compacto?(colT+colD*2+36):(colT+colD*2+56);
     var W=compacto?900:1320, pl=labelW, pr=compacto?10:16, pt=compacto?26:38, pb=compacto?34:40;
     var rowH=compacto?Math.max(6,Math.min(16,Math.floor(980/Math.max(1,linhas.length))))
@@ -7204,7 +7204,7 @@
       var mostraLote=!compacto||i===0||linhas[i-1].lote!==L.lote;
       s+='<text class="axm" x="6" y="'+(y+rowH/2+fs*0.36)+'" style="font-size:'+fs+'px">'+
         (mostraLote?'<tspan style="fill:var(--muted);font-weight:700">'+escAttr(lbNomeLote(L.lote))+' · </tspan>':(compacto?'<tspan> </tspan>':'<tspan style="fill:var(--muted)">'+escAttr(lbNomeLote(L.lote))+' · </tspan>'))+
-        escAttr(compacto?lbSigla(L.e):L.e.nome)+'</text>';
+        escAttr(compacto?(lbSigla(L.e)+' · '+L.e.nome):L.e.nome)+'</text>';
       s+='<rect x="'+xx(L.it.ini).toFixed(1)+'" y="'+(y+rowH*0.18).toFixed(1)+'" width="'+Math.max(2,xx(L.it.fim)-xx(L.it.ini)).toFixed(1)+'" height="'+(rowH*0.64).toFixed(1)+'" rx="3" fill="'+(L.e.cor||'#888')+'"><title>'+escAttr(L.e.nome)+' · '+escAttr(lbNomeLote(L.lote))+'\ndia '+Math.round(L.it.ini)+' → '+Math.round(L.it.fim)+'</title></rect>';
     });
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'"'+(compacto?' preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto"':' style="min-width:1100px"')+'>'+s+'</svg>';
@@ -7353,8 +7353,10 @@
     document.body.appendChild(box);
     // O app imprime em paisagem (matriz); aqui a folha é retrato — a regra entra só durante a
     // impressão e sai depois, pra não afetar as outras telas.
+    // A folha (tamanho e orientação) é a que o usuário escolher no diálogo de impressão — o app
+    // só reserva a margem; o gráfico se ajusta à página resultante.
     var est=document.createElement('style'); est.id='lbPageStyle';
-    est.textContent='@media print{@page{size:portrait;margin:12mm}}';
+    est.textContent='@media print{@page{size:auto;margin:10mm}}';
     document.head.appendChild(est);
     document.body.classList.add('printing-lb');
     var t=document.title; document.title='Linha de Balanco - '+obra+' - '+((sv&&sv.n)||'');
