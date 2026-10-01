@@ -941,7 +941,7 @@
     }
     if(!selectedObra||isPlanejador()){ b.style.display='none'; return; }
     b.style.display='inline-flex';
-    b.textContent=isReadOnly()?'Visualização':'Gestor';
+    b.textContent=isReadOnly()?'Visualização':(PAPEL_LABEL[MY_ROLE.papel]||'Gestor');
     b.title=isReadOnly()?'Seu acesso a esta obra é somente leitura':'Você edita só as abas liberadas pra você';
   }
   /** Modo somente leitura (visualizador): o banco já bloqueia a gravação (RLS); aqui só tira
@@ -1345,7 +1345,8 @@
    * 3 níveis de classificação (ex.: "INDIRETO ADMINISTRATIVO" > "1. Administrativo" > "RECURSOS
    * HUMANOS"). Puramente cadastral — não entra no cálculo do cronograma. */
   /* ---------- Acessos (planejador) ---------- */
-  var PAPEL_LABEL={planejador:'Planejador',gestor:'Gestor',visualizador:'Visualizador'};
+  // controle = mesma mecânica do gestor (edita só nas abas liberadas), separado pra organizar quem é quem
+  var PAPEL_LABEL={planejador:'Planejador',gestor:'Gestor',controle:'Controle',visualizador:'Visualizador'};
   function tabsCheckboxesHTML(selected,prefix){
     var sel=selected||[], all=sel.indexOf('*')>=0;
     return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px 12px">'+allTabs().map(function(it){
@@ -1378,7 +1379,7 @@
     }
     var rows=membros.map(function(m){
       var me=m.user_id===myUid;
-      var sel='<select class="esel" data-mpapel="'+m.id+'"'+(me?' disabled':'')+'>'+['planejador','gestor','visualizador'].map(function(p){return '<option value="'+p+'"'+(m.papel===p?' selected':'')+'>'+PAPEL_LABEL[p]+'</option>';}).join('')+'</select>';
+      var sel='<select class="esel" data-mpapel="'+m.id+'"'+(me?' disabled':'')+'>'+['planejador','gestor','controle','visualizador'].map(function(p){return '<option value="'+p+'"'+(m.papel===p?' selected':'')+'>'+PAPEL_LABEL[p]+'</option>';}).join('')+'</select>';
       var acoes=me?'<span class="note">(você)</span>':
         (m.papel==='planejador'?'':'<button class="btn" data-mtabs="'+m.id+'" style="padding:4px 9px">Abas…</button> ')+
         '<button class="iconbtn" data-mdel="'+m.id+'" title="Remover acesso">✕</button>';
@@ -1392,7 +1393,7 @@
       '<div class="card"><div class="eyebrow">Dar acesso</div>'+
         '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">'+
           '<div class="field" style="margin:0;min-width:260px"><label>E-mail</label><input class="inp" id="acEmail" type="email" placeholder="pessoa@empresa.com.br"></div>'+
-          '<div class="field" style="margin:0"><label>Perfil</label><select class="esel" id="acPapel" style="height:36px"><option value="visualizador">Visualizador</option><option value="gestor">Gestor</option><option value="planejador">Planejador</option></select></div>'+
+          '<div class="field" style="margin:0"><label>Perfil</label><select class="esel" id="acPapel" style="height:36px"><option value="visualizador">Visualizador</option><option value="controle">Controle</option><option value="gestor">Gestor</option><option value="planejador">Planejador</option></select></div>'+
           '<button class="btn primary" id="acConvidar">Dar acesso</button>'+
         '</div>'+
         '<div id="acTabsWrap"><div class="note" style="margin-bottom:6px">Abas liberadas:</div>'+tabsCheckboxesHTML([],'actab')+'</div>'+
