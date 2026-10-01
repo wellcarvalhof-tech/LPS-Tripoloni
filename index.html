@@ -3267,7 +3267,10 @@
   /** Semana do projeto -> {iso,ini,fim} (segunda a domingo). */
   function progSemanaInfo(w){
     var seg=mondayOf(w), dom=new Date(seg.getTime()); dom.setDate(dom.getDate()+6);
-    return {w:w,iso:'S'+isoWeek(seg)+'/'+seg.getFullYear(),ini:seg.toISOString().slice(0,10),fim:dom.toISOString().slice(0,10),seg:seg};
+    var dm=function(d){ var p=function(n){return (n<10?'0':'')+n;}; return p(d.getDate())+'/'+p(d.getMonth()+1); };
+    return {w:w,iso:'S'+isoWeek(seg)+'/'+seg.getFullYear(),
+      rotulo:'S'+isoWeek(seg)+'/'+seg.getFullYear()+' ('+dm(seg)+' a '+dm(dom)+')',
+      ini:seg.toISOString().slice(0,10),fim:dom.toISOString().slice(0,10),seg:seg};
   }
   function progSemanaDoPlano(p){
     if(!p||!p.data_inicio)return null;
@@ -3359,7 +3362,8 @@
       (PROG_PLANO?'<button class="btn" id="progPuxar" title="Traz o que o Tempo-Caminho e a Linha de Balanço preveem pra esta semana — depois é só editar">↓ Puxar sugestões</button>'+
         '<button class="btn primary" id="progAdd">+ Linha</button>':'');
     var semSel=PROG_PLANOS.length?('<select class="esel" id="progSel" style="min-width:220px">'+PROG_PLANOS.map(function(p){
-        return '<option value="'+p.id+'"'+((PROG_PLANO&&PROG_PLANO.id===p.id)?' selected':'')+'>'+escAttr(p.semana_iso)+' · '+brDate(p.data_inicio)+' a '+brDate(p.data_fim)+'</option>';
+        var dm=function(iso){ var d=String(iso||'').split('-'); return d.length===3?(d[2]+'/'+d[1]):iso; };
+        return '<option value="'+p.id+'"'+((PROG_PLANO&&PROG_PLANO.id===p.id)?' selected':'')+'>'+escAttr(p.semana_iso)+' ('+dm(p.data_inicio)+' a '+dm(p.data_fim)+')</option>';
       }).join('')+'</select>'):'<span class="note">Nenhuma semana criada ainda.</span>';
     var ppc=progPPCAtual();
     var corpo;
@@ -3416,15 +3420,41 @@
     PROG_CARREGANDO=false; PROG_LIDO=true;
     if(current==='lp-semana')go('lp-semana');
   }
-  async function progNovaSemana(){
+  function progNovaSemana(){
     var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
+    tw=Math.max(tw,1);
     var hoje=hojeWeekNumber(tw)||1;
-    var txt=prompt('Semana do projeto (1 = primeira semana da obra). Hoje é a semana '+hoje+'.',String(hoje));
-    if(txt===null)return;
-    var w=Math.max(1,parseInt(txt,10)||hoje), info=progSemanaInfo(w);
-    if(PROG_PLANOS.some(function(p){return p.data_inicio===info.ini;})){ alert('Essa semana já está programada.'); return; }
-    try{ var id=await sbProgCriarPlano(selectedObra.id,info.iso,info.ini,info.fim); await progCarregar(id); toast('Semana '+info.iso+' criada.'); }
-    catch(e){ alert('Falha ao criar a semana: '+((e&&e.message)||e)); }
+    var jaTem={}; PROG_PLANOS.forEach(function(p){ jaTem[p.data_inicio]=1; });
+    var opts='';
+    for(var w=1;w<=tw;w++){
+      var info=progSemanaInfo(w), usada=!!jaTem[info.ini];
+      opts+='<option value="'+w+'"'+(usada?' disabled':'')+(w===hoje&&!usada?' selected':'')+'>'+
+        escAttr(info.rotulo)+(usada?' — já programada':'')+(w===hoje?'  ← semana atual':'')+'</option>';
+    }
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:460px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Nova semana de programação</div>'+
+      '<div class="note" style="margin-bottom:10px">Escolha a semana do cronograma. As semanas já programadas aparecem desabilitadas.</div>'+
+      '<select class="esel" id="progNovaSel" size="12" style="width:100%;height:auto">'+opts+'</select>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="progNovaCancel">Cancelar</button>'+
+        '<button class="btn primary" id="progNovaOk">Criar programação</button></div></div>';
+    document.body.appendChild(back);
+    var sel=back.querySelector('#progNovaSel');
+    if(sel&&sel.selectedIndex<0)sel.selectedIndex=Math.max(0,Math.min(sel.options.length-1,hoje-1));
+    try{ if(sel&&sel.options[sel.selectedIndex])sel.options[sel.selectedIndex].scrollIntoView({block:'center'}); }catch(e){}
+    function fechar(){ back.remove(); }
+    back.addEventListener('pointerdown',function(ev){ if(ev.target===back)fechar(); });
+    back.querySelector('#progNovaCancel').addEventListener('click',fechar);
+    back.querySelector('#progNovaOk').addEventListener('click',async function(){
+      var w2=+sel.value; if(!w2)return;
+      var info2=progSemanaInfo(w2);
+      if(jaTem[info2.ini]){ alert('Essa semana já está programada.'); return; }
+      fechar();
+      try{ var id=await sbProgCriarPlano(selectedObra.id,info2.iso,info2.ini,info2.fim); await progCarregar(id); toast('Programação da '+info2.rotulo+' criada.'); }
+      catch(e){ alert('Falha ao criar a semana: '+((e&&e.message)||e)); }
+    });
+    sel.addEventListener('dblclick',function(){ back.querySelector('#progNovaOk').click(); });
   }
   async function progPuxarSugestoes(){
     if(!PROG_PLANO)return;
