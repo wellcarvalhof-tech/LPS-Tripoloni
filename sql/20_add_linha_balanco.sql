@@ -1,21 +1,26 @@
 -- ============================================================
 -- Linha de Balanço (tela própria, ao lado da Matriz Tempo-Caminho).
 --
--- É um estudo INDEPENDENTE do cronograma: o usuário escolhe quais lotes e quais
--- atividades entram, e define início, duração por lote e intervalo entre lotes na
--- mão. Nada aqui altera o Tempo-Caminho — a ideia é poder desenhar o ritmo desejado
--- antes (ou ao lado) do cronograma calculado, e no futuro ligar os dois.
+-- Detalhamento do Tempo-Caminho por serviço: o usuário escolhe um serviço, desenha as
+-- ETAPAS dele num macro-fluxo (caixas e setas com latência), informa a duração de cada
+-- etapa em dias e a sequência executiva dos lotes. Nada aqui altera o cronograma — é o
+-- detalhe fino de um serviço, pra depois amarrar os dois.
 --
--- Formato de obras.linha_balanco:
+-- Formato de obras.linha_balanco (um estudo por serviço):
 -- {
---   "lotes": ["<lote_id>", ...],                      -- ordem de baixo pra cima no gráfico
---   "atividades": [
---     {"id":"a1","nome":"Terraplenagem","cor":"#c0392b",
---      "inicio":1,          -- semana do projeto em que a atividade começa no 1º lote
---      "dur":2,             -- semanas que ela leva em cada lote
---      "passo":1,           -- semanas entre o início de um lote e o do seguinte (ritmo)
---      "de":0,"ate":9}      -- índices (na lista de lotes acima) do trecho que ela percorre
---   ]
+--   "servicoSel": "<servico_id>",          -- serviço aberto por último
+--   "servicos": {
+--     "<servico_id>": {
+--       "inicio": 1,                        -- semana do projeto em que o serviço começa
+--       "lotes": ["<lote_id>", ...],        -- lotes onde ocorre, na ordem executiva
+--       "etapas": [{"id","nome","cor","dias","x","y"}],   -- caixas do macro-fluxo
+--       "setas":  [{"de","para","lat"}]     -- ligações, com latência em dias
+--     }
+--   }
 -- }
+--
+-- A linha de balanço é calculada a partir disso: cada etapa caminha lote a lote com a
+-- mesma equipe (só vai pro próximo quando termina o atual) e, dentro do lote, respeita
+-- as predecessoras + latência.
 -- ============================================================
 alter table public.obras add column if not exists linha_balanco jsonb;

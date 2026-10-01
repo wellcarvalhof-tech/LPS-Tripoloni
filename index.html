@@ -6864,197 +6864,361 @@
   }
 
   /* ================= Linha de Balanço (tela própria) =================
-   * Estudo independente do Tempo-Caminho: o usuário escolhe os lotes (eixo vertical) e monta
-   * as atividades na mão — início, duração por lote e ritmo (intervalo entre lotes). O gráfico
-   * tem TEMPO na horizontal e LOTES na vertical. Nada aqui mexe no cronograma calculado; fica
-   * guardado em obras.linha_balanco (migração 20) e depois dá pra ligar os dois. */
-  var LB=null;        // {lotes:[loteId], atividades:[{id,nome,cor,inicio,dur,passo,de,ate}]}
+   * Detalhamento do Tempo-Caminho para um serviço específico. O fluxo de trabalho é:
+   *   1) escolher o serviço a detalhar;
+   *   2) desenhar as ETAPAS desse serviço no macro-fluxo (caixas) e ligá-las com setas,
+   *      podendo pôr uma latência (espera) em cada ligação;
+   *   3) informar a duração de cada etapa em DIAS;
+   *   4) escolher em quais lotes o serviço ocorre e em que ordem serão executados.
+   * Com isso o app monta a linha de balanço: cada etapa caminha lote a lote (uma equipe por
+   * etapa), respeitando as predecessoras + latência dentro do lote e a continuidade da equipe
+   * entre lotes. Tempo na horizontal (dias, com as semanas do projeto marcadas), lotes na
+   * vertical. Fica guardado em obras.linha_balanco (migração 20) e não altera o cronograma. */
+  var LB=null;        // {servicoSel, servicos:{<servicoId>:{inicio,lotes[],etapas[],setas[]}}}
   var LB_DIRTY=false;
   var LB_PAL=['#c0392b','#e67e22','#f1c40f','#27ae60','#2980b9','#8e44ad','#16a085','#7f8c8d'];
+  var DIAS_SEM=5;     // dias úteis por semana (igual ao resto do app)
+  var MF_MODE='mover', MF_SEL=null;
+  var MF_W=1200, MF_H=460, MF_NW=170, MF_NH=56;
+
   function lbLoteIds(){ return window._LOTIDS||[]; }
   function lbNomeLote(id){ var ids=lbLoteIds(), i=ids.indexOf(id); return i>=0?(LOTS[i]||id):id; }
-  function lbData(){
+  function lbSvcId(si){ var s=SERV[si]; return (s&&s.id)||('s'+si); }
+  function lbSvcIdx(id){ for(var i=0;i<SERV.length;i++){ if(lbSvcId(i)===id)return i; } return -1; }
+  function lbRoot(){
     if(LB)return LB;
     var raw=(window._OBRA&&window._OBRA.linha_balanco)||null;
-    if(raw&&typeof raw==='object'&&Array.isArray(raw.lotes)){
-      LB={lotes:raw.lotes.slice(),atividades:(raw.atividades||[]).map(function(a){return Object.assign({},a);}),
-          fluxo:raw.fluxo&&typeof raw.fluxo==='object'?{nos:(raw.fluxo.nos||[]).map(function(n){return Object.assign({},n);}),setas:(raw.fluxo.setas||[]).map(function(e){return Object.assign({},e);})}:{nos:[],setas:[]}};
-    } else {
-      // Começa com todos os lotes da obra e nenhuma atividade.
-      LB={lotes:lbLoteIds().slice(),atividades:[],fluxo:{nos:[],setas:[]}};
+    LB={servicoSel:null,servicos:{}};
+    if(raw&&typeof raw==='object'){
+      if(raw.servicos&&typeof raw.servicos==='object'){
+        LB.servicoSel=raw.servicoSel||null;
+        Object.keys(raw.servicos).forEach(function(k){
+          var c=raw.servicos[k]||{};
+          LB.servicos[k]={inicio:+c.inicio||1,
+            lotes:Array.isArray(c.lotes)?c.lotes.slice():[],
+            etapas:(c.etapas||[]).map(function(e){return Object.assign({},e);}),
+            setas:(c.setas||[]).map(function(e){return Object.assign({},e);})};
+        });
+      } else if(Array.isArray(raw.lotes)){
+        // formato antigo (estudo solto): aproveita só a lista de lotes no primeiro serviço
+        LB._lotesAntigos=raw.lotes.slice();
+      }
     }
     return LB;
+  }
+  /** Config do serviço selecionado, criando o padrão na primeira vez. */
+  function lbSvc(){
+    var root=lbRoot();
+    if(root.servicoSel==null||lbSvcIdx(root.servicoSel)<0)root.servicoSel=SERV.length?lbSvcId(0):null;
+    var id=root.servicoSel; if(!id)return null;
+    if(!root.servicos[id]){
+      var si=lbSvcIdx(id), ids=lbLoteIds();
+      // padrão: os lotes onde o serviço tem quantidade, na ordem do cadastro
+      var lotes=[];
+      ids.forEach(function(lid,li){ if(si>=0&&QTY[li]&&QTY[li][si]>0)lotes.push(lid); });
+      if(!lotes.length)lotes=(root._lotesAntigos||ids).slice();
+      var sp=null; try{ sp=svcSpan()[si]; }catch(e){}
+      root.servicos[id]={inicio:(sp&&sp.s>0)?sp.s:1,lotes:lotes,etapas:[],setas:[]};
+    }
+    return root.servicos[id];
   }
   function lbMarkDirty(){ LB_DIRTY=true; refreshTopSaveBtn(); }
   async function lbSalvar(){
     if(!selectedObra||!LB)return;
     try{
-      await sbUpdateObra(selectedObra.id,{linha_balanco:{lotes:LB.lotes,atividades:LB.atividades,fluxo:LB.fluxo||{nos:[],setas:[]}}});
+      await sbUpdateObra(selectedObra.id,{linha_balanco:{servicoSel:LB.servicoSel,servicos:LB.servicos}});
       LB_DIRTY=false; go('cr-lb'); toast('Linha de balanço salva.');
     }catch(e){
       var m=(e&&e.message)||e;
       alert('Falha ao salvar: '+m+(/linha_balanco/.test(String(m))?'\n\nRode a migração sql/20_add_linha_balanco.sql no Supabase.':''));
     }
   }
-  function lbNovaAtividade(nome,cor){
-    var d=lbData();
-    d.atividades.push({id:'a'+Date.now()+Math.floor(Math.random()*999),nome:nome||'Nova atividade',
-      cor:cor||LB_PAL[d.atividades.length%LB_PAL.length],inicio:1,dur:2,passo:1,de:0,ate:Math.max(0,d.lotes.length-1)});
+  function lbAddEtapa(nome,cor){
+    var c=lbSvc(); if(!c)return;
+    var n=c.etapas.length;
+    c.etapas.push({id:'e'+Date.now()+Math.floor(Math.random()*999),nome:nome||'Etapa '+(n+1),
+      cor:cor||LB_PAL[n%LB_PAL.length],dias:5,x:60+(n%5)*210,y:50+Math.floor(n/5)*110});
     lbMarkDirty(); go('cr-lb');
   }
-  /** Semana de início e fim de cada lote de uma atividade (índices relativos à lista de lotes). */
-  function lbSpans(a,nLotes){
-    var de=Math.max(0,Math.min(nLotes-1,+a.de||0)), ate=Math.max(de,Math.min(nLotes-1,a.ate==null?nLotes-1:+a.ate));
-    var passo=(+a.passo||0), dur=Math.max(0.1,+a.dur||1), ini=Math.max(1,+a.inicio||1);
-    var out=[];
-    for(var i=de;i<=ate;i++){ var st=ini+(i-de)*passo; out.push({i:i,start:st,end:st+dur}); }
+
+  /* ---- cálculo da linha de balanço ---- */
+  /** Ordem topológica das etapas (predecessora antes). Ciclo: mantém a ordem declarada. */
+  function lbOrdemEtapas(c){
+    var ids=c.etapas.map(function(e){return e.id;});
+    var grau={}, adj={};
+    ids.forEach(function(id){grau[id]=0;adj[id]=[];});
+    c.setas.forEach(function(st){ if(grau[st.para]==null||adj[st.de]==null)return; grau[st.para]++; adj[st.de].push(st.para); });
+    var fila=ids.filter(function(id){return grau[id]===0;}), out=[];
+    while(fila.length){
+      var id=fila.shift(); out.push(id);
+      adj[id].forEach(function(p){ if(--grau[p]===0)fila.push(p); });
+    }
+    ids.forEach(function(id){ if(out.indexOf(id)<0)out.push(id); }); // sobra de ciclo
     return out;
   }
-  function lbSVG(){
-    var d=lbData(), lotes=d.lotes.filter(function(id){return lbLoteIds().indexOf(id)>=0;});
-    if(!lotes.length)return '<div class="note">Escolha pelo menos um lote abaixo.</div>';
-    if(!d.atividades.length)return '<div class="note">Adicione uma atividade pra desenhar a linha de balanço.</div>';
-    var n=lotes.length, twMax=1;
-    d.atividades.forEach(function(a){ lbSpans(a,n).forEach(function(sp){ twMax=Math.max(twMax,sp.end); }); });
-    var tw=Math.ceil(twMax)+1;
-    var labelW=Math.min(170,Math.max(60,(function(){var m=0;lotes.forEach(function(id){m=Math.max(m,String(lbNomeLote(id)).length);});return m*6.4+16;})()));
-    var W=1060, pl=labelW, pr=18, pt=26, pb=44, rowH=Math.max(14,Math.min(30,Math.floor(520/n)));
-    var ih=n*rowH, H=pt+ih+pb, iw=W-pl-pr;
-    var xx=function(w){ return pl+iw*(w-1)/Math.max(1,tw-1); };
-    var yy=function(i){ return pt+ih-(i+0.5)*rowH; }; // 1º lote embaixo (a obra sobe)
-    var s='';
-    // faixas dos lotes
-    lotes.forEach(function(id,i){
-      var y=pt+ih-(i+1)*rowH;
-      if(i%2===0)s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
-      s+='<text class="axm" x="'+(pl-8)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+(rowH<18?8:10)+'px">'+escAttr(lbNomeLote(id))+'</text>';
-    });
-    // grade de semanas + meses
-    var stepW=Math.max(1,Math.ceil(tw/26));
-    for(var w=1;w<=tw;w+=stepW){
-      s+='<line x1="'+xx(w).toFixed(1)+'" y1="'+pt+'" x2="'+xx(w).toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>';
-    }
-    var wn=[]; for(var wi=1;wi<=tw;wi++)wn.push(wi);
-    s+=weekAxisSVG(wn,function(i){return xx(i+1);},iw/Math.max(1,tw-1),pt+ih,pl,W-pr,mondayOf);
-    // hoje
-    var hojeW=hojeWeekNumber(tw);
-    if(hojeW>0&&hojeW<=tw)s+='<line x1="'+xx(hojeW).toFixed(1)+'" y1="'+pt+'" x2="'+xx(hojeW).toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 3"><title>Hoje</title></line>';
-    // atividades
-    d.atividades.forEach(function(a){
-      var sp=lbSpans(a,n); if(!sp.length)return;
-      var cor=a.cor||'#888';
-      var pIni=sp.map(function(x){ return xx(x.start).toFixed(1)+','+yy(x.i).toFixed(1); });
-      var pFim=sp.map(function(x){ return xx(x.end).toFixed(1)+','+yy(x.i).toFixed(1); });
-      s+='<polygon points="'+pIni.join(' ')+' '+pFim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".25"/>';
-      s+='<polyline points="'+pIni.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2"/>';
-      s+='<polyline points="'+pFim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2"/>';
-      sp.forEach(function(x){
-        s+='<rect x="'+xx(x.start).toFixed(1)+'" y="'+(yy(x.i)-rowH*0.28).toFixed(1)+'" width="'+Math.max(2,xx(x.end)-xx(x.start)).toFixed(1)+'" height="'+(rowH*0.56).toFixed(1)+'" rx="2" fill="'+cor+'" opacity=".85"><title>'+escAttr(a.nome)+'\n'+escAttr(lbNomeLote(lotes[x.i]))+'\nS'+isoWeek(mondayOf(Math.round(x.start)))+' → S'+isoWeek(mondayOf(Math.max(1,Math.round(x.end)-1)))+'</title></rect>';
+  /** Agenda cada etapa em cada lote, em DIAS a partir do início do serviço.
+   *  Dentro do lote: etapa só começa depois das predecessoras (+ latência).
+   *  Entre lotes: a equipe da etapa só vai pro lote seguinte quando termina o atual. */
+  function lbCalc(){
+    var c=lbSvc(); if(!c)return null;
+    var lotes=c.lotes.filter(function(id){return lbLoteIds().indexOf(id)>=0;});
+    if(!lotes.length||!c.etapas.length)return {lotes:lotes,itens:[],maxDia:0,c:c};
+    var ordem=lbOrdemEtapas(c), porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    var preds={}; c.etapas.forEach(function(e){preds[e.id]=[];});
+    c.setas.forEach(function(st){ if(preds[st.para])preds[st.para].push({de:st.de,lat:+st.lat||0}); });
+    var fimEtapaLoteAnterior={}, itens=[], maxDia=0;
+    lotes.forEach(function(lid,j){
+      var fimNoLote={};
+      ordem.forEach(function(eid){
+        var e=porId[eid]; if(!e)return;
+        var ini=0;
+        (preds[eid]||[]).forEach(function(p){
+          var f=fimNoLote[p.de]; if(f!=null)ini=Math.max(ini,f+(+p.lat||0));
+        });
+        if(fimEtapaLoteAnterior[eid]!=null)ini=Math.max(ini,fimEtapaLoteAnterior[eid]);
+        var dur=Math.max(0.5,+e.dias||1), fim=ini+dur;
+        fimNoLote[eid]=fim; fimEtapaLoteAnterior[eid]=fim;
+        itens.push({eid:eid,lote:lid,j:j,ini:ini,fim:fim});
+        maxDia=Math.max(maxDia,fim);
       });
-      var mid=sp[Math.floor(sp.length/2)];
-      s+='<text x="'+xx(mid.start+((+a.dur||1)/2)).toFixed(1)+'" y="'+(yy(mid.i)-rowH*0.45).toFixed(1)+'" text-anchor="middle" style="font-size:9px;fill:'+cor+';font-weight:700">'+escAttr(a.nome)+'</text>';
+    });
+    return {lotes:lotes,itens:itens,maxDia:maxDia,c:c};
+  }
+  function lbDiaParaSemana(dia,inicioSem){ return (inicioSem||1)+Math.floor(dia/DIAS_SEM); }
+  function lbSVG(){
+    var calc=lbCalc(); if(!calc)return '';
+    var c=calc.c;
+    if(!calc.lotes.length)return '<div class="note">Escolha os lotes onde este serviço acontece.</div>';
+    if(!c.etapas.length)return '<div class="note">Desenhe as etapas do serviço no macro-fluxo abaixo — a linha de balanço é montada a partir delas.</div>';
+    var lotes=calc.lotes, n=lotes.length;
+    var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
+    var labelW=Math.min(170,Math.max(70,(function(){var m=0;lotes.forEach(function(id){m=Math.max(m,String(lbNomeLote(id)).length);});return m*6.4+16;})()));
+    var W=1060, pl=labelW, pr=18, pt=24, pb=46, rowH=Math.max(16,Math.min(34,Math.floor(540/n)));
+    var ih=n*rowH, H=pt+ih+pb, iw=W-pl-pr;
+    var xx=function(dia){ return pl+iw*dia/Math.max(1,totDias); };
+    var yy=function(j){ return pt+ih-(j+0.5)*rowH; };
+    var porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    var s='';
+    lotes.forEach(function(id,j){
+      var y=pt+ih-(j+1)*rowH;
+      if(j%2===0)s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
+      s+='<text class="axm" x="'+(pl-8)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+(rowH<20?8.5:10.5)+'px">'+escAttr(lbNomeLote(id))+'</text>';
+    });
+    // grade: uma linha por semana (5 dias), rótulo da semana do projeto
+    var semanas=Math.ceil(totDias/DIAS_SEM);
+    var passo=Math.max(1,Math.ceil(semanas/26));
+    for(var k=0;k<=semanas;k+=passo){
+      var x=xx(k*DIAS_SEM);
+      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>'+
+        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
+    }
+    s+='<text class="axm" x="'+pl+'" y="'+(pt+ih+30)+'" style="font-size:9px">dia 0 = início do serviço (S'+isoWeek(mondayOf(c.inicio||1))+') · '+DIAS_SEM+' dias úteis por semana</text>';
+    // faixas por etapa
+    var porEtapa={};
+    calc.itens.forEach(function(it){ (porEtapa[it.eid]||(porEtapa[it.eid]=[])).push(it); });
+    Object.keys(porEtapa).forEach(function(eid){
+      var e=porId[eid]; if(!e)return;
+      var arr=porEtapa[eid].slice().sort(function(a,b){return a.j-b.j;});
+      var cor=e.cor||'#888';
+      var pIni=arr.map(function(x2){ return xx(x2.ini).toFixed(1)+','+yy(x2.j).toFixed(1); });
+      var pFim=arr.map(function(x2){ return xx(x2.fim).toFixed(1)+','+yy(x2.j).toFixed(1); });
+      if(arr.length>1){
+        s+='<polygon points="'+pIni.join(' ')+' '+pFim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".22"/>';
+        s+='<polyline points="'+pIni.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.6"/>';
+        s+='<polyline points="'+pFim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.6"/>';
+      }
+      arr.forEach(function(x2){
+        s+='<rect x="'+xx(x2.ini).toFixed(1)+'" y="'+(yy(x2.j)-rowH*0.3).toFixed(1)+'" width="'+Math.max(2,xx(x2.fim)-xx(x2.ini)).toFixed(1)+'" height="'+(rowH*0.6).toFixed(1)+'" rx="2" fill="'+cor+'" opacity=".9">'+
+          '<title>'+escAttr(e.nome)+'\n'+escAttr(lbNomeLote(x2.lote))+'\ndia '+Math.round(x2.ini)+' → '+Math.round(x2.fim)+' ('+(+e.dias||1)+' dias)\nS'+isoWeek(mondayOf(lbDiaParaSemana(x2.ini,c.inicio)))+'</title></rect>';
+      });
+      var mid=arr[Math.floor(arr.length/2)];
+      s+='<text x="'+xx((mid.ini+mid.fim)/2).toFixed(1)+'" y="'+(yy(mid.j)-rowH*0.42).toFixed(1)+'" text-anchor="middle" style="font-size:8.5px;fill:'+cor+';font-weight:700">'+escAttr(e.nome)+'</text>';
     });
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:860px">'+s+'</svg>';
   }
-  /* ---------- Macro-fluxo do processo ----------
-   * Diagrama simples de caixas e setas pra desenhar a sequência macro da obra (ex.: supressão →
-   * terraplenagem → drenagem → base → CBUQ). Fica guardado junto da linha de balanço
-   * (obras.linha_balanco.fluxo) e serve de referência pra montar as atividades — por enquanto é
-   * um desenho livre, sem amarração com o cronograma. */
-  var MF_MODE='mover'; // mover | ligar | apagar
-  var MF_SEL=null;     // nó de origem no modo "ligar"
-  var MF_W=1200, MF_H=520, MF_NW=170, MF_NH=56;
-  function mfData(){
-    var d=lbData();
-    if(!d.fluxo||typeof d.fluxo!=='object')d.fluxo={nos:[],setas:[]};
-    if(!Array.isArray(d.fluxo.nos))d.fluxo.nos=[];
-    if(!Array.isArray(d.fluxo.setas))d.fluxo.setas=[];
-    return d.fluxo;
-  }
-  function mfAddNo(nome,cor){
-    var f=mfData(), n=f.nos.length;
-    f.nos.push({id:'n'+Date.now()+Math.floor(Math.random()*999),nome:nome||'Etapa '+(n+1),
-      cor:cor||LB_PAL[n%LB_PAL.length],x:60+(n%5)*210,y:60+Math.floor(n/5)*110});
-    lbMarkDirty(); go('cr-lb');
-  }
+
+  /* ---- macro-fluxo (etapas do serviço) ---- */
   function mfSVG(){
-    var f=mfData();
-    if(!f.nos.length)return '<div class="note" style="padding:18px">Nenhuma etapa ainda. Clique em <b>+ Etapa</b> (ou puxe um serviço) pra começar o macro-fluxo.</div>';
+    var c=lbSvc(); if(!c)return '';
+    if(!c.etapas.length)return '<div class="note" style="padding:18px">Nenhuma etapa ainda. Clique em <b>+ Etapa</b> pra desenhar o processo deste serviço.</div>';
     var s='<defs><marker id="mfArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)"/></marker></defs>';
-    var byId={}; f.nos.forEach(function(n){byId[n.id]=n;});
-    // setas: saem da direita do nó de origem e entram na esquerda do destino (ou por cima/baixo)
-    f.setas.forEach(function(e,ei){
+    var byId={}; c.etapas.forEach(function(e){byId[e.id]=e;});
+    c.setas.forEach(function(e,ei){
       var a=byId[e.de], b=byId[e.para]; if(!a||!b)return;
       var ax=a.x+MF_NW, ay=a.y+MF_NH/2, bx=b.x, by=b.y+MF_NH/2;
-      if(b.x+MF_NW/2 < a.x+MF_NW/2){ ax=a.x; bx=b.x+MF_NW; } // destino à esquerda: sai pela esquerda
+      if(b.x+MF_NW/2 < a.x+MF_NW/2){ ax=a.x; bx=b.x+MF_NW; }
       var dx=Math.max(30,Math.abs(bx-ax)/2);
       var c1=ax+(bx>=ax?dx:-dx), c2=bx-(bx>=ax?dx:-dx);
-      s+='<path d="M'+ax+','+ay+' C'+c1+','+ay+' '+c2+','+by+' '+bx+','+by+'" fill="none" stroke="var(--ink-2)" stroke-width="2" marker-end="url(#mfArrow)" data-mfseta="'+ei+'" style="cursor:pointer"><title>'+escAttr(a.nome)+' → '+escAttr(b.nome)+(MF_MODE==='apagar'?' (clique pra excluir)':'')+'</title></path>';
+      s+='<path d="M'+ax+','+ay+' C'+c1+','+ay+' '+c2+','+by+' '+bx+','+by+'" fill="none" stroke="var(--ink-2)" stroke-width="2" marker-end="url(#mfArrow)" data-mfseta="'+ei+'" style="cursor:pointer"><title>'+escAttr(a.nome)+' → '+escAttr(b.nome)+((+e.lat)?' (latência '+(+e.lat)+' dia'+((+e.lat)===1?'':'s')+')':'')+(MF_MODE==='apagar'?' — clique pra excluir':'')+'</title></path>';
+      if(+e.lat){
+        var mx=(ax+bx)/2, my=(ay+by)/2;
+        s+='<text x="'+mx.toFixed(1)+'" y="'+(my-4).toFixed(1)+'" text-anchor="middle" class="axm" style="font-size:9px;font-weight:700">+'+(+e.lat)+'d</text>';
+      }
     });
-    f.nos.forEach(function(n){
-      var sel=(MF_SEL===n.id)?' sel':'';
-      var linhas=String(n.nome||'').split(/\s+/).reduce(function(acc,w){
+    c.etapas.forEach(function(e){
+      var sel=(MF_SEL===e.id)?' sel':'';
+      var linhas=String(e.nome||'').split(/\s+/).reduce(function(acc,w){
         var last=acc[acc.length-1];
         if(last&&(last+' '+w).length<=22)acc[acc.length-1]=last+' '+w; else acc.push(w);
         return acc;
       },[]).slice(0,2);
-      var txt=linhas.map(function(t,i){ return '<tspan x="'+(n.x+MF_NW/2)+'" dy="'+(i===0?0:13)+'">'+escAttr(t)+'</tspan>'; }).join('');
-      s+='<g class="mf-node'+sel+'" data-mfno="'+n.id+'" transform="translate(0,0)">'+
-        '<rect x="'+n.x+'" y="'+n.y+'" width="'+MF_NW+'" height="'+MF_NH+'" rx="10" fill="'+n.cor+'" fill-opacity=".18" stroke="'+n.cor+'" stroke-width="2"/>'+
-        '<text x="'+(n.x+MF_NW/2)+'" y="'+(n.y+MF_NH/2+(linhas.length>1?-3:4))+'" text-anchor="middle" style="font-size:12.5px;font-weight:600;fill:var(--ink)">'+txt+'</text>'+
-        '<title>'+escAttr(n.nome)+(MF_MODE==='mover'?' — arraste pra mover, duplo clique pra renomear':(MF_MODE==='ligar'?' — clique pra ligar':' — clique pra excluir'))+'</title></g>';
+      var txt=linhas.map(function(t,i){ return '<tspan x="'+(e.x+MF_NW/2)+'" dy="'+(i===0?0:13)+'">'+escAttr(t)+'</tspan>'; }).join('');
+      s+='<g class="mf-node'+sel+'" data-mfno="'+e.id+'">'+
+        '<rect x="'+e.x+'" y="'+e.y+'" width="'+MF_NW+'" height="'+MF_NH+'" rx="10" fill="'+e.cor+'" fill-opacity=".18" stroke="'+e.cor+'" stroke-width="2"/>'+
+        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH/2+(linhas.length>1?-6:1))+'" text-anchor="middle" style="font-size:12.5px;font-weight:600;fill:var(--ink)">'+txt+'</text>'+
+        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH-8)+'" text-anchor="middle" class="axm" style="font-size:9.5px">'+(+e.dias||1)+' dia'+((+e.dias||1)===1?'':'s')+'</text>'+
+        '<title>'+escAttr(e.nome)+(MF_MODE==='mover'?' — arraste pra mover, duplo clique renomeia':(MF_MODE==='ligar'?' — clique pra ligar':' — clique pra excluir'))+'</title></g>';
     });
     return '<svg id="mfSvg" viewBox="0 0 '+MF_W+' '+MF_H+'" style="width:100%;height:auto;min-width:900px">'+s+'</svg>';
   }
-  function macroFluxoHTML(){
-    var f=mfData();
+
+  VIEWS['cr-lb']=function(){
+    if(!LOTS.length||!SERV.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os serviços e os lotes da obra primeiro (Tempo Caminho → Serviços / Lotes & Quantidades).</div></div>';
+    var root=lbRoot(), c=lbSvc(), si=lbSvcIdx(root.servicoSel), sv=SERV[si];
+    var calc=lbCalc();
+    var svcSel='<select class="esel" id="lbSvcSel" style="min-width:220px">'+SERV.map(function(x,i){
+      return '<option value="'+escAttr(lbSvcId(i))+'"'+(lbSvcId(i)===root.servicoSel?' selected':'')+'>'+escAttr(x.n)+'</option>';
+    }).join('')+'</select>';
+    var ids=lbLoteIds();
+    var loteChips=ids.map(function(id,i){
+      var on=c.lotes.indexOf(id)>=0;
+      return '<label class="lotchip'+(on?' on':' other')+'"><input type="checkbox" data-lblote="'+escAttr(id)+'"'+(on?' checked':'')+'>'+escAttr(LOTS[i]||id)+'</label>';
+    }).join('');
+    var seqRows=c.lotes.map(function(id,i){
+      return '<div class="seqrow"><span class="seqnum">'+(i+1)+'</span><span class="seqname">'+escAttr(lbNomeLote(id))+'</span>'+
+        '<span class="seqbtns"><button class="iconbtn" data-lbseqp="'+i+'" title="Executar antes"'+(i===0?' disabled':'')+'>↑</button>'+
+        '<button class="iconbtn" data-lbseqn="'+i+'" title="Executar depois"'+(i===c.lotes.length-1?' disabled':'')+'>↓</button></span></div>';
+    }).join('');
+    var nomeDe=function(id){ var e=c.etapas.filter(function(x){return x.id===id;})[0]; return e?e.nome:'?'; };
+    var etapaRows=c.etapas.map(function(e,ei){
+      var preds=c.setas.filter(function(st){return st.para===e.id;}).map(function(st){return escAttr(nomeDe(st.de))+((+st.lat)?' +'+(+st.lat)+'d':'');}).join(', ')||'—';
+      return '<tr>'+
+        '<td><input class="einp" data-lbet="'+ei+'" data-lbf="nome" value="'+escAttr(e.nome)+'" style="width:200px"></td>'+
+        '<td><input type="color" data-lbet="'+ei+'" data-lbf="cor" value="'+escAttr(e.cor||'#888888')+'" style="width:42px;height:26px;padding:0;border:0;background:none"></td>'+
+        '<td><input class="einp" type="number" min="0.5" step="0.5" data-lbet="'+ei+'" data-lbf="dias" value="'+(+e.dias||1)+'" style="width:70px"></td>'+
+        '<td class="note">'+preds+'</td>'+
+        '<td><button class="iconbtn" data-lbetdel="'+ei+'" title="Excluir etapa">✕</button></td></tr>';
+    }).join('');
+    var ligRows=c.setas.map(function(st,i){
+      return '<tr><td>'+escAttr(nomeDe(st.de))+' → '+escAttr(nomeDe(st.para))+'</td>'+
+        '<td><input class="einp" type="number" min="0" step="0.5" data-lblig="'+i+'" value="'+(+st.lat||0)+'" style="width:70px"> <span class="note">dias</span></td>'+
+        '<td><button class="iconbtn" data-lbligdel="'+i+'" title="Excluir ligação">✕</button></td></tr>';
+    }).join('');
     var modos=[['mover','✥ Mover'],['ligar','⇢ Ligar'],['apagar','✕ Excluir']].map(function(m){
       return '<button class="subtab'+(MF_MODE===m[0]?' active':'')+'" data-mfmode="'+m[0]+'">'+m[1]+'</button>';
     }).join('');
-    var svcOpts='<option value="">+ Etapa do serviço…</option>'+SERV.map(function(sv,si){return '<option value="'+si+'">'+escAttr(sv.n)+'</option>';}).join('');
-    return '<div class="card">'+
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">'+
-        '<div><div class="eyebrow" style="margin:0">Macro-fluxo do processo ('+f.nos.length+' etapa'+(f.nos.length===1?'':'s')+')</div>'+
-        '<div class="note">Desenhe a sequência macro da obra. <b>Mover</b>: arraste as caixas (duplo clique renomeia). <b>Ligar</b>: clique na origem e depois no destino. <b>Excluir</b>: clique na caixa ou na seta.</div></div>'+
-        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+modos+
-          '<select class="esel" id="mfAddSvc">'+svcOpts+'</select>'+
-          '<button class="btn primary" id="mfAdd">+ Etapa</button>'+
-          (f.nos.length?'<button class="btn" id="mfLimpar">Limpar tudo</button>':'')+
+    var durTot=calc&&calc.maxDia?(Math.ceil(calc.maxDia)+' dias (~'+(Math.ceil(calc.maxDia/DIAS_SEM))+' semanas)'):'—';
+    return head('Linha de Balanço','Detalhamento do Tempo-Caminho por serviço.',
+        '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
+      '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+cronoTabsHTML('cr-lb')+'</div>'+
+      '<div class="card" style="margin-bottom:14px">'+
+        '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
+          '<span class="lab" style="margin:0">Serviço a detalhar</span>'+svcSel+
+          '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Começa na semana <input class="einp" type="number" min="1" id="lbInicio" value="'+(+c.inicio||1)+'" style="width:70px"></label>'+
+          '<span class="note">Duração total pela linha de balanço: <b>'+durTot+'</b> · '+c.etapas.length+' etapa(s) × '+c.lotes.length+' lote(s)</span>'+
+        '</div>'+
+        '<div class="note" style="margin-top:6px">Cada etapa caminha lote a lote com a mesma equipe: ela só vai pro lote seguinte quando termina o atual, e dentro do lote só começa depois das predecessoras (+ latência). É um estudo à parte — não altera a Matriz Tempo-Caminho.</div>'+
+      '</div>'+
+      '<div class="card" style="margin-bottom:14px">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Linha de balanço — '+escAttr(sv?sv.n:'')+'</div>'+
+        '<div class="note" style="margin-bottom:6px">Tempo na horizontal (dias corridos de trabalho a partir do início do serviço, com as semanas do projeto marcadas); lotes na vertical, na ordem executiva.</div>'+
+        '<div class="tc-wrap" style="padding:6px">'+lbSVG()+'</div>'+
+      '</div>'+
+      '<div class="card" style="margin-bottom:14px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">'+
+          '<div><div class="eyebrow" style="margin:0">Macro-fluxo do serviço ('+c.etapas.length+' etapa'+(c.etapas.length===1?'':'s')+')</div>'+
+          '<div class="note"><b>Mover</b>: arraste as caixas (duplo clique renomeia). <b>Ligar</b>: clique na origem e depois no destino. <b>Excluir</b>: clique na caixa ou na seta.</div></div>'+
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+modos+'<button class="btn primary" id="mfAdd">+ Etapa</button></div>'+
+        '</div>'+
+        '<div class="mf-wrap'+(MF_MODE==='ligar'?' ligando':(MF_MODE==='apagar'?' apagando':''))+'" id="mfWrap">'+mfSVG()+'</div>'+
+        (MF_MODE==='ligar'?'<div class="note" style="margin-top:6px">'+(MF_SEL?'Agora clique na etapa de <b>destino</b> (ou na mesma pra cancelar).':'Clique na etapa de <b>origem</b>.')+'</div>':'')+
+      '</div>'+
+      '<div class="grid g2" style="gap:14px;margin-bottom:14px">'+
+        '<div class="card"><div class="eyebrow" style="margin-bottom:6px">Etapas e durações</div>'+
+          (c.etapas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Etapa</th><th>Cor</th><th>Duração (dias)</th><th>Depende de</th><th></th></tr></thead><tbody>'+etapaRows+'</tbody></table></div>':'<div class="note">Nenhuma etapa ainda.</div>')+
+        '</div>'+
+        '<div class="card"><div class="eyebrow" style="margin-bottom:6px">Ligações e latências</div>'+
+          (c.setas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Ligação</th><th>Latência</th><th></th></tr></thead><tbody>'+ligRows+'</tbody></table></div>':'<div class="note">Nenhuma ligação ainda — use o modo <b>Ligar</b> no macro-fluxo.</div>')+
         '</div>'+
       '</div>'+
-      '<div class="mf-wrap'+(MF_MODE==='ligar'?' ligando':(MF_MODE==='apagar'?' apagando':''))+'" id="mfWrap">'+mfSVG()+'</div>'+
-      (MF_MODE==='ligar'?'<div class="note" style="margin-top:6px">'+(MF_SEL?'Agora clique na etapa de <b>destino</b> (ou na mesma pra cancelar).':'Clique na etapa de <b>origem</b>.')+'</div>':'')+
-    '</div>';
+      '<div class="grid g2" style="gap:14px">'+
+        '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Lotes onde o serviço ocorre ('+c.lotes.length+' de '+ids.length+')</div>'+
+          '<div class="note" style="margin-bottom:8px">Marque os lotes. Por padrão vêm os que têm quantidade deste serviço no cadastro.</div>'+
+          '<div class="lotchips">'+loteChips+'</div></div>'+
+        '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Sequência executiva dos lotes</div>'+
+          '<div class="note" style="margin-bottom:8px">Do primeiro ao último — é nessa ordem que as equipes caminham (o primeiro fica embaixo no gráfico).</div>'+
+          (c.lotes.length?'<div class="seqlist">'+seqRows+'</div>':'<div class="note">Nenhum lote marcado.</div>')+'</div>'+
+      '</div>';
+  };
+
+  function wireLinhaBalanco(){
+    var root=document.getElementById('content'); if(!root)return;
+    var cfg=lbSvc(); if(!cfg)return;
+    var sel=document.getElementById('lbSvcSel');
+    if(sel)sel.addEventListener('change',function(){ lbRoot().servicoSel=sel.value; MF_SEL=null; go('cr-lb'); });
+    var ini=document.getElementById('lbInicio');
+    if(ini)ini.addEventListener('change',function(){ cfg.inicio=Math.max(1,parseInt(ini.value,10)||1); lbMarkDirty(); go('cr-lb'); });
+    root.querySelectorAll('[data-lblote]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var id=cb.getAttribute('data-lblote');
+        if(cb.checked){ if(cfg.lotes.indexOf(id)<0)cfg.lotes.push(id); }
+        else cfg.lotes=cfg.lotes.filter(function(x){return x!==id;});
+        lbMarkDirty(); go('cr-lb');
+      });
+    });
+    var mover=function(i,dir){ var j=i+dir; if(j<0||j>=cfg.lotes.length)return; var t=cfg.lotes[i]; cfg.lotes[i]=cfg.lotes[j]; cfg.lotes[j]=t; lbMarkDirty(); go('cr-lb'); };
+    root.querySelectorAll('[data-lbseqp]').forEach(function(b){ b.addEventListener('click',function(){ mover(+b.getAttribute('data-lbseqp'),-1); }); });
+    root.querySelectorAll('[data-lbseqn]').forEach(function(b){ b.addEventListener('click',function(){ mover(+b.getAttribute('data-lbseqn'),1); }); });
+    root.querySelectorAll('[data-lbet]').forEach(function(el){
+      el.addEventListener('change',function(){
+        var e=cfg.etapas[+el.getAttribute('data-lbet')]; if(!e)return;
+        var f=el.getAttribute('data-lbf');
+        if(f==='nome')e.nome=el.value.trim()||e.nome;
+        else if(f==='cor')e.cor=el.value;
+        else e.dias=Math.max(0.5,parseFloat(el.value)||1);
+        lbMarkDirty(); go('cr-lb');
+      });
+    });
+    root.querySelectorAll('[data-lbetdel]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var i=+b.getAttribute('data-lbetdel'), id=cfg.etapas[i]&&cfg.etapas[i].id;
+        cfg.etapas.splice(i,1);
+        cfg.setas=cfg.setas.filter(function(st){return st.de!==id&&st.para!==id;});
+        lbMarkDirty(); go('cr-lb');
+      });
+    });
+    root.querySelectorAll('[data-lblig]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var st=cfg.setas[+inp.getAttribute('data-lblig')]; if(!st)return;
+        st.lat=Math.max(0,parseFloat(inp.value)||0); lbMarkDirty(); go('cr-lb');
+      });
+    });
+    root.querySelectorAll('[data-lbligdel]').forEach(function(b){
+      b.addEventListener('click',function(){ cfg.setas.splice(+b.getAttribute('data-lbligdel'),1); lbMarkDirty(); go('cr-lb'); });
+    });
+    var save=document.getElementById('lbSave');
+    if(save)save.addEventListener('click',lbSalvar);
+    wireCronoTabs();
+    wireMacroFluxo(cfg);
   }
-  function wireMacroFluxo(){
+  function wireMacroFluxo(cfg){
     var wrap=document.getElementById('mfWrap'); if(!wrap)return;
-    var f=mfData(), svg=document.getElementById('mfSvg');
+    var svg=document.getElementById('mfSvg');
     document.querySelectorAll('[data-mfmode]').forEach(function(b){
       b.addEventListener('click',function(){ MF_MODE=b.getAttribute('data-mfmode'); MF_SEL=null; go('cr-lb'); });
     });
     var add=document.getElementById('mfAdd');
-    if(add)add.addEventListener('click',function(){ mfAddNo(); });
-    var addSvc=document.getElementById('mfAddSvc');
-    if(addSvc)addSvc.addEventListener('change',function(){
-      var si=addSvc.value; if(si==='')return; var sv=SERV[+si];
-      mfAddNo(sv?sv.n:'', sv?svcColor(sv):null);
-    });
-    var limpar=document.getElementById('mfLimpar');
-    if(limpar)limpar.addEventListener('click',function(){
-      if(!confirm('Apagar todas as etapas e setas do macro-fluxo?'))return;
-      f.nos=[]; f.setas=[]; MF_SEL=null; lbMarkDirty(); go('cr-lb');
-    });
+    if(add)add.addEventListener('click',function(){ lbAddEtapa(); });
     if(!svg)return;
-    // excluir seta
     svg.querySelectorAll('[data-mfseta]').forEach(function(path){
       path.addEventListener('click',function(){
         if(MF_MODE!=='apagar')return;
-        f.setas.splice(+path.getAttribute('data-mfseta'),1); lbMarkDirty(); go('cr-lb');
+        cfg.setas.splice(+path.getAttribute('data-mfseta'),1); lbMarkDirty(); go('cr-lb');
       });
     });
     var escala=function(){ var r=svg.getBoundingClientRect(); return MF_W/(r.width||1); };
     svg.querySelectorAll('[data-mfno]').forEach(function(g){
-      var id=g.getAttribute('data-mfno'), no=f.nos.filter(function(n){return n.id===id;})[0];
+      var id=g.getAttribute('data-mfno'), no=cfg.etapas.filter(function(e){return e.id===id;})[0];
       if(!no)return;
       g.addEventListener('dblclick',function(){
         if(MF_MODE!=='mover')return;
@@ -7063,22 +7227,20 @@
       });
       g.addEventListener('pointerdown',function(ev){
         if(MF_MODE==='apagar'){
-          f.nos=f.nos.filter(function(n){return n.id!==id;});
-          f.setas=f.setas.filter(function(e){return e.de!==id&&e.para!==id;});
+          cfg.etapas=cfg.etapas.filter(function(e){return e.id!==id;});
+          cfg.setas=cfg.setas.filter(function(e){return e.de!==id&&e.para!==id;});
           lbMarkDirty(); go('cr-lb'); return;
         }
         if(MF_MODE==='ligar'){
           if(!MF_SEL){ MF_SEL=id; go('cr-lb'); return; }
           if(MF_SEL===id){ MF_SEL=null; go('cr-lb'); return; }
-          var existe=f.setas.some(function(e){return e.de===MF_SEL&&e.para===id;});
-          if(!existe)f.setas.push({de:MF_SEL,para:id});
+          var existe=cfg.setas.some(function(e){return e.de===MF_SEL&&e.para===id;});
+          if(!existe)cfg.setas.push({de:MF_SEL,para:id,lat:0});
           MF_SEL=null; lbMarkDirty(); go('cr-lb'); return;
         }
-        // mover: arrasta a caixa, só grava no final
         ev.preventDefault();
         var k=escala(), x0=ev.clientX, y0=ev.clientY, nx=no.x, ny=no.y, moveu=false;
         g.setPointerCapture&&g.setPointerCapture(ev.pointerId);
-        var rect=g.querySelector('rect'), text=g.querySelector('text');
         function mv(e2){
           var dx=(e2.clientX-x0)*k, dy=(e2.clientY-y0)*k;
           if(Math.abs(dx)>2||Math.abs(dy)>2)moveu=true;
@@ -7093,98 +7255,6 @@
         g.addEventListener('pointermove',mv); g.addEventListener('pointerup',up); g.addEventListener('pointercancel',up);
       });
     });
-  }
-  VIEWS['cr-lb']=function(){
-    if(!LOTS.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os lotes da obra primeiro (Tempo Caminho → Lotes & Quantidades).</div></div>';
-    var d=lbData(), ids=lbLoteIds();
-    var nAt=d.atividades.length;
-    var svcOpts='<option value="">+ Adicionar do serviço…</option>'+SERV.map(function(sv,si){return '<option value="'+si+'">'+escAttr(sv.n)+'</option>';}).join('');
-    var loteChips=ids.map(function(id,i){
-      var on=d.lotes.indexOf(id)>=0;
-      return '<label class="lotchip'+(on?' on':' other')+'"><input type="checkbox" data-lblote="'+escAttr(id)+'"'+(on?' checked':'')+'>'+escAttr(LOTS[i]||id)+'</label>';
-    }).join('');
-    var opLotes=d.lotes.map(function(id,i){ return {v:i,t:lbNomeLote(id)}; });
-    var selLote=function(name,val,ai){
-      return '<select class="esel" data-lbat="'+ai+'" data-lbf="'+name+'" style="width:110px">'+
-        opLotes.map(function(o){ return '<option value="'+o.v+'"'+(o.v===val?' selected':'')+'>'+escAttr(o.t)+'</option>'; }).join('')+'</select>';
-    };
-    var rows=d.atividades.map(function(a,ai){
-      var de=Math.max(0,Math.min(d.lotes.length-1,+a.de||0)), ate=Math.max(de,Math.min(d.lotes.length-1,a.ate==null?d.lotes.length-1:+a.ate));
-      return '<tr>'+
-        '<td><input class="einp" data-lbat="'+ai+'" data-lbf="nome" value="'+escAttr(a.nome)+'" style="width:190px"></td>'+
-        '<td><input type="color" data-lbat="'+ai+'" data-lbf="cor" value="'+escAttr(a.cor||'#888888')+'" style="width:42px;height:26px;padding:0;border:0;background:none"></td>'+
-        '<td>'+selLote('de',de,ai)+'</td><td>'+selLote('ate',ate,ai)+'</td>'+
-        '<td><input class="einp" type="number" min="1" data-lbat="'+ai+'" data-lbf="inicio" value="'+(+a.inicio||1)+'" style="width:64px"></td>'+
-        '<td><input class="einp" type="number" min="0.5" step="0.5" data-lbat="'+ai+'" data-lbf="dur" value="'+(+a.dur||1)+'" style="width:64px"></td>'+
-        '<td><input class="einp" type="number" min="0" step="0.5" data-lbat="'+ai+'" data-lbf="passo" value="'+(a.passo==null?1:+a.passo)+'" style="width:64px"></td>'+
-        '<td><button class="iconbtn" data-lbup="'+ai+'" title="Subir">↑</button><button class="iconbtn" data-lbdn="'+ai+'" title="Descer">↓</button><button class="iconbtn" data-lbdel="'+ai+'" title="Excluir">✕</button></td></tr>';
-    }).join('');
-    return head('Linha de Balanço','Estudo de ritmo independente do Tempo-Caminho.',
-        '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
-      '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+cronoTabsHTML('cr-lb')+'</div>'+
-      '<div class="card" style="margin-bottom:14px">'+
-        '<div class="tc-head" style="margin-bottom:6px"><div><h3>Linha de Balanço</h3>'+
-        '<p>Tempo na horizontal, lotes na vertical (o primeiro lote embaixo). Cada atividade começa numa semana, leva N semanas em cada lote e avança de lote em lote no ritmo que você definir — a inclinação da faixa é esse ritmo. '+
-        'É um estudo à parte: nada aqui altera a Matriz Tempo-Caminho.</p></div></div>'+
-        '<div class="tc-wrap" style="padding:6px">'+lbSVG()+'</div>'+
-        '<div class="legend" style="margin-top:8px"><span><span class="swatch" style="background:var(--accent)"></span>Linha tracejada = hoje</span></div>'+
-      '</div>'+
-      '<div class="card" style="margin-bottom:14px">'+
-        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
-          '<div><div class="eyebrow" style="margin:0">Atividades ('+nAt+')</div><div class="note">Início = semana do projeto no primeiro lote · Duração = semanas em cada lote · Ritmo = semanas entre um lote e o seguinte (0 = todos juntos).</div></div>'+
-          '<div style="display:flex;gap:8px;flex-wrap:wrap"><select class="esel" id="lbAddSvc">'+svcOpts+'</select>'+
-          '<button class="btn primary" id="lbAddLivre">+ Atividade</button></div>'+
-        '</div>'+
-        (nAt?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Atividade</th><th>Cor</th><th>Do lote</th><th>Até o lote</th><th>Início (sem)</th><th>Duração/lote</th><th>Ritmo (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhuma atividade ainda — use "+ Atividade" ou puxe um serviço já cadastrado.</div>')+
-      '</div>'+
-      '<div class="card">'+
-        '<div class="eyebrow" style="margin-bottom:2px">Lotes da linha de balanço ('+d.lotes.length+' de '+ids.length+')</div>'+
-        '<div class="note" style="margin-bottom:8px">Marque quais lotes entram no estudo. A ordem é a mesma do cadastro de lotes; o primeiro marcado fica embaixo no gráfico.</div>'+
-        '<div class="lotchips">'+loteChips+'</div>'+
-      '</div>'+
-      '<div style="height:14px"></div>'+macroFluxoHTML();
-  };
-  function wireLinhaBalanco(){
-    var root=document.getElementById('content'); if(!root)return;
-    var d=lbData();
-    root.querySelectorAll('[data-lblote]').forEach(function(cb){
-      cb.addEventListener('change',function(){
-        var id=cb.getAttribute('data-lblote');
-        if(cb.checked){ if(d.lotes.indexOf(id)<0){ // mantém a ordem do cadastro
-            var ids=lbLoteIds(); d.lotes=ids.filter(function(x){ return x===id||d.lotes.indexOf(x)>=0; }); } }
-        else d.lotes=d.lotes.filter(function(x){return x!==id;});
-        lbMarkDirty(); go('cr-lb');
-      });
-    });
-    root.querySelectorAll('[data-lbat]').forEach(function(el){
-      el.addEventListener('change',function(){
-        var a=d.atividades[+el.getAttribute('data-lbat')]; if(!a)return;
-        var f=el.getAttribute('data-lbf'), v=el.value;
-        if(f==='nome')a.nome=v.trim()||'Atividade';
-        else if(f==='cor')a.cor=v;
-        else if(f==='de'||f==='ate')a[f]=parseInt(v,10)||0;
-        else a[f]=Math.max(f==='inicio'?1:0,parseFloat(v)||0);
-        if(a.ate<a.de)a.ate=a.de;
-        lbMarkDirty(); go('cr-lb');
-      });
-    });
-    root.querySelectorAll('[data-lbdel]').forEach(function(b){
-      b.addEventListener('click',function(){ d.atividades.splice(+b.getAttribute('data-lbdel'),1); lbMarkDirty(); go('cr-lb'); });
-    });
-    var mover=function(i,dir){ var j=i+dir; if(j<0||j>=d.atividades.length)return; var t=d.atividades[i]; d.atividades[i]=d.atividades[j]; d.atividades[j]=t; lbMarkDirty(); go('cr-lb'); };
-    root.querySelectorAll('[data-lbup]').forEach(function(b){ b.addEventListener('click',function(){ mover(+b.getAttribute('data-lbup'),-1); }); });
-    root.querySelectorAll('[data-lbdn]').forEach(function(b){ b.addEventListener('click',function(){ mover(+b.getAttribute('data-lbdn'),1); }); });
-    var addLivre=document.getElementById('lbAddLivre');
-    if(addLivre)addLivre.addEventListener('click',function(){ lbNovaAtividade(); });
-    var addSvc=document.getElementById('lbAddSvc');
-    if(addSvc)addSvc.addEventListener('change',function(){
-      var si=addSvc.value; if(si==='')return;
-      var sv=SERV[+si]; lbNovaAtividade(sv?sv.n:'', sv?svcColor(sv):null);
-    });
-    var save=document.getElementById('lbSave');
-    if(save)save.addEventListener('click',lbSalvar);
-    wireCronoTabs();
-    wireMacroFluxo();
   }
   function editarPorEquipeHTML(){
     var segs=buildSchedule().slice().sort(function(a,b){return a.si-b.si||a.team-b.team||a.start-b.start;});
