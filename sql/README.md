@@ -25,6 +25,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `19_add_realizado_terceiro.sql` | Coluna `apontamento_recursos.quantidade_terceiro` — parcela de terceiros dentro do realizado (total = próprio + terceiro); preenchida pela coluna Locador na importação CEQ | ⚠️ novo — rodar pra separar próprio × terceiro |
 | `20_add_linha_balanco.sql` | Coluna `obras.linha_balanco` — estudo de linha de balanço (lotes, atividades, início, duração e ritmo), independente do Tempo-Caminho | ⚠️ novo — rodar pra usar a tela Linha de Balanço |
 | `21_add_perfil_controle.sql` | Novo perfil **Controle** (edita só nas abas liberadas, igual ao gestor) nos membros, convites e na RLS | ⚠️ novo — rodar pra usar o perfil Controle |
+| `22_add_presenca.sql` | Tabela `presenca` — mostra quem está usando o app agora (obra e tela), com sinal de vida a cada minuto | ⚠️ novo — rodar pra ver quem está online |
 | `20_add_linha_balanco.sql` | Coluna `obras.linha_balanco` — estudo de linha de balanço (lotes, atividades, início, duração e ritmo), independente do Tempo-Caminho | ⚠️ novo — rodar pra usar a tela Linha de Balanço |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.

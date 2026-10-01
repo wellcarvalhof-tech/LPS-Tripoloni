@@ -489,6 +489,7 @@
       <div class="crumb" id="crumb"></div>
       <div class="top-right">
         <button class="btn primary" id="topSaveBtn" style="display:none" title="Salvar todas as alterações pendentes nesta obra">💾 Salvar alterações</button>
+        <button class="icon-btn" id="presBtn" title="Quem está no app agora" style="display:none;width:auto;padding:0 10px;gap:6px">👥 <b id="presCount">0</b></button>
         <span class="pill warn" id="roleBadge" style="display:none;align-items:center"></span>
         <div class="obra-sel" id="lotViewBtn" title="Filtrar quais lotes aparecem na matriz, no histograma e nas curvas (o cronograma continua calculado com todos)" style="display:none"><span class="k">Lotes</span><b id="lotViewName">Todos</b><span style="opacity:.5">▾</span></div>
         <div class="obra-sel" id="obraSel" title="Trocar obra"><span class="k">Obra</span><b id="obraSelName">—</b><span style="opacity:.5">▾</span></div>
@@ -589,6 +590,71 @@
     var r=await SB.from('user_roles').select('role').eq('user_id',uid).eq('role','admin').maybeSingle();
     if(r.error)return false; // tabela/policy indisponível → trata como usuário comum
     return !!r.data;
+  }
+  /* ---------- Presença: quem está no app agora (migração 22) ----------
+     Cada um atualiza a própria linha a cada minuto com obra e tela; a lista mostra quem deu
+     sinal de vida nos últimos 5 minutos. Se a migração não tiver rodado, tudo isso fica quieto. */
+  var PRES_OK=true, PRES_LISTA=[], PRES_TIMER=null, PRES_TELA='';
+  async function sbPresencaPing(){
+    if(!SB||!PRES_OK)return;
+    try{
+      var sess=await SB.auth.getSession();
+      var u=sess&&sess.data&&sess.data.session&&sess.data.session.user; if(!u)return;
+      var r=await SB.from('presenca').upsert({user_id:u.id,email:u.email||'',
+        obra_id:(selectedObra&&selectedObra.id)||null,
+        obra_nome:(selectedObra&&selectedObra.nome)||null,
+        tela:PRES_TELA||'',visto_em:new Date().toISOString()},{onConflict:'user_id'});
+      if(r.error){ PRES_OK=false; }
+    }catch(e){ PRES_OK=false; }
+  }
+  async function sbPresencaLista(){
+    if(!SB||!PRES_OK)return [];
+    try{
+      var desde=new Date(Date.now()-5*60000).toISOString();
+      var r=await SB.from('presenca').select('user_id,email,obra_id,obra_nome,tela,visto_em').gte('visto_em',desde).order('visto_em',{ascending:false});
+      if(r.error){ PRES_OK=false; return []; }
+      return r.data||[];
+    }catch(e){ PRES_OK=false; return []; }
+  }
+  function presHaQuanto(iso){
+    var seg=Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/1000));
+    if(seg<90)return 'agora';
+    var min=Math.round(seg/60);
+    return 'há '+min+' min';
+  }
+  async function presRefresh(){
+    var btn=document.getElementById('presBtn'), cnt=document.getElementById('presCount');
+    if(!btn)return;
+    PRES_LISTA=await sbPresencaLista();
+    if(!PRES_OK||!PRES_LISTA.length){ btn.style.display='none'; return; }
+    btn.style.display='inline-flex';
+    if(cnt)cnt.textContent=String(PRES_LISTA.length);
+    btn.title=PRES_LISTA.length+' pessoa(s) no app nos últimos 5 minutos';
+  }
+  async function presAbrirPainel(){
+    var meu=null;
+    try{ var sess=await SB.auth.getSession(); meu=sess&&sess.data&&sess.data.session&&sess.data.session.user&&sess.data.session.user.id; }catch(e){}
+    await presRefresh();
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    var linhas=PRES_LISTA.map(function(p){
+      var eu=(p.user_id===meu);
+      return '<tr'+(eu?' style="background:var(--elev)"':'')+'><td>'+escAttr(p.email||'(sem e-mail)')+(eu?' <span class="note">(você)</span>':'')+'</td>'+
+        '<td>'+escAttr(p.obra_nome||'—')+'</td><td class="note">'+escAttr(p.tela||'')+'</td>'+
+        '<td class="note" style="white-space:nowrap">'+presHaQuanto(p.visto_em)+'</td></tr>';
+    }).join('');
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:620px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Quem está no app agora</div>'+
+      '<div class="note" style="margin-bottom:10px">Quem deu sinal de vida nos últimos 5 minutos. Você vê as pessoas das obras em que participa.</div>'+
+      (linhas?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Pessoa</th><th>Obra</th><th>Tela</th><th>Visto</th></tr></thead><tbody>'+linhas+'</tbody></table></div>':'<div class="note">Ninguém online agora.</div>')+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" id="presFechar">Fechar</button></div></div>';
+    document.body.appendChild(back);
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)back.remove(); });
+    back.querySelector('#presFechar').addEventListener('click',function(){ back.remove(); });
+  }
+  function presIniciar(){
+    if(PRES_TIMER)clearInterval(PRES_TIMER);
+    sbPresencaPing().then(presRefresh);
+    PRES_TIMER=setInterval(function(){ sbPresencaPing().then(presRefresh); },60000);
   }
   async function sbLoadMyRole(obraId){
     var uid=await sbMyUserId(); if(!uid)return null;
@@ -864,6 +930,7 @@
   }
   async function enterApp(){
     await refreshAvatar();
+    presIniciar();
     buildNav();
     await renderLanding();
     var lastObra=null, lastView=null;
@@ -1023,6 +1090,7 @@
     document.getElementById('side').classList.remove('open');
     refreshTopSaveBtn(); refreshLotViewBtn(); refreshRoleBadge(); applyReadOnly();
     if(selectedObra){ try{ safeStore.setItem('lps-tripoloni-lastview',view); }catch(e){} }
+    PRES_TELA=(CRUMB[view]||[]).join(' / ');
   }
   function hasAnyDirty(){
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
@@ -8765,6 +8833,7 @@
     document.getElementById('landing').classList.remove('show');
     try{ safeStore.setItem('lps-tripoloni-lastobra',id); }catch(e){}
     go(initialView&&CRUMB[initialView]?initialView:'torre');
+    sbPresencaPing().then(presRefresh);
   }
   async function enterNewObra(){
     if(!(await sbPodeCriarObra())){
@@ -8808,6 +8877,7 @@
       setTimeout(function(){ window.dispatchEvent(new Event('resize')); },220);
     });
   })();
+  (function(){ var pb=document.getElementById('presBtn'); if(pb)pb.addEventListener('click',presAbrirPainel); })();
   document.getElementById('obraSel').addEventListener('click',function(){ renderLanding(); showLanding(); });
   document.getElementById('topSaveBtn').addEventListener('click',saveAllPending);
   document.getElementById('lotViewBtn').addEventListener('click',function(){ if(selectedObra&&LOTS.length)openLotViewMenu(); });
