@@ -412,8 +412,10 @@
     body.printing-lb #lbPrint .lbp-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:10px}
     body.printing-lb #lbPrint h2{margin:0;font-family:"Archivo",sans-serif;font-size:17px}
     body.printing-lb #lbPrint .lbp-sub{font-size:11px;color:#555}
-    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:9.5cm}
-    body.printing-lb #lbPrint .lbp-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;margin:6px 0 12px}
+    body.printing-lb #lbPrint .lbp-chart{break-after:page;page-break-after:always}
+    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:21.5cm}
+    body.printing-lb #lbPrint .lbp-chart .lbp-legend{margin-top:6px}
+    body.printing-lb #lbPrint .lbp-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;margin:0 0 12px}
     body.printing-lb #lbPrint .lbp-legend .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:4px}
     body.printing-lb #lbPrint table{width:100%;border-collapse:collapse;font-size:9.5px;table-layout:fixed}
     body.printing-lb #lbPrint table th:first-child,body.printing-lb #lbPrint table td:first-child{width:42%;word-break:break-word}
@@ -7150,7 +7152,7 @@
   }
 
   /* ---- Gantt da linha de balanço: uma barra por etapa em cada lote ---- */
-  function lbGanttSVG(){
+  function lbGanttSVG(compacto){
     var calc=lbCalc(); if(!calc||!calc.itens.length)return '<div class="note">Sem etapas pra montar o Gantt.</div>';
     var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
     // Dentro de cada lote, a ordem segue a sequência construtiva: quem termina antes fica em cima
@@ -7162,17 +7164,21 @@
         .forEach(function(it){ linhas.push({lote:lid,e:porId[it.eid],it:it}); });
     });
     var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
-    // Colunas à esquerda, como num cronograma: tarefa | início | término | duração.
-    var colT=330, colD=78, labelW=colT+colD*2+56, W=1320, pl=labelW, pr=16, pt=38, pb=40;
-    var rowH=Math.max(14,Math.min(26,Math.floor(620/Math.max(1,linhas.length))));
+    // Na tela: colunas tarefa | início | término | duração. Na impressão (compacto): só o rótulo,
+    // proporção de folha retrato e altura por linha calculada pra tudo caber numa página só.
+    var colT=compacto?128:330, colD=compacto?0:78;
+    var labelW=compacto?(colT+10):(colT+colD*2+56);
+    var W=compacto?760:1320, pl=labelW, pr=compacto?10:16, pt=compacto?24:38, pb=compacto?34:40;
+    var rowH=compacto?Math.max(6,Math.min(16,Math.floor(980/Math.max(1,linhas.length))))
+                     :Math.max(14,Math.min(26,Math.floor(620/Math.max(1,linhas.length))));
     var ih=linhas.length*rowH, H=pt+ih+pb, iw=W-pl-pr;
     var xIni=colT+8, xFim=xIni+colD, xDur=xFim+colD;
     var xx=function(d){ return pl+iw*d/Math.max(1,totDias); };
     var s='';
-    s+='<text class="axm" x="8" y="'+(pt-14)+'" style="font-weight:700">Tarefa</text>'+
-      '<text class="axm" x="'+xIni+'" y="'+(pt-14)+'" style="font-weight:700">Início</text>'+
+    s+='<text class="axm" x="8" y="'+(pt-12)+'" style="font-weight:700;font-size:'+(compacto?8:10)+'px">Tarefa</text>'+
+      (compacto?'':'<text class="axm" x="'+xIni+'" y="'+(pt-14)+'" style="font-weight:700">Início</text>'+
       '<text class="axm" x="'+xFim+'" y="'+(pt-14)+'" style="font-weight:700">Término</text>'+
-      '<text class="axm" x="'+xDur+'" y="'+(pt-14)+'" style="font-weight:700">Dias</text>'+
+      '<text class="axm" x="'+xDur+'" y="'+(pt-14)+'" style="font-weight:700">Dias</text>')+
       '<line x1="0" y1="'+(pt-8)+'" x2="'+(W-pr)+'" y2="'+(pt-8)+'" stroke="var(--line-2)"/>'+
       '<line x1="'+(pl-8)+'" y1="'+(pt-8)+'" x2="'+(pl-8)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>';
     var semanas=Math.ceil(totDias/DIAS_SEM), passo=Math.max(1,Math.ceil(semanas/26));
@@ -7187,14 +7193,17 @@
       if(i%2===0)s+='<rect x="0" y="'+y+'" width="'+(W-pr)+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
       if(loteAnterior!==null&&loteAnterior!==L.lote)s+='<line x1="0" y1="'+y+'" x2="'+(W-pr)+'" y2="'+y+'" stroke="var(--line-2)"/>';
       loteAnterior=L.lote;
-      var fs=rowH<17?8:9.5;
-      s+='<text class="axm" x="'+xIni+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.ini,c.inicio))+'</text>'+
+      var fs=compacto?Math.max(4.6,Math.min(8,rowH*0.62)):(rowH<17?8:9.5);
+      if(!compacto)s+='<text class="axm" x="'+xIni+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.ini,c.inicio))+'</text>'+
         '<text class="axm" x="'+xFim+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.fim-1,c.inicio))+'</text>'+
         '<text class="axm" x="'+(xDur+16)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+fs+'px">'+L.it.dur+'</text>';
-      s+='<text class="axm" x="6" y="'+(y+rowH/2+3)+'" style="font-size:'+(rowH<17?8:9.5)+'px"><tspan style="fill:var(--muted)">'+escAttr(lbNomeLote(L.lote))+' · </tspan>'+escAttr(L.e.nome)+'</text>';
+      var mostraLote=!compacto||i===0||linhas[i-1].lote!==L.lote;
+      s+='<text class="axm" x="6" y="'+(y+rowH/2+fs*0.36)+'" style="font-size:'+fs+'px">'+
+        (mostraLote?'<tspan style="fill:var(--muted);font-weight:700">'+escAttr(lbNomeLote(L.lote))+' · </tspan>':(compacto?'<tspan> </tspan>':'<tspan style="fill:var(--muted)">'+escAttr(lbNomeLote(L.lote))+' · </tspan>'))+
+        escAttr(compacto?lbSigla(L.e):L.e.nome)+'</text>';
       s+='<rect x="'+xx(L.it.ini).toFixed(1)+'" y="'+(y+rowH*0.18).toFixed(1)+'" width="'+Math.max(2,xx(L.it.fim)-xx(L.it.ini)).toFixed(1)+'" height="'+(rowH*0.64).toFixed(1)+'" rx="3" fill="'+(L.e.cor||'#888')+'"><title>'+escAttr(L.e.nome)+' · '+escAttr(lbNomeLote(L.lote))+'\ndia '+Math.round(L.it.ini)+' → '+Math.round(L.it.fim)+'</title></rect>';
     });
-    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:1100px">'+s+'</svg>';
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'"'+(compacto?' preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto"':' style="min-width:1100px"')+'>'+s+'</svg>';
   }
   /** Visão "cronograma" (estilo MS Project): tabela agrupada por lote, com início, término e
    *  duração de cada etapa e a linha-resumo do lote. */
@@ -7294,8 +7303,12 @@
         fmtDate(lbDiaParaData(ini,c.inicio))+' a '+fmtDate(lbDiaParaData(fim-1,c.inicio))+' ('+Math.ceil(fim-ini)+' dias úteis)</div></div>'+
         '<div class="lbp-sub">Gerado em '+fmtDate(new Date())+'</div>'+
       '</div>'+
-      '<div class="lbp-chart">'+lbGanttSVG()+'</div>'+
-      '<div class="lbp-legend">'+c.etapas.map(function(e){
+      '<div class="lbp-chart">'+lbGanttSVG(true)+
+        '<div class="lbp-legend">'+c.etapas.map(function(e){
+          return '<span><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</span>';
+        }).join('')+'</div>'+
+      '</div>'+
+      '<div class="lbp-legend" style="display:none">'+c.etapas.map(function(e){
         return '<span><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</span>';
       }).join('')+'</div>'+
       '<div class="lbp-table">'+lbProjectHTML()+'</div>';
