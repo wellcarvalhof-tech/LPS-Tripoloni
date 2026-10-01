@@ -6992,7 +6992,15 @@
     var ordem=lbOrdemEtapas(c), porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
     var preds={}; c.etapas.forEach(function(e){preds[e.id]=[];});
     c.setas.forEach(function(st){ if(preds[st.para])preds[st.para].push({de:st.de,lat:+st.lat||0}); });
-    var fimEtapaLoteAnterior={}, itens=[], maxDia=0;
+    // Uma etapa pode ter mais de uma equipe: cada lote vai pra equipe que estiver livre mais
+    // cedo, então os lotes podem acontecer em paralelo (com 1 equipe, vira a fila de sempre).
+    var livreEquipe={};
+    c.etapas.forEach(function(e){
+      var nq=Math.max(1,Math.round(+e.equipes||1)), arr=[];
+      for(var k=0;k<nq;k++)arr.push(0);
+      livreEquipe[e.id]=arr;
+    });
+    var itens=[], maxDia=0;
     lotes.forEach(function(lid,j){
       var fimNoLote={};
       ordem.forEach(function(eid){
@@ -7002,14 +7010,16 @@
         (preds[eid]||[]).forEach(function(p){
           var f=fimNoLote[p.de]; if(f!=null)ini=Math.max(ini,f+(+p.lat||0));
         });
-        if(fimEtapaLoteAnterior[eid]!=null)ini=Math.max(ini,fimEtapaLoteAnterior[eid]);
+        var livres=livreEquipe[eid]||[0], kEq=0;
+        for(var q=1;q<livres.length;q++){ if(livres[q]<livres[kEq]-1e-9)kEq=q; }
+        ini=Math.max(ini,livres[kEq]);    // vai pra equipe que fica livre mais cedo
         ini+=Math.max(0,+e.offset||0);   // folga da etapa inteira
         var base=ini;                     // mais cedo possível neste lote (sem o ajuste do lote)
         var aj=lbAjuste(e,lid);
         if(aj&&aj.off>0)ini+=aj.off;      // atraso só deste lote em diante
         var dur=Math.max(0.5,(aj&&aj.dur>0)?aj.dur:(+e.dias||1)), fim=ini+dur;
-        fimNoLote[eid]=fim; fimEtapaLoteAnterior[eid]=fim;
-        itens.push({eid:eid,lote:lid,j:j,ini:ini,fim:fim,base:base,dur:dur});
+        fimNoLote[eid]=fim; livres[kEq]=fim;
+        itens.push({eid:eid,lote:lid,j:j,ini:ini,fim:fim,base:base,dur:dur,eq:kEq+1,nEq:livres.length});
         maxDia=Math.max(maxDia,fim);
       });
     });
@@ -7103,7 +7113,7 @@
         var x1=xx(x2.ini), larg=Math.max(2,xx(x2.fim)-x1), yTop=yy(x2.j,x2.faixa)-alt/2;
         var aj=lbAjuste(e,x2.lote);
         s+='<rect'+(arrastavel?' class="lb-drag" data-lbet-drag="'+e.id+'" data-lblote-drag="'+escAttr(x2.lote)+'"':'')+' x="'+x1.toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+larg.toFixed(1)+'" height="'+alt.toFixed(1)+'" rx="'+(LB_VIEW==='quadros'?3:2)+'" fill="'+cor+'" opacity="'+(LB_VIEW==='quadros'?'.95':'.9')+'" stroke="'+cor+'" stroke-width="1">'+
-          '<title>'+escAttr(e.nome)+' ('+escAttr(sig)+')\n'+escAttr(lbNomeLote(x2.lote))+'\n'+fmtDate(lbDiaParaData(x2.ini,c.inicio))+' a '+fmtDate(lbDiaParaData(x2.fim-1,c.inicio))+' ('+x2.dur+' dias)'+(aj&&aj.off>0?'\natraso manual: +'+aj.off+'d':'')+(aj&&aj.dur>0?'\nduração própria neste lote':'')+(arrastavel?'\n\nClique pra editar data e duração · arraste pra mover · borda direita muda a duração':'')+'</title></rect>';
+          '<title>'+escAttr(e.nome)+' ('+escAttr(sig)+')\n'+escAttr(lbNomeLote(x2.lote))+'\n'+fmtDate(lbDiaParaData(x2.ini,c.inicio))+' a '+fmtDate(lbDiaParaData(x2.fim-1,c.inicio))+' ('+x2.dur+' dias)'+(aj&&aj.off>0?'\natraso manual: +'+aj.off+'d':'')+(aj&&aj.dur>0?'\nduração própria neste lote':'')+((x2.nEq>1)?'\nequipe '+x2.eq+' de '+x2.nEq:'')+(arrastavel?'\n\nClique pra editar data e duração · arraste pra mover · borda direita muda a duração':'')+'</title></rect>';
         if(larg>=13&&alt>=9)s+='<text x="'+(x1+larg/2).toFixed(1)+'" y="'+(yTop+alt/2+3).toFixed(1)+'" text-anchor="middle" style="font-size:'+Math.min(9.5,Math.max(7,alt*0.5)).toFixed(1)+'px;font-weight:700;fill:'+pickFont(cor)+';pointer-events:none">'+escAttr(sig)+'</text>';
         if(arrastavel&&larg>=8)s+='<rect class="lb-res" data-lbet-res="'+e.id+'" data-lblote-res="'+escAttr(x2.lote)+'" x="'+(x1+larg-4).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="5" height="'+alt.toFixed(1)+'" fill="#fff" opacity=".35"><title>Arraste pra mudar a duração nesta etapa/lote</title></rect>';
       });
@@ -7216,7 +7226,7 @@
       s+='<g class="mf-node'+sel+'" data-mfno="'+e.id+'">'+
         '<rect x="'+e.x+'" y="'+e.y+'" width="'+MF_NW+'" height="'+MF_NH+'" rx="8" fill="'+e.cor+'" fill-opacity=".18" stroke="'+e.cor+'" stroke-width="1.8"/>'+
         '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH/2+(linhas.length>1?-6:0))+'" text-anchor="middle" style="font-size:10.5px;font-weight:600;fill:var(--ink)">'+txt+'</text>'+
-        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH-6)+'" text-anchor="middle" class="axm" style="font-size:8.5px"><tspan style="font-weight:700">'+escAttr(lbSigla(e))+'</tspan> · '+(+e.dias||1)+'d</text>'+
+        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH-6)+'" text-anchor="middle" class="axm" style="font-size:8.5px"><tspan style="font-weight:700">'+escAttr(lbSigla(e))+'</tspan> · '+(+e.dias||1)+'d'+((+e.equipes||1)>1?' · '+Math.round(+e.equipes)+' eq':'')+'</text>'+
         '<title>'+escAttr(e.nome)+(MF_MODE==='mover'?' — arraste pra mover, duplo clique renomeia':(MF_MODE==='ligar'?' — clique pra ligar':' — clique pra excluir'))+'</title></g>';
     });
     var alturaNec=MF_H;
@@ -7249,6 +7259,7 @@
         '<td><input class="einp" data-lbet="'+ei+'" data-lbf="sigla" value="'+escAttr(lbSigla(e))+'" maxlength="5" style="width:60px;text-align:center;font-weight:700" title="Aparece dentro dos quadros do gráfico"></td>'+
         '<td><input type="color" data-lbet="'+ei+'" data-lbf="cor" value="'+escAttr(e.cor||'#888888')+'" style="width:42px;height:26px;padding:0;border:0;background:none"></td>'+
         '<td><input class="einp" type="number" min="0.5" step="0.5" data-lbet="'+ei+'" data-lbf="dias" value="'+(+e.dias||1)+'" style="width:70px"></td>'+
+        '<td><input class="einp" type="number" min="1" step="1" data-lbet="'+ei+'" data-lbf="equipes" value="'+Math.max(1,Math.round(+e.equipes||1))+'" style="width:64px" title="Com mais de uma equipe, os lotes podem acontecer em paralelo"></td>'+
         '<td class="note">'+preds+'</td>'+
         '<td><button class="iconbtn" data-lbetdel="'+ei+'" title="Excluir etapa">✕</button></td></tr>';
     }).join('');
@@ -7295,7 +7306,7 @@
       '</div>'+
       '<div class="grid g2" style="gap:14px;margin-bottom:14px">'+
         '<div class="card"><div class="eyebrow" style="margin-bottom:6px">Etapas e durações</div>'+
-          (c.etapas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Etapa</th><th title="Aparece dentro dos quadros">Sigla</th><th>Cor</th><th>Duração (dias)</th><th>Depende de</th><th></th></tr></thead><tbody>'+etapaRows+'</tbody></table></div>':'<div class="note">Nenhuma etapa ainda.</div>')+
+          (c.etapas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Etapa</th><th title="Aparece dentro dos quadros">Sigla</th><th>Cor</th><th>Duração (dias)</th><th title="Mais de uma equipe = lotes em paralelo">Equipes</th><th>Depende de</th><th></th></tr></thead><tbody>'+etapaRows+'</tbody></table></div>':'<div class="note">Nenhuma etapa ainda.</div>')+
         '</div>'+
         '<div class="card"><div class="eyebrow" style="margin-bottom:6px">Ligações e latências</div>'+
           (c.setas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Ligação</th><th>Latência</th><th></th></tr></thead><tbody>'+ligRows+'</tbody></table></div>':'<div class="note">Nenhuma ligação ainda — use o modo <b>Ligar</b> no macro-fluxo.</div>')+
@@ -7324,7 +7335,7 @@
       var folgaRows=c.etapas.map(function(e,ei){
         var of=Math.max(0,+e.offset||0);
         return '<tr><td><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</td>'+
-          '<td class="r mono">'+(+e.dias||1)+'</td>'+
+          '<td class="r mono">'+(+e.dias||1)+((+e.equipes||1)>1?' <span class="note">× '+Math.round(+e.equipes)+' eq</span>':'')+'</td>'+
           '<td><input class="einp" type="number" min="0" step="0.5" data-lbfolga="'+ei+'" value="'+of+'" style="width:70px"> <span class="note">dias</span></td>'+
           '<td>'+(of>0?'<button class="iconbtn" data-lbfolgazero="'+ei+'" title="Zerar folga">↺</button>':'')+'</td></tr>';
       }).join('');
@@ -7406,6 +7417,7 @@
         if(f==='nome')e.nome=el.value.trim()||e.nome;
         else if(f==='sigla')e.sigla=el.value.trim().slice(0,5);
         else if(f==='cor')e.cor=el.value;
+        else if(f==='equipes')e.equipes=Math.max(1,Math.round(parseFloat(el.value)||1));
         else e.dias=Math.max(0.5,parseFloat(el.value)||1);
         lbMarkDirty(); go('cr-lb');
       });
