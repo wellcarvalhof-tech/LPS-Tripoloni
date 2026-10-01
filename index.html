@@ -144,6 +144,7 @@
   /* Tela cheia da matriz: o bloco do cronograma vira uma camada sobre a página inteira —
      só ficam os filtros de serviço, a barra de zoom e a própria matriz. */
   body.mat-fullscreen #cronoContent{position:fixed;inset:0;z-index:190;background:var(--bg);padding:10px 14px;display:flex;flex-direction:column;overflow:auto}
+  #lbPrint{display:none}
   body.mat-fullscreen #cronoContent .tc-head{display:none!important}
   body.mat-fullscreen #cronoContent .tc-svctoggle{margin-bottom:6px}
   /* Barra de edição da tela cheia: abas, ações do ajuste manual e saída. Fora da tela cheia não aparece. */
@@ -404,6 +405,19 @@
     body.printing-mat .print-head,
     body.printing-mat #cronoContent{display:none!important}
     /* Relatório do período (Histograma): imprime só o card do relatório, sem os controles */
+    body.printing-lb>*:not(#lbPrint){display:none!important}
+    body.printing-lb #lbPrint{display:block;padding:0}
+    body.printing-lb #lbPrint .lbp-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:10px}
+    body.printing-lb #lbPrint h2{margin:0;font-family:"Archivo",sans-serif;font-size:17px}
+    body.printing-lb #lbPrint .lbp-sub{font-size:11px;color:#555}
+    body.printing-lb #lbPrint .lbp-chart svg{width:100%;height:auto;max-height:11cm}
+    body.printing-lb #lbPrint .lbp-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;margin:6px 0 12px}
+    body.printing-lb #lbPrint .lbp-legend .swatch{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:4px}
+    body.printing-lb #lbPrint table{width:100%;border-collapse:collapse;font-size:10px}
+    body.printing-lb #lbPrint th,body.printing-lb #lbPrint td{border:1px solid #bbb;padding:2px 6px}
+    body.printing-lb #lbPrint thead th{background:#eee;font-weight:700}
+    body.printing-lb #lbPrint tbody tr{break-inside:avoid;page-break-inside:avoid}
+    body.printing-lb #lbPrint .tbl-wrap{overflow:visible}
     body.printing-report #content>*:not(#repCard):not(#execRep){display:none!important}
     body.printing-report #execRep select,body.printing-report #execRep button,body.printing-report #execRep .subtab{display:none!important}
     body.printing-report #execRep .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none}
@@ -7136,12 +7150,13 @@
   function lbGanttSVG(){
     var calc=lbCalc(); if(!calc||!calc.itens.length)return '<div class="note">Sem etapas pra montar o Gantt.</div>';
     var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    // Dentro de cada lote, a ordem segue a sequência construtiva: quem termina antes fica em cima
+    // (empate: quem começa antes; depois o nome).
     var linhas=[];
     calc.lotes.forEach(function(lid,j){
-      lbOrdemEtapas(c).forEach(function(eid){
-        var it=calc.itens.filter(function(x){return x.eid===eid&&x.j===j;})[0];
-        if(it)linhas.push({lote:lid,e:porId[eid],it:it});
-      });
+      calc.itens.filter(function(x){return x.j===j;})
+        .sort(function(a,b){ return a.fim-b.fim||a.ini-b.ini||String((porId[a.eid]||{}).nome||'').localeCompare(String((porId[b.eid]||{}).nome||'')); })
+        .forEach(function(it){ linhas.push({lote:lid,e:porId[it.eid],it:it}); });
     });
     var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
     // Colunas à esquerda, como num cronograma: tarefa | início | término | duração.
@@ -7183,18 +7198,18 @@
   function lbProjectHTML(){
     var calc=lbCalc(); if(!calc||!calc.itens.length)return '<div class="note">Sem etapas pra montar o cronograma.</div>';
     var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
-    var ordem=lbOrdemEtapas(c), linhas='';
+    var linhas='';
     calc.lotes.forEach(function(lid,j){
-      var itens=calc.itens.filter(function(x){return x.j===j;});
+      var itens=calc.itens.filter(function(x){return x.j===j;})
+        .sort(function(a,b){ return a.fim-b.fim||a.ini-b.ini||String((porId[a.eid]||{}).nome||'').localeCompare(String((porId[b.eid]||{}).nome||'')); });
       if(!itens.length)return;
       var ini=Math.min.apply(null,itens.map(function(x){return x.ini;}));
       var fim=Math.max.apply(null,itens.map(function(x){return x.fim;}));
       linhas+='<tr style="background:var(--elev);font-weight:700"><td>'+escAttr(lbNomeLote(lid))+'</td>'+
         '<td class="mono">'+fmtDate(lbDiaParaData(ini,c.inicio))+'</td><td class="mono">'+fmtDate(lbDiaParaData(fim-1,c.inicio))+'</td>'+
         '<td class="r mono">'+Math.round((fim-ini)*10)/10+'</td><td class="note">'+itens.length+' etapa(s)</td></tr>';
-      ordem.forEach(function(eid){
-        var it=itens.filter(function(x){return x.eid===eid;})[0]; if(!it)return;
-        var e=porId[eid];
+      itens.forEach(function(it){
+        var e=porId[it.eid]; if(!e)return;
         linhas+='<tr><td style="padding-left:26px"><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</td>'+
           '<td class="mono">'+fmtDate(lbDiaParaData(it.ini,c.inicio))+'</td><td class="mono">'+fmtDate(lbDiaParaData(it.fim-1,c.inicio))+'</td>'+
           '<td class="r mono">'+it.dur+'</td><td class="note">'+(it.nEq>1?('equipe '+it.eq+' de '+it.nEq):'')+'</td></tr>';
@@ -7202,27 +7217,90 @@
     });
     return '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Lote / etapa</th><th>Início</th><th>Término</th><th class="r">Dias</th><th>Equipe</th></tr></thead><tbody>'+linhas+'</tbody></table></div>';
   }
-  /** Exporta o cronograma da linha de balanço (uma linha por etapa × lote). */
-  function lbExportarCronograma(){
-    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+  /** Exporta o cronograma da linha de balanço em Excel, agrupado por lote e formatado
+   *  (cabeçalho fixo, linha-resumo de cada lote em negrito, cor da etapa na coluna da sigla). */
+  async function lbExportarCronograma(){
     var calc=lbCalc(); if(!calc||!calc.itens.length){alert('Nada pra exportar.');return;}
     var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
     var sv=SERV[lbSvcIdx(lbRoot().servicoSel)];
-    var rows=[['Serviço','Lote','Etapa','Sigla','Início','Término','Duração (dias)','Equipe']];
-    var ordem=lbOrdemEtapas(c);
-    calc.lotes.forEach(function(lid,j){
-      ordem.forEach(function(eid){
-        var it=calc.itens.filter(function(x){return x.eid===eid&&x.j===j;})[0]; if(!it)return;
-        var e=porId[eid];
-        rows.push([(sv&&sv.n)||'',lbNomeLote(lid),e.nome,lbSigla(e),
-          fmtDate(lbDiaParaData(it.ini,c.inicio)),fmtDate(lbDiaParaData(it.fim-1,c.inicio)),it.dur,
-          it.nEq>1?('Equipe '+it.eq+'/'+it.nEq):'Equipe única']);
+    var obra=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var arquivo='linha-de-balanco-'+String((sv&&sv.n)||'servico').replace(/[^\w]+/g,'-').toLowerCase()+'.xlsx';
+    var porLote=calc.lotes.map(function(lid,j){
+      return {lote:lid,itens:calc.itens.filter(function(x){return x.j===j;})
+        .sort(function(a,b){ return a.fim-b.fim||a.ini-b.ini; })};
+    }).filter(function(g){return g.itens.length;});
+    if(typeof ExcelJS==='undefined'){ // sem ExcelJS: cai pro Excel simples
+      if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+      var rows=[['Lote','Etapa','Sigla','Início','Término','Duração (dias)','Equipe']];
+      porLote.forEach(function(g){ g.itens.forEach(function(it){ var e=porId[it.eid];
+        rows.push([lbNomeLote(g.lote),e.nome,lbSigla(e),fmtDate(lbDiaParaData(it.ini,c.inicio)),fmtDate(lbDiaParaData(it.fim-1,c.inicio)),it.dur,it.nEq>1?('Equipe '+it.eq+'/'+it.nEq):'']); }); });
+      var wb0=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb0,XLSX.utils.aoa_to_sheet(rows),'Cronograma');
+      XLSX.writeFile(wb0,arquivo); toast('Cronograma exportado.'); return;
+    }
+    var hex=function(cor){ var m=String(cor||'#888888').replace('#',''); return 'FF'+(m.length===3?m[0]+m[0]+m[1]+m[1]+m[2]+m[2]:m).toUpperCase(); };
+    var wb=new ExcelJS.Workbook();
+    var ws=wb.addWorksheet('Linha de Balanço',{views:[{state:'frozen',ySplit:3}],pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0}});
+    ws.columns=[{key:'nome',width:46},{key:'sigla',width:8},{key:'ini',width:13},{key:'fim',width:13},{key:'dur',width:9},{key:'eq',width:14}];
+    var t1=ws.addRow([obra+' — Linha de Balanço']); t1.font={bold:true,size:14};
+    ws.mergeCells(t1.number,1,t1.number,6);
+    var t2=ws.addRow([((sv&&sv.n)||'')+' · '+porLote.length+' lote(s) · '+c.etapas.length+' etapa(s) · gerado em '+fmtDate(new Date())]);
+    t2.font={size:10,color:{argb:'FF666666'}}; ws.mergeCells(t2.number,1,t2.number,6);
+    var head=ws.addRow(['Lote / etapa','Sigla','Início','Término','Dias','Equipe']);
+    head.font={bold:true,color:{argb:'FFFFFFFF'}}; head.height=18;
+    head.eachCell(function(cl){ cl.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF17405E'}};
+      cl.alignment={vertical:'middle',horizontal:'center'};
+      cl.border={bottom:{style:'thin',color:{argb:'FF999999'}}}; });
+    porLote.forEach(function(g){
+      var i0=Math.min.apply(null,g.itens.map(function(x){return x.ini;}));
+      var i1=Math.max.apply(null,g.itens.map(function(x){return x.fim;}));
+      var lr=ws.addRow([lbNomeLote(g.lote),'',fmtDate(lbDiaParaData(i0,c.inicio)),fmtDate(lbDiaParaData(i1-1,c.inicio)),Math.round((i1-i0)*10)/10,g.itens.length+' etapa(s)']);
+      lr.font={bold:true};
+      lr.eachCell(function(cl){ cl.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFDDEBF7'}}; });
+      g.itens.forEach(function(it){
+        var e=porId[it.eid]; if(!e)return;
+        var r=ws.addRow(['    '+e.nome,lbSigla(e),fmtDate(lbDiaParaData(it.ini,c.inicio)),fmtDate(lbDiaParaData(it.fim-1,c.inicio)),it.dur,it.nEq>1?('Equipe '+it.eq+'/'+it.nEq):'']);
+        r.getCell(2).fill={type:'pattern',pattern:'solid',fgColor:{argb:hex(e.cor)}};
+        r.getCell(2).font={bold:true,color:{argb:'FFFFFFFF'}};
+        r.getCell(2).alignment={horizontal:'center'};
       });
     });
-    var wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Cronograma');
-    XLSX.writeFile(wb,'linha-de-balanco-'+((sv&&sv.n)||'servico').replace(/[^\w]+/g,'-').toLowerCase()+'.xlsx');
+    ws.eachRow(function(r,n){ if(n<3)return; r.eachCell(function(cl,ci){
+      cl.border=Object.assign({},cl.border,{top:{style:'hair',color:{argb:'FFCCCCCC'}},bottom:{style:'hair',color:{argb:'FFCCCCCC'}}});
+      if(ci>=3)cl.alignment={horizontal:ci===5?'right':'center'};
+    }); });
+    ws.autoFilter={from:{row:3,column:1},to:{row:3,column:6}};
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=arquivo; a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
     toast('Cronograma exportado.');
+  }
+  /** Imprime (ou salva em PDF) o cronograma da linha de balanço: cabeçalho, o Gantt e a tabela
+   *  agrupada por lote — numa folha só, com o resto da tela escondido. */
+  function lbImprimirCronograma(){
+    var calc=lbCalc(); if(!calc||!calc.itens.length){alert('Nada pra imprimir.');return;}
+    var c=calc.c, sv=SERV[lbSvcIdx(lbRoot().servicoSel)];
+    var obra=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var ini=Math.min.apply(null,calc.itens.map(function(x){return x.ini;}));
+    var fim=Math.max.apply(null,calc.itens.map(function(x){return x.fim;}));
+    var velho=document.getElementById('lbPrint'); if(velho)velho.remove();
+    var box=document.createElement('div'); box.id='lbPrint';
+    box.innerHTML='<div class="lbp-head">'+
+        '<div><h2>'+escAttr(obra)+' — Linha de Balanço</h2>'+
+        '<div class="lbp-sub">'+escAttr((sv&&sv.n)||'')+' · '+calc.lotes.length+' lote(s) · '+c.etapas.length+' etapa(s) · '+
+        fmtDate(lbDiaParaData(ini,c.inicio))+' a '+fmtDate(lbDiaParaData(fim-1,c.inicio))+' ('+Math.ceil(fim-ini)+' dias úteis)</div></div>'+
+        '<div class="lbp-sub">Gerado em '+fmtDate(new Date())+'</div>'+
+      '</div>'+
+      '<div class="lbp-chart">'+lbGanttSVG()+'</div>'+
+      '<div class="lbp-legend">'+c.etapas.map(function(e){
+        return '<span><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</span>';
+      }).join('')+'</div>'+
+      '<div class="lbp-table">'+lbProjectHTML()+'</div>';
+    document.body.appendChild(box);
+    document.body.classList.add('printing-lb');
+    var t=document.title; document.title='Linha de Balanco - '+obra+' - '+((sv&&sv.n)||'');
+    window.onafterprint=function(){ document.body.classList.remove('printing-lb'); var b=document.getElementById('lbPrint'); if(b)b.remove(); document.title=t; window.onafterprint=null; };
+    window.print();
   }
   /** Curva S da linha de balanço: % acumulado do trabalho (soma das durações etapa×lote). */
   function lbCurvaSVG(){
@@ -7454,7 +7532,8 @@
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
             '<span style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Fonte:</span>'+fontes+'</span>'+
             (LB_GANTT_FONTE==='lb'?'<span style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Ver:</span>'+vistasG+'</span>'+
-              '<button class="btn" id="lbExpCron">↧ Exportar cronograma</button>':'')+
+              '<button class="btn" id="lbExpCron">↧ Excel</button>'+
+              '<button class="btn primary" id="lbPrintCron">🖨 Imprimir / PDF</button>':'')+
           '</div>'+
         '</div>'+
         (ehCron?lbProjectHTML():'<div class="tc-wrap" style="padding:6px">'+(LB_GANTT_FONTE==='lb'?lbGanttSVG():ganttSVG())+'</div>')+
@@ -7535,6 +7614,8 @@
     });
     var expCron=document.getElementById('lbExpCron');
     if(expCron)expCron.addEventListener('click',lbExportarCronograma);
+    var printCron=document.getElementById('lbPrintCron');
+    if(printCron)printCron.addEventListener('click',lbImprimirCronograma);
     root.querySelectorAll('[data-lbfolga]').forEach(function(inp){
       inp.addEventListener('change',function(){
         var e=cfg.etapas[+inp.getAttribute('data-lbfolga')]; if(!e)return;
