@@ -3237,6 +3237,7 @@
    * status, quantidade realizada e causa de não cumprimento. */
   var PROG_PLANOS=[], PROG_PLANO=null, PROG_ITENS=[], PROG_CAUSAS=[], PROG_ERRO='', PROG_CARREGANDO=false;
   var PROG_LIDO=false; // já consultou o banco nesta obra (mesmo que não exista semana nenhuma)
+  var PROG_SEM_ABERTA=true, PROG_GRUPO_FECHADO={}; // chaves de agrupamento da semana e de cada grupo
   var PROG_STATUS=[['planejado','Planejado'],['concluido','Concluído'],['parcial','Parcial'],['nao_concluido','Não concluído']];
   async function sbProgPlanos(obraId){
     var r=await SB.from('planos_semanais').select('id,semana_iso,data_inicio,data_fim').eq('obra_id',obraId).order('data_inicio',{ascending:false});
@@ -3374,15 +3375,24 @@
     else if(!PROG_PLANO){ corpo='<div class="note">Crie uma semana pra começar a programar.</div>'; }
     else if(!PROG_ITENS.length){ corpo='<div class="note">Semana sem linhas. Use <b>↓ Puxar sugestões</b> pra trazer o previsto do cronograma, ou <b>+ Linha</b> pra lançar na mão.</div>'; }
     else {
-      var linhas=PROG_ITENS.map(function(it){
+      // Agrupa pelas chaves do campo "Grupo" (o que estiver vazio cai em "Sem grupo"), cada
+      // grupo com a sua chave de abrir/fechar — e a semana inteira também recolhe.
+      var grupos=[], porGrupo={};
+      PROG_ITENS.forEach(function(it){
+        var g=(it.grupo||'').trim()||'(sem grupo)';
+        if(!porGrupo[g]){ porGrupo[g]=[]; grupos.push(g); }
+        porGrupo[g].push(it);
+      });
+      grupos.sort(function(a,b){ if(a==='(sem grupo)')return 1; if(b==='(sem grupo)')return -1; return a.localeCompare(b); });
+      var linhaDoItem=function(it){
         var svcOpts='<option value="">— livre —</option>'+SERV.map(function(s){ return '<option value="'+escAttr(s.id||'')+'"'+(s.id===it.servico_id?' selected':'')+'>'+escAttr(s.n)+'</option>'; }).join('');
         var mostraCausa=(it.status==='nao_concluido'||it.status==='parcial');
         var causaSel='<select class="esel" data-pitem="'+it.id+'" data-pcampo="causa_id" style="width:160px"'+(mostraCausa?'':' disabled')+'><option value="">— causa —</option>'+
           PROG_CAUSAS.map(function(cz){ return '<option value="'+cz.id+'"'+(cz.id===it.causa_id?' selected':'')+'>'+escAttr(cz.nome)+'</option>'; }).join('')+'</select>';
         var tag=it.origem==='tc'?'<span class="pill" title="Sugerido pelo Tempo-Caminho">TC</span>':(it.origem==='lb'?'<span class="pill" title="Sugerido pela Linha de Balanço">LB</span>':'');
         return '<tr>'+
-          '<td style="min-width:200px">'+tag+' <input class="einp" data-pitem="'+it.id+'" data-pcampo="etapa" value="'+escAttr(it.etapa||'')+'" placeholder="etapa (livre)" style="width:150px">'+
-            '<div style="margin-top:3px"><select class="esel" data-pitem="'+it.id+'" data-pcampo="servico_id" style="width:170px">'+svcOpts+'</select></div></td>'+
+          '<td style="min-width:200px">'+tag+' <select class="esel" data-pitem="'+it.id+'" data-pcampo="servico_id" style="width:170px">'+svcOpts+'</select>'+
+            '<div style="margin-top:3px"><input class="einp" data-pitem="'+it.id+'" data-pcampo="etapa" value="'+escAttr(it.etapa||'')+'" placeholder="etapa (livre)" style="width:170px"></div></td>'+
           '<td><input class="einp" data-pitem="'+it.id+'" data-pcampo="grupo" value="'+escAttr(it.grupo||'')+'" placeholder="grupo" style="width:120px"></td>'+
           '<td>'+progLoteSel(it,'lote_id')+'</td>'+
           '<td>'+progLoteSel(it,'lote_fim_id')+'</td>'+
@@ -3392,7 +3402,21 @@
           '<td><input class="einp" type="number" step="0.01" data-pitem="'+it.id+'" data-pcampo="quantidade_realizada" value="'+(it.quantidade_realizada==null?'':it.quantidade_realizada)+'" style="width:90px"></td>'+
           '<td>'+causaSel+'</td>'+
           '<td><button class="iconbtn" data-pdel="'+it.id+'" title="Excluir linha">✕</button></td></tr>';
-      }).join('');
+      };
+      var linhas='';
+      if(PROG_SEM_ABERTA){
+        grupos.forEach(function(g){
+          var itens=porGrupo[g], aberto=!PROG_GRUPO_FECHADO[g];
+          var prev=0, real=0, ok=0;
+          itens.forEach(function(it){ prev+=(+it.quantidade_prevista||0); real+=(+it.quantidade_realizada||0); if(it.status==='concluido')ok++; });
+          linhas+='<tr style="background:var(--elev)"><td colspan="6" style="font-weight:700">'+
+            '<button class="iconbtn" data-pgrupo="'+escAttr(g)+'" style="margin-right:6px">'+(aberto?'▾':'▸')+'</button>'+escAttr(g)+
+            ' <span class="note">'+itens.length+' linha(s)'+(prev>0?(' · previsto '+fmtBR(prev)):'')+'</span></td>'+
+            '<td class="note">'+ok+'/'+itens.length+' concluído(s)</td>'+
+            '<td class="r mono">'+(real>0?fmtBR(real):'')+'</td><td colspan="2"></td></tr>';
+          if(aberto)linhas+=itens.map(linhaDoItem).join('');
+        });
+      }
       corpo='<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead>'+
         '<tr><th colspan="6" style="text-align:center;background:var(--elev)">Previsto</th><th colspan="3" style="text-align:center;background:var(--elev)">Acompanhamento</th><th></th></tr>'+
         '<tr><th>Serviço / etapa</th><th>Grupo</th><th>Lote início</th><th>Lote fim</th><th>Detalhamento</th><th class="r">Qtd prevista</th>'+
@@ -3404,7 +3428,7 @@
         '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
           '<span class="lab" style="margin:0">Semana</span>'+semSel+
           (ppc!=null?'<span class="pill'+(ppc>=85?' good':(ppc>=70?' warn':' crit'))+'">PPC '+ppc+'%</span>':'')+
-          (PROG_ITENS.length?'<span class="note">'+PROG_ITENS.length+' linha(s)</span>':'')+
+          (PROG_ITENS.length?'<button class="iconbtn" id="progSemChave" title="Abrir/fechar as linhas desta semana">'+(PROG_SEM_ABERTA?'▾':'▸')+'</button><span class="note">'+PROG_ITENS.length+' linha(s)</span>':'')+
         '</div>'+corpo+
       '</div>';
   };
@@ -3489,6 +3513,15 @@
     var nova=document.getElementById('progNova'); if(nova)nova.addEventListener('click',progNovaSemana);
     var pux=document.getElementById('progPuxar'); if(pux)pux.addEventListener('click',progPuxarSugestoes);
     var add=document.getElementById('progAdd'); if(add)add.addEventListener('click',progAddLinha);
+    var chave=document.getElementById('progSemChave');
+    if(chave)chave.addEventListener('click',function(){ PROG_SEM_ABERTA=!PROG_SEM_ABERTA; go('lp-semana'); });
+    document.querySelectorAll('[data-pgrupo]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var g=b.getAttribute('data-pgrupo');
+        PROG_GRUPO_FECHADO[g]=!PROG_GRUPO_FECHADO[g];
+        go('lp-semana');
+      });
+    });
     document.querySelectorAll('[data-pitem]').forEach(function(el){
       el.addEventListener('change',async function(){
         var id=el.getAttribute('data-pitem'), campo=el.getAttribute('data-pcampo');
