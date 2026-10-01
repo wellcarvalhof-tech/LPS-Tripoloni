@@ -910,7 +910,7 @@
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     LB=null; LB_DIRTY=false; // estudo de linha de balanço desta obra (recarrega do banco)
     LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
-    PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO='';
+    PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO=''; PROG_LIDO=false;
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
 
@@ -3236,6 +3236,7 @@
    * grupo (livre), lote início, lote fim, detalhamento e quantidade prevista; do acompanhamento:
    * status, quantidade realizada e causa de não cumprimento. */
   var PROG_PLANOS=[], PROG_PLANO=null, PROG_ITENS=[], PROG_CAUSAS=[], PROG_ERRO='', PROG_CARREGANDO=false;
+  var PROG_LIDO=false; // já consultou o banco nesta obra (mesmo que não exista semana nenhuma)
   var PROG_STATUS=[['planejado','Planejado'],['concluido','Concluído'],['parcial','Parcial'],['nao_concluido','Não concluído']];
   async function sbProgPlanos(obraId){
     var r=await SB.from('planos_semanais').select('id,semana_iso,data_inicio,data_fim').eq('obra_id',obraId).order('data_inicio',{ascending:false});
@@ -3412,7 +3413,7 @@
       PROG_PLANO=planoId?(PROG_PLANOS.filter(function(p){return p.id===planoId;})[0]||null):(PROG_PLANOS[0]||null);
       PROG_ITENS=PROG_PLANO?await sbProgItens(PROG_PLANO.id):[];
     }catch(e){ PROG_ERRO=(e&&e.message)||String(e); }
-    PROG_CARREGANDO=false;
+    PROG_CARREGANDO=false; PROG_LIDO=true;
     if(current==='lp-semana')go('lp-semana');
   }
   async function progNovaSemana(){
@@ -4073,7 +4074,7 @@
       });
     }
     if(view==='lp-medio'){renderMedio();}
-    if(view==='lp-semana'){ wireProg(); if(!PROG_PLANOS.length&&!PROG_ERRO&&!PROG_CARREGANDO)progCarregar(); }
+    if(view==='lp-semana'){ wireProg(); if(!PROG_LIDO&&!PROG_CARREGANDO)progCarregar(); }
     if(view==='ac-prod'){renderProd();}
     if(view==='lp-ppc'){ppcBars('ppcb2');pareto();}
     if(view==='cad-serv'){
