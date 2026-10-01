@@ -170,6 +170,7 @@
   .legend span{display:inline-flex;align-items:center;gap:6px}
   svg.chart{width:100%;height:auto;display:block;overflow:visible}
   .axm{fill:var(--muted);font-size:9px;font-family:"IBM Plex Mono",monospace}
+  .lb-drag{cursor:ew-resize}
   .mf-wrap{border:1px solid var(--line);border-radius:10px;background:var(--elev);overflow:auto;position:relative}
   .mf-wrap svg{display:block;touch-action:none;user-select:none}
   .mf-node rect{cursor:grab}
@@ -6879,6 +6880,9 @@
   var LB_PAL=['#c0392b','#e67e22','#f1c40f','#27ae60','#2980b9','#8e44ad','#16a085','#7f8c8d'];
   var DIAS_SEM=5;     // dias úteis por semana (igual ao resto do app)
   var MF_MODE='mover', MF_SEL=null;
+  var LB_TAB='lb';        // aba interna: lb | ajuste | gantt | curva
+  var LB_VIEW='linhas';   // desenho da linha de balanço: linhas (faixas) | quadros (blocos)
+  var LB_GANTT_FONTE='lb';// gantt: lb | tc
   var MF_W=1200, MF_H=460, MF_NW=170, MF_NH=56;
 
   function lbLoteIds(){ return window._LOTIDS||[]; }
@@ -6976,6 +6980,7 @@
           var f=fimNoLote[p.de]; if(f!=null)ini=Math.max(ini,f+(+p.lat||0));
         });
         if(fimEtapaLoteAnterior[eid]!=null)ini=Math.max(ini,fimEtapaLoteAnterior[eid]);
+        ini+=Math.max(0,+e.offset||0); // folga manual (Ajuste manual: arrastar a etapa)
         var dur=Math.max(0.5,+e.dias||1), fim=ini+dur;
         fimNoLote[eid]=fim; fimEtapaLoteAnterior[eid]=fim;
         itens.push({eid:eid,lote:lid,j:j,ini:ini,fim:fim});
@@ -6985,7 +6990,7 @@
     return {lotes:lotes,itens:itens,maxDia:maxDia,c:c};
   }
   function lbDiaParaSemana(dia,inicioSem){ return (inicioSem||1)+Math.floor(dia/DIAS_SEM); }
-  function lbSVG(){
+  function lbSVG(arrastavel){
     var calc=lbCalc(); if(!calc)return '';
     var c=calc.c;
     if(!calc.lotes.length)return '<div class="note">Escolha os lotes onde este serviço acontece.</div>';
@@ -7022,19 +7027,79 @@
       var cor=e.cor||'#888';
       var pIni=arr.map(function(x2){ return xx(x2.ini).toFixed(1)+','+yy(x2.j).toFixed(1); });
       var pFim=arr.map(function(x2){ return xx(x2.fim).toFixed(1)+','+yy(x2.j).toFixed(1); });
-      if(arr.length>1){
+      if(arr.length>1&&LB_VIEW==='linhas'){
         s+='<polygon points="'+pIni.join(' ')+' '+pFim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".22"/>';
         s+='<polyline points="'+pIni.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.6"/>';
         s+='<polyline points="'+pFim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.6"/>';
       }
+      var alt=LB_VIEW==='quadros'?rowH*0.74:rowH*0.6;
       arr.forEach(function(x2){
-        s+='<rect x="'+xx(x2.ini).toFixed(1)+'" y="'+(yy(x2.j)-rowH*0.3).toFixed(1)+'" width="'+Math.max(2,xx(x2.fim)-xx(x2.ini)).toFixed(1)+'" height="'+(rowH*0.6).toFixed(1)+'" rx="2" fill="'+cor+'" opacity=".9">'+
-          '<title>'+escAttr(e.nome)+'\n'+escAttr(lbNomeLote(x2.lote))+'\ndia '+Math.round(x2.ini)+' → '+Math.round(x2.fim)+' ('+(+e.dias||1)+' dias)\nS'+isoWeek(mondayOf(lbDiaParaSemana(x2.ini,c.inicio)))+'</title></rect>';
+        s+='<rect'+(arrastavel?' class="lb-drag" data-lbet-drag="'+e.id+'"':'')+' x="'+xx(x2.ini).toFixed(1)+'" y="'+(yy(x2.j)-alt/2).toFixed(1)+'" width="'+Math.max(2,xx(x2.fim)-xx(x2.ini)).toFixed(1)+'" height="'+alt.toFixed(1)+'" rx="'+(LB_VIEW==='quadros'?3:2)+'" fill="'+cor+'" opacity="'+(LB_VIEW==='quadros'?'.95':'.9')+'"'+(LB_VIEW==='quadros'?' stroke="'+cor+'" stroke-width="1"':'')+'>'+
+          '<title>'+escAttr(e.nome)+'\n'+escAttr(lbNomeLote(x2.lote))+'\ndia '+Math.round(x2.ini)+' → '+Math.round(x2.fim)+' ('+(+e.dias||1)+' dias)\nS'+isoWeek(mondayOf(lbDiaParaSemana(x2.ini,c.inicio)))+(arrastavel?'\n\nArraste pra direita pra atrasar esta etapa (folga manual)':'')+'</title></rect>';
       });
       var mid=arr[Math.floor(arr.length/2)];
       s+='<text x="'+xx((mid.ini+mid.fim)/2).toFixed(1)+'" y="'+(yy(mid.j)-rowH*0.42).toFixed(1)+'" text-anchor="middle" style="font-size:8.5px;fill:'+cor+';font-weight:700">'+escAttr(e.nome)+'</text>';
     });
-    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:860px">'+s+'</svg>';
+    return '<svg class="chart"'+(arrastavel?' id="lbSvgDrag"':'')+' viewBox="0 0 '+W+' '+H+'" style="min-width:860px" data-totdias="'+totDias+'" data-iw="'+iw+'" data-w="'+W+'">'+s+'</svg>';
+  }
+
+  /* ---- Gantt da linha de balanço: uma barra por etapa em cada lote ---- */
+  function lbGanttSVG(){
+    var calc=lbCalc(); if(!calc||!calc.itens.length)return '<div class="note">Sem etapas pra montar o Gantt.</div>';
+    var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    var linhas=[];
+    calc.lotes.forEach(function(lid,j){
+      lbOrdemEtapas(c).forEach(function(eid){
+        var it=calc.itens.filter(function(x){return x.eid===eid&&x.j===j;})[0];
+        if(it)linhas.push({lote:lid,e:porId[eid],it:it});
+      });
+    });
+    var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
+    var labelW=240, W=1060, pl=labelW, pr=16, pt=22, pb=40, rowH=Math.max(13,Math.min(26,Math.floor(560/Math.max(1,linhas.length))));
+    var ih=linhas.length*rowH, H=pt+ih+pb, iw=W-pl-pr;
+    var xx=function(d){ return pl+iw*d/Math.max(1,totDias); };
+    var s='';
+    var semanas=Math.ceil(totDias/DIAS_SEM), passo=Math.max(1,Math.ceil(semanas/26));
+    for(var k=0;k<=semanas;k+=passo){
+      var x=xx(k*DIAS_SEM);
+      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>'+
+        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
+    }
+    linhas.forEach(function(L,i){
+      var y=pt+i*rowH;
+      if(i%2===0)s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
+      s+='<text class="axm" x="'+(pl-8)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+(rowH<17?8:9.5)+'px">'+escAttr(lbNomeLote(L.lote))+' · '+escAttr(L.e.nome)+'</text>';
+      s+='<rect x="'+xx(L.it.ini).toFixed(1)+'" y="'+(y+rowH*0.18).toFixed(1)+'" width="'+Math.max(2,xx(L.it.fim)-xx(L.it.ini)).toFixed(1)+'" height="'+(rowH*0.64).toFixed(1)+'" rx="3" fill="'+(L.e.cor||'#888')+'"><title>'+escAttr(L.e.nome)+' · '+escAttr(lbNomeLote(L.lote))+'\ndia '+Math.round(L.it.ini)+' → '+Math.round(L.it.fim)+'</title></rect>';
+    });
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:880px">'+s+'</svg>';
+  }
+  /** Curva S da linha de balanço: % acumulado do trabalho (soma das durações etapa×lote). */
+  function lbCurvaSVG(){
+    var calc=lbCalc(); if(!calc||!calc.itens.length)return '<div class="note">Sem etapas pra montar a curva.</div>';
+    var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    var total=0; calc.itens.forEach(function(it){ total+=Math.max(0.5,+(porId[it.eid]||{}).dias||1); });
+    if(total<=0)return '';
+    var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
+    var semanas=Math.ceil(totDias/DIAS_SEM), vals=[];
+    for(var w=0;w<=semanas;w++){
+      var dia=w*DIAS_SEM, feito=0;
+      calc.itens.forEach(function(it){
+        var dur=Math.max(0.5,+(porId[it.eid]||{}).dias||1);
+        if(dia>=it.fim)feito+=dur;
+        else if(dia>it.ini)feito+=dur*((dia-it.ini)/(it.fim-it.ini));
+      });
+      vals.push(feito/total*100);
+    }
+    var W=900,H=280,pl=46,pr=14,pt=14,pb=46,iw=W-pl-pr,ih=H-pt-pb;
+    var xx=function(i){ return pl+iw*i/Math.max(1,semanas); }, yy=function(v){ return pt+ih-ih*v/100; };
+    var s='';
+    for(var g=0;g<=100;g+=25)s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(g)+3)+'" text-anchor="end">'+g+'%</text>';
+    var passo=Math.max(1,Math.ceil(semanas/22));
+    for(var k2=0;k2<=semanas;k2+=passo)s+='<text class="axm" x="'+xx(k2).toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k2*DIAS_SEM,c.inicio)))+'</text>';
+    var d=vals.map(function(v,i){ return (i?'L':'M')+xx(i).toFixed(1)+' '+yy(v).toFixed(1); }).join(' ');
+    s+='<path d="'+d+'" fill="none" stroke="var(--accent)" stroke-width="2.5"/>';
+    vals.forEach(function(v,i){ if(semanas<=40||i%passo===0)s+='<circle cx="'+xx(i).toFixed(1)+'" cy="'+yy(v).toFixed(1)+'" r="2.5" fill="var(--accent)"><title>S'+isoWeek(mondayOf(lbDiaParaSemana(i*DIAS_SEM,c.inicio)))+': '+Math.round(v)+'%</title></circle>'; });
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:820px">'+s+'</svg>';
   }
 
   /* ---- macro-fluxo (etapas do serviço) ---- */
@@ -7108,21 +7173,28 @@
       return '<button class="subtab'+(MF_MODE===m[0]?' active':'')+'" data-mfmode="'+m[0]+'">'+m[1]+'</button>';
     }).join('');
     var durTot=calc&&calc.maxDia?(Math.ceil(calc.maxDia)+' dias (~'+(Math.ceil(calc.maxDia/DIAS_SEM))+' semanas)'):'—';
-    return head('Linha de Balanço','Detalhamento do Tempo-Caminho por serviço.',
-        '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
-      '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+cronoTabsHTML('cr-lb')+'</div>'+
+    var abas=[['ajuste','Ajuste manual'],['lb','Linha de balanço'],['gantt','Gantt'],['curva','Curva S']].map(function(t){
+      return '<button class="subtab'+(LB_TAB===t[0]?' active':'')+'" data-lbtab="'+t[0]+'">'+t[1]+'</button>';
+    }).join('');
+    var vistas=[['linhas','Linhas'],['quadros','Quadros']].map(function(v){
+      return '<button class="subtab'+(LB_VIEW===v[0]?' active':'')+'" data-lbview="'+v[0]+'">'+v[1]+'</button>';
+    }).join('');
+    var cabec='<div class="card" style="margin-bottom:14px">'+
+      '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
+        '<span class="lab" style="margin:0">Serviço a detalhar</span>'+svcSel+
+        '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Começa na semana <input class="einp" type="number" min="1" id="lbInicio" value="'+(+c.inicio||1)+'" style="width:70px"></label>'+
+        '<span class="note">Duração total: <b>'+durTot+'</b> · '+c.etapas.length+' etapa(s) × '+c.lotes.length+' lote(s)</span>'+
+      '</div></div>';
+    var corpo='';
+    if(LB_TAB==='lb'){
+      corpo=
       '<div class="card" style="margin-bottom:14px">'+
-        '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
-          '<span class="lab" style="margin:0">Serviço a detalhar</span>'+svcSel+
-          '<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Começa na semana <input class="einp" type="number" min="1" id="lbInicio" value="'+(+c.inicio||1)+'" style="width:70px"></label>'+
-          '<span class="note">Duração total pela linha de balanço: <b>'+durTot+'</b> · '+c.etapas.length+' etapa(s) × '+c.lotes.length+' lote(s)</span>'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+          '<div><div class="eyebrow" style="margin:0">Linha de balanço — '+escAttr(sv?sv.n:'')+'</div>'+
+          '<div class="note">Tempo na horizontal (dias de trabalho a partir do início do serviço, com as semanas do projeto marcadas); lotes na vertical, na ordem executiva.</div></div>'+
+          '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Ver como:</span>'+vistas+'</div>'+
         '</div>'+
-        '<div class="note" style="margin-top:6px">Cada etapa caminha lote a lote com a mesma equipe: ela só vai pro lote seguinte quando termina o atual, e dentro do lote só começa depois das predecessoras (+ latência). É um estudo à parte — não altera a Matriz Tempo-Caminho.</div>'+
-      '</div>'+
-      '<div class="card" style="margin-bottom:14px">'+
-        '<div class="eyebrow" style="margin-bottom:2px">Linha de balanço — '+escAttr(sv?sv.n:'')+'</div>'+
-        '<div class="note" style="margin-bottom:6px">Tempo na horizontal (dias corridos de trabalho a partir do início do serviço, com as semanas do projeto marcadas); lotes na vertical, na ordem executiva.</div>'+
-        '<div class="tc-wrap" style="padding:6px">'+lbSVG()+'</div>'+
+        '<div class="tc-wrap" style="padding:6px;margin-top:6px">'+lbSVG(false)+'</div>'+
       '</div>'+
       '<div class="card" style="margin-bottom:14px">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">'+
@@ -7149,6 +7221,48 @@
           '<div class="note" style="margin-bottom:8px">Do primeiro ao último — é nessa ordem que as equipes caminham (o primeiro fica embaixo no gráfico).</div>'+
           (c.lotes.length?'<div class="seqlist">'+seqRows+'</div>':'<div class="note">Nenhum lote marcado.</div>')+'</div>'+
       '</div>';
+    } else if(LB_TAB==='ajuste'){
+      var folgaRows=c.etapas.map(function(e,ei){
+        var of=Math.max(0,+e.offset||0);
+        return '<tr><td><span class="swatch" style="background:'+(e.cor||'#888')+'"></span>'+escAttr(e.nome)+'</td>'+
+          '<td class="r mono">'+(+e.dias||1)+'</td>'+
+          '<td><input class="einp" type="number" min="0" step="0.5" data-lbfolga="'+ei+'" value="'+of+'" style="width:70px"> <span class="note">dias</span></td>'+
+          '<td>'+(of>0?'<button class="iconbtn" data-lbfolgazero="'+ei+'" title="Zerar folga">↺</button>':'')+'</td></tr>';
+      }).join('');
+      corpo=
+      '<div class="card" style="margin-bottom:14px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
+          '<div><div class="eyebrow" style="margin:0">Ajuste manual — arraste as etapas</div>'+
+          '<div class="note">Arraste uma barra pra <b>direita</b> pra atrasar aquela etapa em todos os lotes (vira folga manual, somada à latência das setas); pra <b>esquerda</b> devolve o atraso até ela encostar no mais cedo possível. O resto da linha se recalcula sozinho.</div></div>'+
+          '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Ver como:</span>'+vistas+'</div>'+
+        '</div>'+
+        '<div class="tc-wrap" style="padding:6px;margin-top:6px">'+lbSVG(true)+'</div>'+
+      '</div>'+
+      '<div class="card"><div class="eyebrow" style="margin-bottom:6px">Folga manual por etapa</div>'+
+        (c.etapas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Etapa</th><th class="r">Duração (dias)</th><th>Folga manual</th><th></th></tr></thead><tbody>'+folgaRows+'</tbody></table></div>':'<div class="note">Nenhuma etapa ainda.</div>')+
+      '</div>';
+    } else if(LB_TAB==='gantt'){
+      var fontes=[['lb','Linha de balanço'],['tc','Tempo-Caminho']].map(function(f){
+        return '<button class="subtab'+(LB_GANTT_FONTE===f[0]?' active':'')+'" data-lbgantt="'+f[0]+'">'+f[1]+'</button>';
+      }).join('');
+      corpo='<div class="card">'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:6px">'+
+          '<div><div class="eyebrow" style="margin:0">Gantt</div><div class="note">'+(LB_GANTT_FONTE==='lb'?'Uma barra por etapa em cada lote, na ordem executiva.':'Os serviços do cronograma (Tempo-Caminho), pra comparar.')+'</div></div>'+
+          '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Fonte:</span>'+fontes+'</div>'+
+        '</div>'+
+        '<div class="tc-wrap" style="padding:6px">'+(LB_GANTT_FONTE==='lb'?lbGanttSVG():ganttSVG())+'</div>'+
+      '</div>';
+    } else {
+      corpo='<div class="card">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Curva S da linha de balanço</div>'+
+        '<div class="note" style="margin-bottom:6px">Avanço acumulado do serviço no tempo, medido pelas durações das etapas em cada lote (100% = todas as etapas concluídas em todos os lotes).</div>'+
+        '<div class="tc-wrap" style="padding:6px">'+lbCurvaSVG()+'</div>'+
+      '</div>';
+    }
+    return head('Linha de Balanço','Detalhamento do Tempo-Caminho por serviço.',
+        '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
+      '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+abas+'</div>'+
+      cabec+corpo;
   };
 
   function wireLinhaBalanco(){
@@ -7198,8 +7312,57 @@
     });
     var save=document.getElementById('lbSave');
     if(save)save.addEventListener('click',lbSalvar);
-    wireCronoTabs();
+    root.querySelectorAll('[data-lbtab]').forEach(function(b){
+      b.addEventListener('click',function(){ LB_TAB=b.getAttribute('data-lbtab'); MF_SEL=null; go('cr-lb'); });
+    });
+    root.querySelectorAll('[data-lbview]').forEach(function(b){
+      b.addEventListener('click',function(){ LB_VIEW=b.getAttribute('data-lbview'); go('cr-lb'); });
+    });
+    root.querySelectorAll('[data-lbgantt]').forEach(function(b){
+      b.addEventListener('click',function(){ LB_GANTT_FONTE=b.getAttribute('data-lbgantt'); go('cr-lb'); });
+    });
+    root.querySelectorAll('[data-lbfolga]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var e=cfg.etapas[+inp.getAttribute('data-lbfolga')]; if(!e)return;
+        e.offset=Math.max(0,parseFloat(inp.value)||0); lbMarkDirty(); go('cr-lb');
+      });
+    });
+    root.querySelectorAll('[data-lbfolgazero]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var e=cfg.etapas[+b.getAttribute('data-lbfolgazero')]; if(!e)return;
+        e.offset=0; lbMarkDirty(); go('cr-lb');
+      });
+    });
+    wireLbDrag(cfg);
     wireMacroFluxo(cfg);
+  }
+  /** Ajuste manual: arrastar uma barra da etapa pra frente/trás vira folga manual (em dias). */
+  function wireLbDrag(cfg){
+    var svg=document.getElementById('lbSvgDrag'); if(!svg)return;
+    var totDias=+svg.getAttribute('data-totdias')||1, iwVb=+svg.getAttribute('data-iw')||1, wVb=+svg.getAttribute('data-w')||1;
+    svg.querySelectorAll('[data-lbet-drag]').forEach(function(rect){
+      rect.addEventListener('pointerdown',function(ev){
+        var id=rect.getAttribute('data-lbet-drag');
+        var e=cfg.etapas.filter(function(x){return x.id===id;})[0]; if(!e)return;
+        ev.preventDefault();
+        var r=svg.getBoundingClientRect();
+        var diasPorPx=(totDias/iwVb)*(wVb/(r.width||1)); // px da tela -> dias
+        var x0=ev.clientX, base=Math.max(0,+e.offset||0), atual=base, moveu=false;
+        try{ rect.setPointerCapture&&rect.setPointerCapture(ev.pointerId); }catch(err){}
+        function mv(e2){
+          var dd=(e2.clientX-x0)*diasPorPx;
+          if(Math.abs(dd)>0.25)moveu=true;
+          atual=Math.max(0,Math.round((base+dd)*2)/2);
+          rect.setAttribute('transform','translate('+((atual-base)/diasPorPx).toFixed(1)+',0)');
+        }
+        function up(){
+          rect.removeEventListener('pointermove',mv); rect.removeEventListener('pointerup',up); rect.removeEventListener('pointercancel',up);
+          if(!moveu)return;
+          e.offset=atual; lbMarkDirty(); go('cr-lb');
+        }
+        rect.addEventListener('pointermove',mv); rect.addEventListener('pointerup',up); rect.addEventListener('pointercancel',up);
+      });
+    });
   }
   function wireMacroFluxo(cfg){
     var wrap=document.getElementById('mfWrap'); if(!wrap)return;
@@ -7240,7 +7403,7 @@
         }
         ev.preventDefault();
         var k=escala(), x0=ev.clientX, y0=ev.clientY, nx=no.x, ny=no.y, moveu=false;
-        g.setPointerCapture&&g.setPointerCapture(ev.pointerId);
+        try{ g.setPointerCapture&&g.setPointerCapture(ev.pointerId); }catch(err){}
         function mv(e2){
           var dx=(e2.clientX-x0)*k, dy=(e2.clientY-y0)*k;
           if(Math.abs(dx)>2||Math.abs(dy)>2)moveu=true;
