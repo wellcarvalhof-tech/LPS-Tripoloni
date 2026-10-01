@@ -7016,6 +7016,28 @@
     return {lotes:lotes,itens:itens,maxDia:maxDia,c:c};
   }
   function lbDiaParaSemana(dia,inicioSem){ return (inicioSem||1)+Math.floor(dia/DIAS_SEM); }
+  /** Dia do estudo (0 = início do serviço) -> data real. Conta só dias úteis (seg–sex) e usa as
+   *  semanas do projeto, então pula as semanas paradas do calendário da obra. */
+  function lbDiaParaData(dia,inicioSem){
+    var d=Math.max(0,Math.round(dia));
+    var seg=mondayOf((inicioSem||1)+Math.floor(d/DIAS_SEM));
+    var dt=new Date(seg.getTime()); dt.setDate(dt.getDate()+(d%DIAS_SEM));
+    return dt;
+  }
+  function lbDataIso(dia,inicioSem){ return lbDiaParaData(dia,inicioSem).toISOString().slice(0,10); }
+  /** Data real -> dia do estudo. Fim de semana entra como a segunda seguinte. */
+  function lbDataParaDia(iso,inicioSem){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(iso||''))return null;
+    var alvo=new Date(iso+'T00:00:00');
+    var segAlvo=new Date(mondayOfIso(iso)+'T00:00:00');
+    var diaSem=Math.max(0,Math.min(DIAS_SEM-1,Math.round((alvo-segAlvo)/864e5)));
+    for(var w=0;w<520;w++){
+      var seg=mondayOf((inicioSem||1)+w);
+      if(seg.toISOString().slice(0,10)===segAlvo.toISOString().slice(0,10))return w*DIAS_SEM+diaSem;
+      if(seg>segAlvo)return w*DIAS_SEM; // caiu numa semana parada: joga pra próxima semana útil
+    }
+    return null;
+  }
   function lbSVG(arrastavel){
     var calc=lbCalc(); if(!calc)return '';
     var c=calc.c;
@@ -7081,7 +7103,7 @@
         var x1=xx(x2.ini), larg=Math.max(2,xx(x2.fim)-x1), yTop=yy(x2.j,x2.faixa)-alt/2;
         var aj=lbAjuste(e,x2.lote);
         s+='<rect'+(arrastavel?' class="lb-drag" data-lbet-drag="'+e.id+'" data-lblote-drag="'+escAttr(x2.lote)+'"':'')+' x="'+x1.toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+larg.toFixed(1)+'" height="'+alt.toFixed(1)+'" rx="'+(LB_VIEW==='quadros'?3:2)+'" fill="'+cor+'" opacity="'+(LB_VIEW==='quadros'?'.95':'.9')+'" stroke="'+cor+'" stroke-width="1">'+
-          '<title>'+escAttr(e.nome)+' ('+escAttr(sig)+')\n'+escAttr(lbNomeLote(x2.lote))+'\ndia '+Math.round(x2.ini)+' → '+Math.round(x2.fim)+' ('+x2.dur+' dias)'+(aj&&aj.off>0?'\natraso manual: +'+aj.off+'d':'')+(aj&&aj.dur>0?'\nduração própria neste lote':'')+'\nS'+isoWeek(mondayOf(lbDiaParaSemana(x2.ini,c.inicio)))+(arrastavel?'\n\nArraste o corpo pra mover só deste lote em diante · arraste a borda direita pra mudar a duração':'')+'</title></rect>';
+          '<title>'+escAttr(e.nome)+' ('+escAttr(sig)+')\n'+escAttr(lbNomeLote(x2.lote))+'\n'+fmtDate(lbDiaParaData(x2.ini,c.inicio))+' a '+fmtDate(lbDiaParaData(x2.fim-1,c.inicio))+' ('+x2.dur+' dias)'+(aj&&aj.off>0?'\natraso manual: +'+aj.off+'d':'')+(aj&&aj.dur>0?'\nduração própria neste lote':'')+(arrastavel?'\n\nClique pra editar data e duração · arraste pra mover · borda direita muda a duração':'')+'</title></rect>';
         if(larg>=13&&alt>=9)s+='<text x="'+(x1+larg/2).toFixed(1)+'" y="'+(yTop+alt/2+3).toFixed(1)+'" text-anchor="middle" style="font-size:'+Math.min(9.5,Math.max(7,alt*0.5)).toFixed(1)+'px;font-weight:700;fill:'+pickFont(cor)+';pointer-events:none">'+escAttr(sig)+'</text>';
         if(arrastavel&&larg>=8)s+='<rect class="lb-res" data-lbet-res="'+e.id+'" data-lblote-res="'+escAttr(x2.lote)+'" x="'+(x1+larg-4).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="5" height="'+alt.toFixed(1)+'" fill="#fff" opacity=".35"><title>Arraste pra mudar a duração nesta etapa/lote</title></rect>';
       });
@@ -7320,7 +7342,7 @@
       '<div class="card" style="margin-bottom:14px">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">'+
           '<div><div class="eyebrow" style="margin:0">Ajuste manual — arraste as etapas</div>'+
-          '<div class="note">Arraste o <b>corpo</b> da barra pra mover aquela etapa <b>naquele lote em diante</b> (os lotes anteriores não voltam — dá pra abrir descontinuidade de propósito). Arraste a <b>borda direita</b> pra aumentar ou diminuir a duração só daquela etapa naquele lote. Pra atrasar a etapa inteira, use a tabela de folga abaixo.</div></div>'+
+          '<div class="note"><b>Clique</b> numa barra pra abrir a caixa com data de início e duração. <b>Arraste o corpo</b> pra mover aquela etapa <b>naquele lote em diante</b> (os anteriores não voltam — dá pra abrir descontinuidade de propósito). <b>Arraste a borda direita</b> pra mudar a duração só ali. Pra atrasar a etapa inteira, use a tabela de folga abaixo.</div></div>'+
           '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Ver como:</span>'+vistas+'</div>'+
         '</div>'+
         '<div class="tc-wrap" style="padding:6px;margin-top:6px">'+lbSVG(true)+'</div>'+
@@ -7454,6 +7476,52 @@
     wireLbDrag(cfg);
     wireMacroFluxo(cfg);
   }
+  /** Caixa de edição de uma etapa num lote: data de início e duração em dias. */
+  function lbAbrirEditor(cfg,eid,loteId){
+    var e=cfg.etapas.filter(function(x){return x.id===eid;})[0]; if(!e)return;
+    var calc=lbCalc(), it=null;
+    (calc?calc.itens:[]).forEach(function(x){ if(x.eid===eid&&x.lote===loteId)it=x; });
+    if(!it)return;
+    var maisCedo=lbDataIso(it.base,cfg.inicio), atual=lbDataIso(it.ini,cfg.inicio);
+    var aj=lbAjuste(e,loteId)||{};
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:460px">'+
+      '<div class="eyebrow" style="margin-bottom:2px"><span class="swatch" style="background:'+(e.cor||'#888')+'"></span>'+escAttr(e.nome)+' — '+escAttr(lbNomeLote(loteId))+'</div>'+
+      '<div class="note" style="margin-bottom:10px">Mais cedo possível: <b>'+fmtDate(lbDiaParaData(it.base,cfg.inicio))+'</b> (pelas predecessoras e pela equipe vindo do lote anterior). Pôr uma data depois dessa vira atraso manual deste lote em diante; antes dela não dá.</div>'+
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">'+
+        '<label style="font-size:12.5px">Início<br><input class="einp" type="date" id="lbEdData" value="'+atual+'" min="'+maisCedo+'" style="width:160px"></label>'+
+        '<label style="font-size:12.5px">Duração (dias)<br><input class="einp" type="number" min="0.5" step="0.5" id="lbEdDur" value="'+it.dur+'" style="width:110px"></label>'+
+      '</div>'+
+      '<div class="note" style="margin-top:8px" id="lbEdInfo"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:space-between;margin-top:14px;flex-wrap:wrap">'+
+        '<button class="btn" id="lbEdAuto"'+((aj.off>0||aj.dur>0)?'':' disabled')+'>↺ Voltar ao automático</button>'+
+        '<span style="display:flex;gap:8px"><button class="btn" id="lbEdCancel">Cancelar</button><button class="btn primary" id="lbEdOk">Aplicar</button></span>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    var inpD=back.querySelector('#lbEdData'), inpDur=back.querySelector('#lbEdDur'), info=back.querySelector('#lbEdInfo');
+    function atualiza(){
+      var dia=lbDataParaDia(inpD.value,cfg.inicio), dur=Math.max(0.5,parseFloat(inpDur.value)||1);
+      if(dia==null){ info.textContent='Data fora do cronograma.'; return; }
+      var ini=Math.max(it.base,dia), fim=ini+dur;
+      info.innerHTML='Fica de <b>'+fmtDate(lbDiaParaData(ini,cfg.inicio))+'</b> a <b>'+fmtDate(lbDiaParaData(fim-1,cfg.inicio))+'</b>'+
+        (ini>it.base?(' · atraso manual de <b>'+(Math.round((ini-it.base)*2)/2)+' dia(s)</b>'):' · no mais cedo possível')+'.';
+    }
+    inpD.addEventListener('change',atualiza); inpDur.addEventListener('input',atualiza); atualiza();
+    function close(){ back.remove(); }
+    back.addEventListener('pointerdown',function(ev){ if(ev.target===back)close(); });
+    back.querySelector('#lbEdCancel').addEventListener('click',close);
+    back.querySelector('#lbEdAuto').addEventListener('click',function(){
+      if(e.aj)delete e.aj[loteId];
+      close(); lbMarkDirty(); go('cr-lb');
+    });
+    back.querySelector('#lbEdOk').addEventListener('click',function(){
+      var dia=lbDataParaDia(inpD.value,cfg.inicio), dur=Math.max(0.5,parseFloat(inpDur.value)||1);
+      if(dia==null){ alert('Data inválida.'); return; }
+      var off=Math.max(0,Math.round((dia-it.base)*2)/2);
+      lbSetAjuste(e,loteId,{off:off,dur:(dur===(+e.dias||1))?0:dur});
+      close(); lbMarkDirty(); go('cr-lb');
+    });
+  }
   /** Ajuste manual no gráfico: arrastar o corpo da barra atrasa a etapa NAQUELE lote em diante;
    *  arrastar a borda direita muda a duração da etapa só naquele lote. */
   function wireLbDrag(cfg){
@@ -7462,7 +7530,7 @@
     var calc=lbCalc(), itens=(calc&&calc.itens)||[];
     function item(eid,lote){ for(var i=0;i<itens.length;i++){ if(itens[i].eid===eid&&itens[i].lote===lote)return itens[i]; } return null; }
     function diasPorPx(){ var r=svg.getBoundingClientRect(); return (totDias/iwVb)*(wVb/(r.width||1)); }
-    function arrasta(el,onFim){
+    function arrasta(el,onFim,onClique){
       el.addEventListener('pointerdown',function(ev){
         ev.preventDefault(); ev.stopPropagation();
         var k=diasPorPx(), x0=ev.clientX, dd=0, moveu=false;
@@ -7475,7 +7543,7 @@
         function up(){
           el.removeEventListener('pointermove',mv); el.removeEventListener('pointerup',up); el.removeEventListener('pointercancel',up);
           el.removeAttribute('transform');
-          if(moveu)onFim(dd);
+          if(moveu)onFim(dd); else if(onClique)onClique();
         }
         el.addEventListener('pointermove',mv); el.addEventListener('pointerup',up); el.addEventListener('pointercancel',up);
       });
@@ -7487,7 +7555,7 @@
         var it=item(eid,lote); if(!it)return;
         var novo=Math.max(0,Math.round(((it.ini+dd)-it.base)*2)/2); // nunca antes do mais cedo possível
         lbSetAjuste(e,lote,{off:novo}); lbMarkDirty(); go('cr-lb');
-      });
+      },function(){ lbAbrirEditor(cfg,eid,lote); });
     });
     svg.querySelectorAll('[data-lbet-res]').forEach(function(h){
       var eid=h.getAttribute('data-lbet-res'), lote=h.getAttribute('data-lblote-res');
