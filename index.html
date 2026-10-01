@@ -7166,19 +7166,20 @@
     var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
     // Na tela: colunas tarefa | início | término | duração. Na impressão (compacto): só o rótulo,
     // proporção de folha retrato e altura por linha calculada pra tudo caber numa página só.
-    var colT=compacto?128:330, colD=compacto?0:78;
-    var labelW=compacto?(colT+10):(colT+colD*2+56);
-    var W=compacto?760:1320, pl=labelW, pr=compacto?10:16, pt=compacto?24:38, pb=compacto?34:40;
+    var colT=compacto?150:330, colD=compacto?46:78;
+    var labelW=compacto?(colT+colD*2+36):(colT+colD*2+56);
+    var W=compacto?900:1320, pl=labelW, pr=compacto?10:16, pt=compacto?26:38, pb=compacto?34:40;
     var rowH=compacto?Math.max(6,Math.min(16,Math.floor(980/Math.max(1,linhas.length))))
                      :Math.max(14,Math.min(26,Math.floor(620/Math.max(1,linhas.length))));
     var ih=linhas.length*rowH, H=pt+ih+pb, iw=W-pl-pr;
     var xIni=colT+8, xFim=xIni+colD, xDur=xFim+colD;
     var xx=function(d){ return pl+iw*d/Math.max(1,totDias); };
     var s='';
-    s+='<text class="axm" x="8" y="'+(pt-12)+'" style="font-weight:700;font-size:'+(compacto?8:10)+'px">Tarefa</text>'+
-      (compacto?'':'<text class="axm" x="'+xIni+'" y="'+(pt-14)+'" style="font-weight:700">Início</text>'+
-      '<text class="axm" x="'+xFim+'" y="'+(pt-14)+'" style="font-weight:700">Término</text>'+
-      '<text class="axm" x="'+xDur+'" y="'+(pt-14)+'" style="font-weight:700">Dias</text>')+
+    var fsCab=compacto?7.5:10;
+    s+='<text class="axm" x="8" y="'+(pt-12)+'" style="font-weight:700;font-size:'+fsCab+'px">Tarefa</text>'+
+      '<text class="axm" x="'+xIni+'" y="'+(pt-12)+'" style="font-weight:700;font-size:'+fsCab+'px">Início</text>'+
+      '<text class="axm" x="'+xFim+'" y="'+(pt-12)+'" style="font-weight:700;font-size:'+fsCab+'px">Término</text>'+
+      '<text class="axm" x="'+(xDur+(compacto?10:16))+'" y="'+(pt-12)+'" text-anchor="end" style="font-weight:700;font-size:'+fsCab+'px">Dias</text>'+
       '<line x1="0" y1="'+(pt-8)+'" x2="'+(W-pr)+'" y2="'+(pt-8)+'" stroke="var(--line-2)"/>'+
       '<line x1="'+(pl-8)+'" y1="'+(pt-8)+'" x2="'+(pl-8)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>';
     var semanas=Math.ceil(totDias/DIAS_SEM), passo=Math.max(1,Math.ceil(semanas/26));
@@ -7194,9 +7195,12 @@
       if(loteAnterior!==null&&loteAnterior!==L.lote)s+='<line x1="0" y1="'+y+'" x2="'+(W-pr)+'" y2="'+y+'" stroke="var(--line-2)"/>';
       loteAnterior=L.lote;
       var fs=compacto?Math.max(4.6,Math.min(8,rowH*0.62)):(rowH<17?8:9.5);
-      if(!compacto)s+='<text class="axm" x="'+xIni+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.ini,c.inicio))+'</text>'+
-        '<text class="axm" x="'+xFim+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.fim-1,c.inicio))+'</text>'+
-        '<text class="axm" x="'+(xDur+16)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+fs+'px">'+L.it.dur+'</text>';
+      var dIni=lbDiaParaData(L.it.ini,c.inicio), dFim=lbDiaParaData(L.it.fim-1,c.inicio);
+      var txtIni=compacto?fmtDate(dIni).slice(0,6)+fmtDate(dIni).slice(8):fmtDate(dIni);
+      var txtFim=compacto?fmtDate(dFim).slice(0,6)+fmtDate(dFim).slice(8):fmtDate(dFim);
+      s+='<text class="axm" x="'+xIni+'" y="'+(y+rowH/2+fs*0.36)+'" style="font-size:'+fs+'px">'+txtIni+'</text>'+
+        '<text class="axm" x="'+xFim+'" y="'+(y+rowH/2+fs*0.36)+'" style="font-size:'+fs+'px">'+txtFim+'</text>'+
+        '<text class="axm" x="'+(xDur+(compacto?10:16))+'" y="'+(y+rowH/2+fs*0.36)+'" text-anchor="end" style="font-size:'+fs+'px">'+L.it.dur+'</text>';
       var mostraLote=!compacto||i===0||linhas[i-1].lote!==L.lote;
       s+='<text class="axm" x="6" y="'+(y+rowH/2+fs*0.36)+'" style="font-size:'+fs+'px">'+
         (mostraLote?'<tspan style="fill:var(--muted);font-weight:700">'+escAttr(lbNomeLote(L.lote))+' · </tspan>':(compacto?'<tspan> </tspan>':'<tspan style="fill:var(--muted)">'+escAttr(lbNomeLote(L.lote))+' · </tspan>'))+
@@ -7228,6 +7232,29 @@
       });
     });
     return '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Lote / etapa</th><th>Início</th><th>Término</th><th class="r">Dias</th><th>Equipe</th></tr></thead><tbody>'+linhas+'</tbody></table></div>';
+  }
+  /** Converte um SVG do app em PNG (data URL) pra embutir em planilha: resolve as variáveis de
+   *  cor do tema, fixa a fonte e põe fundo branco. Resolve com null se o navegador recusar. */
+  function lbSvgParaPng(svgStr,larguraPx){
+    return new Promise(function(res){
+      try{
+        var m=svgStr.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/); if(!m){res(null);return;}
+        var vw=+m[1], vh=+m[2], W=Math.round(larguraPx||900), H=Math.round(W*vh/vw);
+        var limpo=svgStr.replace(/var\((--[\w-]+)\)/g,function(_,n){ return cssHex(n)||'#888888'; });
+        limpo=limpo.replace(/<svg[^>]*>/,function(tag){
+          return tag.replace('<svg','<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'"')+
+            '<style>text{font-family:Arial,Helvetica,sans-serif}.axm{fill:#555}</style><rect width="100%" height="100%" fill="#ffffff"/>';
+        });
+        var img=new Image();
+        img.onload=function(){
+          var cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+          var ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H); ctx.drawImage(img,0,0,W,H);
+          try{ res({url:cv.toDataURL('image/png'),w:W,h:H}); }catch(e){ res(null); }
+        };
+        img.onerror=function(){ res(null); };
+        img.src='data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(limpo)));
+      }catch(e){ res(null); }
+    });
   }
   /** Exporta o cronograma da linha de balanço em Excel, agrupado por lote e formatado
    *  (cabeçalho fixo, linha-resumo de cada lote em negrito, cor da etapa na coluna da sigla). */
@@ -7281,6 +7308,17 @@
       if(ci>=3)cl.alignment={horizontal:ci===5?'right':'center'};
     }); });
     ws.autoFilter={from:{row:3,column:1},to:{row:3,column:6}};
+    // Aba com o gráfico (o mesmo Gantt da impressão, virado em imagem).
+    try{
+      var png=await lbSvgParaPng(lbGanttSVG(true),900);
+      if(png){
+        var wsG=wb.addWorksheet('Gantt',{pageSetup:{orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:1}});
+        wsG.getCell('A1').value=obra+' — Linha de Balanço · '+((sv&&sv.n)||'');
+        wsG.getCell('A1').font={bold:true,size:13};
+        var imgId=wb.addImage({base64:png.url.split(',')[1],extension:'png'});
+        wsG.addImage(imgId,{tl:{col:0,row:2},ext:{width:png.w,height:png.h}});
+      }
+    }catch(e){ /* sem gráfico, a planilha sai com a tabela mesmo */ }
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=arquivo; a.click();
