@@ -6901,11 +6901,13 @@
    *  Mexer num lote só empurra dali pra frente — os lotes anteriores ficam como estavam, o que
    *  permite descontinuidade (a equipe espera entre um lote e outro). */
   function lbAjuste(e,loteId){ return (e&&e.aj&&e.aj[loteId])||null; }
+  /** A etapa acontece neste lote? (dá pra excluir uma etapa de um lote específico) */
+  function lbOcorre(e,loteId){ var a=lbAjuste(e,loteId); return !(a&&a.pula); }
   function lbSetAjuste(e,loteId,patch){
     if(!e.aj)e.aj={};
     var a=e.aj[loteId]||{};
     Object.keys(patch).forEach(function(k){ a[k]=patch[k]; });
-    if(!(a.off>0)&&!(a.dur>0))delete e.aj[loteId]; else e.aj[loteId]=a;
+    if(!(a.off>0)&&!(a.dur>0)&&!a.pula)delete e.aj[loteId]; else e.aj[loteId]=a;
   }
   function lbSvcId(si){ var s=SERV[si]; return (s&&s.id)||('s'+si); }
   function lbSvcIdx(id){ for(var i=0;i<SERV.length;i++){ if(lbSvcId(i)===id)return i; } return -1; }
@@ -6995,6 +6997,7 @@
       var fimNoLote={};
       ordem.forEach(function(eid){
         var e=porId[eid]; if(!e)return;
+        if(!lbOcorre(e,lid))return; // etapa não acontece neste lote
         var ini=0;
         (preds[eid]||[]).forEach(function(p){
           var f=fimNoLote[p.de]; if(f!=null)ini=Math.max(ini,f+(+p.lat||0));
@@ -7243,6 +7246,17 @@
           (c.setas.length?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Ligação</th><th>Latência</th><th></th></tr></thead><tbody>'+ligRows+'</tbody></table></div>':'<div class="note">Nenhuma ligação ainda — use o modo <b>Ligar</b> no macro-fluxo.</div>')+
         '</div>'+
       '</div>'+
+      (c.etapas.length&&c.lotes.length?'<div class="card" style="margin-bottom:14px">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Etapas por lote</div>'+
+        '<div class="note" style="margin-bottom:8px">Desmarque onde a etapa não acontece (ex.: um lote sem bloco de fundação). A etapa some do gráfico naquele lote, a equipe segue direto pro próximo e as etapas seguintes não esperam por ela.</div>'+
+        '<div class="tbl-wrap"><table class="edtbl crew-tbl"><thead><tr><th>Etapa</th>'+
+          c.lotes.map(function(lid){return '<th class="r" style="font-size:10px">'+escAttr(lbNomeLote(lid))+'</th>';}).join('')+'</tr></thead><tbody>'+
+          c.etapas.map(function(e,ei){
+            return '<tr><td><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</td>'+
+              c.lotes.map(function(lid){
+                return '<td class="r"><input type="checkbox" data-lbocor="'+ei+'" data-lbocorlote="'+escAttr(lid)+'"'+(lbOcorre(e,lid)?' checked':'')+'></td>';
+              }).join('')+'</tr>';
+          }).join('')+'</tbody></table></div></div>':'')+
       '<div class="grid g2" style="gap:14px">'+
         '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Lotes onde o serviço ocorre ('+c.lotes.length+' de '+ids.length+')</div>'+
           '<div class="note" style="margin-bottom:8px">Marque os lotes. Por padrão vêm os que têm quantidade deste serviço no cadastro.</div>'+
@@ -7263,9 +7277,9 @@
       c.etapas.forEach(function(e,ei){
         Object.keys(e.aj||{}).forEach(function(lid){
           var a=e.aj[lid]; if(!a)return;
-          ajRows+='<tr><td><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(lbNomeLote(lid))+'</td>'+
-            '<td><input class="einp" type="number" min="0" step="0.5" data-lbajoff="'+ei+'" data-lbajlote="'+escAttr(lid)+'" value="'+(+a.off||0)+'" style="width:66px"> <span class="note">dias</span></td>'+
-            '<td><input class="einp" type="number" min="0" step="0.5" data-lbajdur="'+ei+'" data-lbajlote="'+escAttr(lid)+'" value="'+(+a.dur||0)+'" style="width:66px" placeholder="'+(+e.dias||1)+'"> <span class="note">dias</span></td>'+
+          ajRows+='<tr><td><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(lbNomeLote(lid))+(a.pula?' <span class="pill warn">não ocorre</span>':'')+'</td>'+
+            '<td>'+(a.pula?'<span class="note">—</span>':'<input class="einp" type="number" min="0" step="0.5" data-lbajoff="'+ei+'" data-lbajlote="'+escAttr(lid)+'" value="'+(+a.off||0)+'" style="width:66px"> <span class="note">dias</span>')+'</td>'+
+            '<td>'+(a.pula?'<span class="note">—</span>':'<input class="einp" type="number" min="0" step="0.5" data-lbajdur="'+ei+'" data-lbajlote="'+escAttr(lid)+'" value="'+(+a.dur||0)+'" style="width:66px" placeholder="'+(+e.dias||1)+'"> <span class="note">dias</span>')+'</td>'+
             '<td><button class="iconbtn" data-lbajdel="'+ei+'" data-lbajlote="'+escAttr(lid)+'" title="Voltar ao automático">↺</button></td></tr>';
         });
       });
@@ -7387,6 +7401,15 @@
         var e=cfg.etapas[+inp.getAttribute(off?'data-lbajoff':'data-lbajdur')]; if(!e)return;
         var lid=inp.getAttribute('data-lbajlote'), v=Math.max(0,parseFloat(inp.value)||0);
         lbSetAjuste(e,lid,off?{off:v}:{dur:v}); lbMarkDirty(); go('cr-lb');
+      });
+    });
+    root.querySelectorAll('[data-lbocor]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var e=cfg.etapas[+cb.getAttribute('data-lbocor')]; if(!e)return;
+        var lid=cb.getAttribute('data-lbocorlote');
+        if(cb.checked){ if(e.aj&&e.aj[lid]){ delete e.aj[lid].pula; lbSetAjuste(e,lid,{}); } }
+        else lbSetAjuste(e,lid,{pula:true});
+        lbMarkDirty(); go('cr-lb');
       });
     });
     root.querySelectorAll('[data-lbajdel]').forEach(function(b){
