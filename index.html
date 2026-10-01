@@ -662,6 +662,16 @@
     if(r.error)throw r.error;
     return r.data||null;
   }
+  /** Histórico de alterações da obra (migração 23). filtros: {tabela, email, limite} */
+  async function sbListAuditoria(obraId,filtros){
+    filtros=filtros||{};
+    var q=SB.from('auditoria').select('id,email,tabela,registro_id,acao,antes,depois,em').eq('obra_id',obraId).order('em',{ascending:false}).limit(filtros.limite||200);
+    if(filtros.tabela)q=q.eq('tabela',filtros.tabela);
+    if(filtros.email)q=q.eq('email',filtros.email);
+    var r=await q;
+    if(r.error)throw r.error;
+    return r.data||[];
+  }
   async function sbListMembros(obraId){
     var r=await SB.from('obra_membros').select('id,user_id,papel,permissoes,email,created_at').eq('obra_id',obraId).order('created_at',{ascending:true});
     if(r.error)throw r.error; return r.data||[];
@@ -899,6 +909,7 @@
     REC_DIRTY={}; REALIZADO_DIRTY={}; APOIO_DIRTY={}; APOIO_SELECTED={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     LB=null; LB_DIRTY=false; // estudo de linha de balanço desta obra (recarrega do banco)
+    LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
 
@@ -956,7 +967,7 @@
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
-      ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo'],['cad-acessos','Acessos']]},
+      ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo'],['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cad-equipes','Equipes'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários']]},
@@ -966,7 +977,7 @@
       ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]}
   ];
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
-    'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],
+    'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
@@ -991,12 +1002,12 @@
   function isReadOnly(){ return !IS_APP_ADMIN&&MY_ROLE.papel==='visualizador'; }
   function canViewTab(view){
     if(view==='torre-rel')view='torre'; // relatório é parte da Torre de Controle
-    if(view==='cad-acessos')return isPlanejador();
+    if(view==='cad-acessos'||view==='cad-log')return isPlanejador();
     if(isPlanejador())return true;
     var p=Array.isArray(MY_ROLE.permissoes)?MY_ROLE.permissoes:[];
     return p.indexOf('*')>=0||p.indexOf(view)>=0;
   }
-  function allTabs(){ var out=[]; NAV.forEach(function(g){ if(g.solo)out.push([g.id,g.label]); else g.items.forEach(function(it){ if(it[0]!=='cad-acessos')out.push(it); }); }); return out; }
+  function allTabs(){ var out=[]; NAV.forEach(function(g){ if(g.solo)out.push([g.id,g.label]); else g.items.forEach(function(it){ if(it[0]!=='cad-acessos'&&it[0]!=='cad-log')out.push(it); }); }); return out; }
   function firstAllowedTab(){ var t=allTabs().filter(function(it){return canViewTab(it[0]);})[0]; return t?t[0]:'torre'; }
   function refreshRoleBadge(){
     var b=document.getElementById('roleBadge'); if(!b)return;
@@ -4218,6 +4229,7 @@
       if(dpImp)dpImp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importDpCeqWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
     }
     if(view==='cad-acessos'){ renderAcessos(); }
+    if(view==='cad-log'){ wireLog(); if(LOG_LISTA==null)renderLog(); }
     if(view==='cad-obra'){
       var sb=document.getElementById('saveObraBtn');
       if(sb)sb.addEventListener('click',async function(){
@@ -7512,6 +7524,92 @@
     return '<svg id="mfSvg" viewBox="0 0 '+MF_W+' '+alturaNec+'" style="width:100%;height:auto;min-width:900px">'+s+'</svg>';
   }
 
+  /* ================= Histórico de alterações =================
+   * Lê a tabela de auditoria (preenchida por trigger no banco) e mostra, por alteração, quem
+   * fez, quando, em que tabela e QUAIS CAMPOS mudaram (valor antes → depois). Só planejador
+   * da obra e o desenvolvedor enxergam. */
+  var LOG_TABELA='', LOG_EMAIL='', LOG_LIMITE=200, LOG_LISTA=null, LOG_ERRO='';
+  var LOG_NOMES={obras:'Obra',lotes:'Lotes',servicos:'Serviços',lote_servico:'Quantidades (lote × serviço)',
+    equipes:'Equipes',servico_precedencias:'Precedências',cenarios:'Cenários',recursos:'Recursos do histograma',
+    apontamento_recursos:'Realizado (histograma)',apoio_admin:'Apoio Administrativo',apoio_alocacao:'Alocação do apoio',
+    producao_diaria:'Produção diária',medicoes:'Medições',restricoes:'Restrições',planos_semanais:'Programação semanal',
+    compromissos:'Compromissos',obra_membros:'Acessos',lote_estacas:'Estacas',estaca_quantidades:'Quantidades por estaca',
+    estaca_apontamentos:'Apontamentos por estaca'};
+  var LOG_IGNORA={id:1,obra_id:1,created_at:1,updated_at:1,created_by:1,ordem:1};
+  function logNomeTabela(t){ return LOG_NOMES[t]||t; }
+  function logResumo(l){
+    var a=l.antes||{}, d=l.depois||{};
+    if(l.acao==='insert')return '<span class="pill">criado</span> '+escAttr(logTitulo(d)||'');
+    if(l.acao==='delete')return '<span class="pill warn">excluído</span> '+escAttr(logTitulo(a)||'');
+    var mud=[];
+    Object.keys(d).forEach(function(k){
+      if(LOG_IGNORA[k])return;
+      var va=a[k], vd=d[k];
+      var sa=(va&&typeof va==='object')?JSON.stringify(va):String(va==null?'':va);
+      var sd=(vd&&typeof vd==='object')?JSON.stringify(vd):String(vd==null?'':vd);
+      if(sa===sd)return;
+      if(sa.length>60)sa=sa.slice(0,60)+'…';
+      if(sd.length>60)sd=sd.slice(0,60)+'…';
+      mud.push('<b>'+escAttr(k)+'</b>: <span class="note">'+escAttr(sa||'—')+'</span> → '+escAttr(sd||'—'));
+    });
+    if(!mud.length)return '<span class="note">sem mudança de valor</span>';
+    return (logTitulo(d)?('<b>'+escAttr(logTitulo(d))+'</b> · '):'')+mud.slice(0,4).join(' · ')+(mud.length>4?' <span class="note">(+'+(mud.length-4)+')</span>':'');
+  }
+  function logTitulo(o){ return (o&&(o.nome||o.titulo||o.descricao||o.email))||''; }
+  function logQuando(iso){
+    var d=new Date(iso), hoje=new Date();
+    var hh=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+    return (d.toDateString()===hoje.toDateString()?'hoje':fmtDate(d))+' '+hh;
+  }
+  VIEWS['cad-log']=function(){
+    if(!selectedObra)return head('Histórico de alterações','',null)+'<div class="card"><div class="note">Abra uma obra.</div></div>';
+    var corpo;
+    if(LOG_ERRO){
+      corpo='<div class="banner" style="border-color:var(--crit)">Não deu pra carregar o histórico: '+escAttr(LOG_ERRO)+
+        '<br>Se a mensagem fala em <b>auditoria</b>, rode a migração <b>sql/23_add_auditoria.sql</b> no Supabase.</div>';
+    } else if(LOG_LISTA==null){
+      corpo='<div class="note">Carregando…</div>';
+    } else if(!LOG_LISTA.length){
+      corpo='<div class="note">Nenhuma alteração registrada ainda. O histórico começa a partir do momento em que a migração foi rodada.</div>';
+    } else {
+      var linhas=LOG_LISTA.map(function(l){
+        return '<tr><td style="white-space:nowrap">'+logQuando(l.em)+'</td>'+
+          '<td>'+escAttr(l.email||'—')+'</td>'+
+          '<td>'+escAttr(logNomeTabela(l.tabela))+'</td>'+
+          '<td>'+logResumo(l)+'</td></tr>';
+      }).join('');
+      corpo='<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead><tr><th style="width:130px">Quando</th><th style="width:210px">Quem</th><th style="width:180px">Onde</th><th>O que mudou</th></tr></thead><tbody>'+linhas+'</tbody></table></div>';
+    }
+    var tabs={}; (LOG_LISTA||[]).forEach(function(l){ tabs[l.tabela]=1; });
+    var emails={}; (LOG_LISTA||[]).forEach(function(l){ if(l.email)emails[l.email]=1; });
+    var selTab='<select class="esel" id="logTabela"><option value="">Todas as telas</option>'+
+      Object.keys(tabs).sort().map(function(t){return '<option value="'+escAttr(t)+'"'+(LOG_TABELA===t?' selected':'')+'>'+escAttr(logNomeTabela(t))+'</option>';}).join('')+'</select>';
+    var selEmail='<select class="esel" id="logEmail"><option value="">Todo mundo</option>'+
+      Object.keys(emails).sort().map(function(e){return '<option value="'+escAttr(e)+'"'+(LOG_EMAIL===e?' selected':'')+'>'+escAttr(e)+'</option>';}).join('')+'</select>';
+    var selLim='<select class="esel" id="logLimite">'+[100,200,500,1000].map(function(n){return '<option value="'+n+'"'+(LOG_LIMITE===n?' selected':'')+'>últimas '+n+'</option>';}).join('')+'</select>';
+    return head('Histórico de alterações','Quem alterou o quê e quando, nesta obra.',
+        '<button class="btn" id="logRecarregar">↻ Atualizar</button>')+
+      '<div class="card">'+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'+selTab+selEmail+selLim+
+          '<span class="note">Registrado direto no banco — pega alterações feitas por qualquer caminho.</span></div>'+
+        corpo+
+      '</div>';
+  };
+  async function renderLog(){
+    if(!selectedObra)return;
+    LOG_ERRO='';
+    try{ LOG_LISTA=await sbListAuditoria(selectedObra.id,{tabela:LOG_TABELA,email:LOG_EMAIL,limite:LOG_LIMITE}); }
+    catch(e){ LOG_ERRO=(e&&e.message)||String(e); LOG_LISTA=[]; }
+    if(current==='cad-log')go('cad-log');
+  }
+  function wireLog(){
+    var tab=document.getElementById('logTabela'), em=document.getElementById('logEmail'), lim=document.getElementById('logLimite');
+    if(tab)tab.addEventListener('change',function(){ LOG_TABELA=tab.value; renderLog(); });
+    if(em)em.addEventListener('change',function(){ LOG_EMAIL=em.value; renderLog(); });
+    if(lim)lim.addEventListener('change',function(){ LOG_LIMITE=+lim.value; renderLog(); });
+    var rec=document.getElementById('logRecarregar');
+    if(rec)rec.addEventListener('click',function(){ LOG_LISTA=null; go('cad-log'); renderLog(); });
+  }
   VIEWS['cr-lb']=function(){
     if(!LOTS.length||!SERV.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os serviços e os lotes da obra primeiro (Tempo Caminho → Serviços / Lotes & Quantidades).</div></div>';
     var root=lbRoot(), c=lbSvc(), si=lbSvcIdx(root.servicoSel), sv=SERV[si];
