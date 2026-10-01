@@ -6884,7 +6884,7 @@
   var LB_TAB='lb';        // aba interna: lb | ajuste | gantt | curva
   var LB_VIEW='linhas';   // desenho da linha de balanço: linhas (faixas) | quadros (blocos)
   var LB_GANTT_FONTE='lb';// gantt: lb | tc
-  var MF_W=1200, MF_H=460, MF_NW=170, MF_NH=56;
+  var MF_W=1200, MF_H=460, MF_NW=136, MF_NH=44; // caixas compactas: cabem mais etapas
 
   function lbLoteIds(){ return window._LOTIDS||[]; }
   function lbNomeLote(id){ var ids=lbLoteIds(), i=ids.indexOf(id); return i>=0?(LOTS[i]||id):id; }
@@ -6963,7 +6963,7 @@
     var c=lbSvc(); if(!c)return;
     var n=c.etapas.length;
     c.etapas.push({id:'e'+Date.now()+Math.floor(Math.random()*999),nome:nome||'Etapa '+(n+1),
-      cor:cor||LB_PAL[n%LB_PAL.length],dias:5,x:60+(n%5)*210,y:50+Math.floor(n/5)*110});
+      cor:cor||LB_PAL[n%LB_PAL.length],dias:5,x:40+(n%6)*180,y:40+Math.floor(n/6)*78});
     lbMarkDirty(); go('cr-lb');
   }
 
@@ -7024,16 +7024,33 @@
     var lotes=calc.lotes, n=lotes.length;
     var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
     var labelW=Math.min(170,Math.max(70,(function(){var m=0;lotes.forEach(function(id){m=Math.max(m,String(lbNomeLote(id)).length);});return m*6.4+16;})()));
-    var W=1060, pl=labelW, pr=18, pt=24, pb=46, rowH=Math.max(16,Math.min(34,Math.floor(540/n)));
-    var ih=n*rowH, H=pt+ih+pb, iw=W-pl-pr;
+    // Etapas que acontecem ao mesmo tempo no mesmo lote vão uma acima da outra (faixas), pra
+    // nenhuma ficar escondida atrás da outra. Cada lote fica com a altura que precisar.
+    var porLote={};
+    calc.itens.forEach(function(it){ (porLote[it.j]||(porLote[it.j]=[])).push(it); });
+    var faixas=[];
+    lotes.forEach(function(id,j){
+      var arr=(porLote[j]||[]).slice().sort(function(a,b){ return a.ini-b.ini||a.fim-b.fim; });
+      var fimDaFaixa=[];
+      arr.forEach(function(it){
+        var k=0; while(k<fimDaFaixa.length&&fimDaFaixa[k]>it.ini+1e-6)k++;
+        it.faixa=k; fimDaFaixa[k]=it.fim;
+      });
+      faixas[j]=Math.max(1,fimDaFaixa.length);
+    });
+    var faixaH=Math.max(13,Math.min(22,Math.floor(560/Math.max(1,faixas.reduce(function(a,b){return a+b;},0)))));
+    var alturaLote=faixas.map(function(f){ return f*faixaH+6; });
+    var ih=alturaLote.reduce(function(a,b){return a+b;},0);
+    var W=1060, pl=labelW, pr=18, pt=24, pb=46, H=pt+ih+pb, iw=W-pl-pr;
+    var topoLote=[]; // y do topo de cada lote (o 1º lote fica embaixo)
+    (function(){ var acc=pt+ih; for(var j=0;j<lotes.length;j++){ acc-=alturaLote[j]; topoLote[j]=acc; } })();
     var xx=function(dia){ return pl+iw*dia/Math.max(1,totDias); };
-    var yy=function(j){ return pt+ih-(j+0.5)*rowH; };
+    var yy=function(j,faixa){ return topoLote[j]+3+((faixa||0)+0.5)*faixaH; };
     var porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
     var s='';
     lotes.forEach(function(id,j){
-      var y=pt+ih-(j+1)*rowH;
-      if(j%2===0)s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
-      s+='<text class="axm" x="'+(pl-8)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+(rowH<20?8.5:10.5)+'px">'+escAttr(lbNomeLote(id))+'</text>';
+      if(j%2===0)s+='<rect x="'+pl+'" y="'+topoLote[j]+'" width="'+iw+'" height="'+alturaLote[j]+'" fill="var(--elev)" opacity=".5"/>';
+      s+='<text class="axm" x="'+(pl-8)+'" y="'+(topoLote[j]+alturaLote[j]/2+3)+'" text-anchor="end" style="font-size:'+(faixaH<17?8.5:10.5)+'px">'+escAttr(lbNomeLote(id))+'</text>';
     });
     // grade: uma linha por semana (5 dias), rótulo da semana do projeto
     var semanas=Math.ceil(totDias/DIAS_SEM);
@@ -7051,17 +7068,17 @@
       var e=porId[eid]; if(!e)return;
       var arr=porEtapa[eid].slice().sort(function(a,b){return a.j-b.j;});
       var cor=e.cor||'#888';
-      var pIni=arr.map(function(x2){ return xx(x2.ini).toFixed(1)+','+yy(x2.j).toFixed(1); });
-      var pFim=arr.map(function(x2){ return xx(x2.fim).toFixed(1)+','+yy(x2.j).toFixed(1); });
+      var pIni=arr.map(function(x2){ return xx(x2.ini).toFixed(1)+','+yy(x2.j,x2.faixa).toFixed(1); });
+      var pFim=arr.map(function(x2){ return xx(x2.fim).toFixed(1)+','+yy(x2.j,x2.faixa).toFixed(1); });
       if(arr.length>1&&LB_VIEW!=='quadros'){
         s+='<polygon points="'+pIni.join(' ')+' '+pFim.slice().reverse().join(' ')+'" fill="'+cor+'" opacity=".22"/>';
         s+='<polyline points="'+pIni.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.6"/>';
         s+='<polyline points="'+pFim.join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="1.6"/>';
       }
       if(LB_VIEW==='so-linhas')return; // só as linhas, sem os quadros
-      var alt=LB_VIEW==='quadros'?rowH*0.74:rowH*0.6, sig=lbSigla(e);
+      var alt=faixaH*(LB_VIEW==='quadros'?0.86:0.78), sig=lbSigla(e);
       arr.forEach(function(x2){
-        var x1=xx(x2.ini), larg=Math.max(2,xx(x2.fim)-x1), yTop=yy(x2.j)-alt/2;
+        var x1=xx(x2.ini), larg=Math.max(2,xx(x2.fim)-x1), yTop=yy(x2.j,x2.faixa)-alt/2;
         var aj=lbAjuste(e,x2.lote);
         s+='<rect'+(arrastavel?' class="lb-drag" data-lbet-drag="'+e.id+'" data-lblote-drag="'+escAttr(x2.lote)+'"':'')+' x="'+x1.toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+larg.toFixed(1)+'" height="'+alt.toFixed(1)+'" rx="'+(LB_VIEW==='quadros'?3:2)+'" fill="'+cor+'" opacity="'+(LB_VIEW==='quadros'?'.95':'.9')+'" stroke="'+cor+'" stroke-width="1">'+
           '<title>'+escAttr(e.nome)+' ('+escAttr(sig)+')\n'+escAttr(lbNomeLote(x2.lote))+'\ndia '+Math.round(x2.ini)+' → '+Math.round(x2.fim)+' ('+x2.dur+' dias)'+(aj&&aj.off>0?'\natraso manual: +'+aj.off+'d':'')+(aj&&aj.dur>0?'\nduração própria neste lote':'')+'\nS'+isoWeek(mondayOf(lbDiaParaSemana(x2.ini,c.inicio)))+(arrastavel?'\n\nArraste o corpo pra mover só deste lote em diante · arraste a borda direita pra mudar a duração':'')+'</title></rect>';
@@ -7138,35 +7155,51 @@
   function mfSVG(){
     var c=lbSvc(); if(!c)return '';
     if(!c.etapas.length)return '<div class="note" style="padding:18px">Nenhuma etapa ainda. Clique em <b>+ Etapa</b> pra desenhar o processo deste serviço.</div>';
-    var s='<defs><marker id="mfArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)"/></marker></defs>';
+    var s='<defs><marker id="mfArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)" opacity=".85"/></marker></defs>';
     var byId={}; c.etapas.forEach(function(e){byId[e.id]=e;});
+    // A seta sai e entra pelo lado mais curto (direita/esquerda quando a distância é horizontal,
+    // baixo/cima quando é vertical) e a curva usa controles curtos — assim ela não cruza as caixas.
     c.setas.forEach(function(e,ei){
       var a=byId[e.de], b=byId[e.para]; if(!a||!b)return;
-      var ax=a.x+MF_NW, ay=a.y+MF_NH/2, bx=b.x, by=b.y+MF_NH/2;
-      if(b.x+MF_NW/2 < a.x+MF_NW/2){ ax=a.x; bx=b.x+MF_NW; }
-      var dx=Math.max(30,Math.abs(bx-ax)/2);
-      var c1=ax+(bx>=ax?dx:-dx), c2=bx-(bx>=ax?dx:-dx);
-      s+='<path d="M'+ax+','+ay+' C'+c1+','+ay+' '+c2+','+by+' '+bx+','+by+'" fill="none" stroke="var(--ink-2)" stroke-width="2" marker-end="url(#mfArrow)" data-mfseta="'+ei+'" style="cursor:pointer"><title>'+escAttr(a.nome)+' → '+escAttr(b.nome)+((+e.lat)?' (latência '+(+e.lat)+' dia'+((+e.lat)===1?'':'s')+')':'')+(MF_MODE==='apagar'?' — clique pra excluir':'')+'</title></path>';
+      var acx=a.x+MF_NW/2, acy=a.y+MF_NH/2, bcx=b.x+MF_NW/2, bcy=b.y+MF_NH/2;
+      var dx=bcx-acx, dy=bcy-acy, ax,ay,bx,by,c1x,c1y,c2x,c2y,off;
+      if(Math.abs(dx)>=Math.abs(dy)*1.1){            // fluxo horizontal
+        var pDir=dx>=0;
+        ax=pDir?a.x+MF_NW:a.x; ay=acy;
+        bx=pDir?b.x-6:b.x+MF_NW+6; by=bcy;
+        off=Math.min(70,Math.max(10,Math.abs(bx-ax)*0.45)); // gap curto -> curva curta (sem zigue-zague)
+        c1x=ax+(pDir?off:-off); c1y=ay; c2x=bx-(pDir?off:-off); c2y=by;
+      } else {                                        // fluxo vertical (linha de baixo/de cima)
+        var pBaixo=dy>=0;
+        ax=acx; ay=pBaixo?a.y+MF_NH:a.y;
+        bx=bcx; by=pBaixo?b.y-6:b.y+MF_NH+6;
+        off=Math.min(60,Math.max(10,Math.abs(by-ay)*0.45));
+        c1x=ax; c1y=ay+(pBaixo?off:-off); c2x=bx; c2y=by-(pBaixo?off:-off);
+      }
+      s+='<path d="M'+ax.toFixed(1)+','+ay.toFixed(1)+' C'+c1x.toFixed(1)+','+c1y.toFixed(1)+' '+c2x.toFixed(1)+','+c2y.toFixed(1)+' '+bx.toFixed(1)+','+by.toFixed(1)+'" fill="none" stroke="var(--ink-2)" stroke-width="1.6" opacity=".75" marker-end="url(#mfArrow)" data-mfseta="'+ei+'" style="cursor:pointer"><title>'+escAttr(a.nome)+' → '+escAttr(b.nome)+((+e.lat)?' (latência '+(+e.lat)+' dia'+((+e.lat)===1?'':'s')+')':'')+(MF_MODE==='apagar'?' — clique pra excluir':'')+'</title></path>';
       if(+e.lat){
-        var mx=(ax+bx)/2, my=(ay+by)/2;
-        s+='<text x="'+mx.toFixed(1)+'" y="'+(my-4).toFixed(1)+'" text-anchor="middle" class="axm" style="font-size:9px;font-weight:700">+'+(+e.lat)+'d</text>';
+        var mx=(c1x+c2x)/2, my=(c1y+c2y)/2;
+        s+='<rect x="'+(mx-11).toFixed(1)+'" y="'+(my-7).toFixed(1)+'" width="22" height="12" rx="3" fill="var(--surface)" opacity=".9"/>'+
+          '<text x="'+mx.toFixed(1)+'" y="'+(my+2).toFixed(1)+'" text-anchor="middle" class="axm" style="font-size:8.5px;font-weight:700">+'+(+e.lat)+'d</text>';
       }
     });
     c.etapas.forEach(function(e){
       var sel=(MF_SEL===e.id)?' sel':'';
       var linhas=String(e.nome||'').split(/\s+/).reduce(function(acc,w){
         var last=acc[acc.length-1];
-        if(last&&(last+' '+w).length<=22)acc[acc.length-1]=last+' '+w; else acc.push(w);
+        if(last&&(last+' '+w).length<=17)acc[acc.length-1]=last+' '+w; else acc.push(w);
         return acc;
       },[]).slice(0,2);
-      var txt=linhas.map(function(t,i){ return '<tspan x="'+(e.x+MF_NW/2)+'" dy="'+(i===0?0:13)+'">'+escAttr(t)+'</tspan>'; }).join('');
+      var txt=linhas.map(function(t,i){ return '<tspan x="'+(e.x+MF_NW/2)+'" dy="'+(i===0?0:11)+'">'+escAttr(t)+'</tspan>'; }).join('');
       s+='<g class="mf-node'+sel+'" data-mfno="'+e.id+'">'+
-        '<rect x="'+e.x+'" y="'+e.y+'" width="'+MF_NW+'" height="'+MF_NH+'" rx="10" fill="'+e.cor+'" fill-opacity=".18" stroke="'+e.cor+'" stroke-width="2"/>'+
-        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH/2+(linhas.length>1?-6:1))+'" text-anchor="middle" style="font-size:12.5px;font-weight:600;fill:var(--ink)">'+txt+'</text>'+
-        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH-8)+'" text-anchor="middle" class="axm" style="font-size:9.5px">'+(+e.dias||1)+' dia'+((+e.dias||1)===1?'':'s')+'</text>'+
+        '<rect x="'+e.x+'" y="'+e.y+'" width="'+MF_NW+'" height="'+MF_NH+'" rx="8" fill="'+e.cor+'" fill-opacity=".18" stroke="'+e.cor+'" stroke-width="1.8"/>'+
+        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH/2+(linhas.length>1?-6:0))+'" text-anchor="middle" style="font-size:10.5px;font-weight:600;fill:var(--ink)">'+txt+'</text>'+
+        '<text x="'+(e.x+MF_NW/2)+'" y="'+(e.y+MF_NH-6)+'" text-anchor="middle" class="axm" style="font-size:8.5px"><tspan style="font-weight:700">'+escAttr(lbSigla(e))+'</tspan> · '+(+e.dias||1)+'d</text>'+
         '<title>'+escAttr(e.nome)+(MF_MODE==='mover'?' — arraste pra mover, duplo clique renomeia':(MF_MODE==='ligar'?' — clique pra ligar':' — clique pra excluir'))+'</title></g>';
     });
-    return '<svg id="mfSvg" viewBox="0 0 '+MF_W+' '+MF_H+'" style="width:100%;height:auto;min-width:900px">'+s+'</svg>';
+    var alturaNec=MF_H;
+    c.etapas.forEach(function(e){ alturaNec=Math.max(alturaNec,(+e.y||0)+MF_NH+40); });
+    return '<svg id="mfSvg" viewBox="0 0 '+MF_W+' '+alturaNec+'" style="width:100%;height:auto;min-width:900px">'+s+'</svg>';
   }
 
   VIEWS['cr-lb']=function(){
