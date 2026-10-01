@@ -170,6 +170,12 @@
   .legend span{display:inline-flex;align-items:center;gap:6px}
   svg.chart{width:100%;height:auto;display:block;overflow:visible}
   .axm{fill:var(--muted);font-size:9px;font-family:"IBM Plex Mono",monospace}
+  .mf-wrap{border:1px solid var(--line);border-radius:10px;background:var(--elev);overflow:auto;position:relative}
+  .mf-wrap svg{display:block;touch-action:none;user-select:none}
+  .mf-node rect{cursor:grab}
+  .mf-wrap.ligando .mf-node rect{cursor:crosshair}
+  .mf-wrap.apagando .mf-node rect{cursor:not-allowed}
+  .mf-node.sel rect{stroke-width:3}
   .exec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(640px,1fr));gap:12px}
   .exec-grid .card{padding:8px 12px}
   .crew-tbl{min-width:0!important;width:auto!important;font-size:11.5px;margin:2px 0 6px}
@@ -1207,18 +1213,9 @@
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
 
-    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['medio','Médio prazo','lp-medio'],
-      ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
-      ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     window._cronoTab=window._cronoTab||'tc';
-    // Visualizador não vê as abas de edição; atalhos pra outras telas só se ele puder abri-las.
     if(isReadOnly()&&(window._cronoTab==='ajuste'||window._cronoTab==='equipe'))window._cronoTab='tc';
-    var tabs=TABS.filter(function(t){
-      if(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
-      if(t[2]&&!canViewTab(t[2]))return false;
-      return true;
-    }).map(function(t){var act=(!t[2]&&t[0]===window._cronoTab)?' active':'';
-      return '<button class="subtab'+act+'" data-tab="'+t[0]+'"'+(t[2]?' data-nav="'+t[2]+'"':'')+'>'+t[1]+'</button>';}).join('');
+    var tabs=cronoTabsHTML('cr-matriz');
 
     return head('Tempo-Caminho','Cronograma automático para obras rodoviárias — monte, importe, ajuste e exporte.','')+
     '<div class="card">'+
@@ -6880,10 +6877,11 @@
     if(LB)return LB;
     var raw=(window._OBRA&&window._OBRA.linha_balanco)||null;
     if(raw&&typeof raw==='object'&&Array.isArray(raw.lotes)){
-      LB={lotes:raw.lotes.slice(),atividades:(raw.atividades||[]).map(function(a){return Object.assign({},a);})};
+      LB={lotes:raw.lotes.slice(),atividades:(raw.atividades||[]).map(function(a){return Object.assign({},a);}),
+          fluxo:raw.fluxo&&typeof raw.fluxo==='object'?{nos:(raw.fluxo.nos||[]).map(function(n){return Object.assign({},n);}),setas:(raw.fluxo.setas||[]).map(function(e){return Object.assign({},e);})}:{nos:[],setas:[]}};
     } else {
       // Começa com todos os lotes da obra e nenhuma atividade.
-      LB={lotes:lbLoteIds().slice(),atividades:[]};
+      LB={lotes:lbLoteIds().slice(),atividades:[],fluxo:{nos:[],setas:[]}};
     }
     return LB;
   }
@@ -6891,7 +6889,7 @@
   async function lbSalvar(){
     if(!selectedObra||!LB)return;
     try{
-      await sbUpdateObra(selectedObra.id,{linha_balanco:{lotes:LB.lotes,atividades:LB.atividades}});
+      await sbUpdateObra(selectedObra.id,{linha_balanco:{lotes:LB.lotes,atividades:LB.atividades,fluxo:LB.fluxo||{nos:[],setas:[]}}});
       LB_DIRTY=false; go('cr-lb'); toast('Linha de balanço salva.');
     }catch(e){
       var m=(e&&e.message)||e;
@@ -6958,6 +6956,144 @@
     });
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:860px">'+s+'</svg>';
   }
+  /* ---------- Macro-fluxo do processo ----------
+   * Diagrama simples de caixas e setas pra desenhar a sequência macro da obra (ex.: supressão →
+   * terraplenagem → drenagem → base → CBUQ). Fica guardado junto da linha de balanço
+   * (obras.linha_balanco.fluxo) e serve de referência pra montar as atividades — por enquanto é
+   * um desenho livre, sem amarração com o cronograma. */
+  var MF_MODE='mover'; // mover | ligar | apagar
+  var MF_SEL=null;     // nó de origem no modo "ligar"
+  var MF_W=1200, MF_H=520, MF_NW=170, MF_NH=56;
+  function mfData(){
+    var d=lbData();
+    if(!d.fluxo||typeof d.fluxo!=='object')d.fluxo={nos:[],setas:[]};
+    if(!Array.isArray(d.fluxo.nos))d.fluxo.nos=[];
+    if(!Array.isArray(d.fluxo.setas))d.fluxo.setas=[];
+    return d.fluxo;
+  }
+  function mfAddNo(nome,cor){
+    var f=mfData(), n=f.nos.length;
+    f.nos.push({id:'n'+Date.now()+Math.floor(Math.random()*999),nome:nome||'Etapa '+(n+1),
+      cor:cor||LB_PAL[n%LB_PAL.length],x:60+(n%5)*210,y:60+Math.floor(n/5)*110});
+    lbMarkDirty(); go('cr-lb');
+  }
+  function mfSVG(){
+    var f=mfData();
+    if(!f.nos.length)return '<div class="note" style="padding:18px">Nenhuma etapa ainda. Clique em <b>+ Etapa</b> (ou puxe um serviço) pra começar o macro-fluxo.</div>';
+    var s='<defs><marker id="mfArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-2)"/></marker></defs>';
+    var byId={}; f.nos.forEach(function(n){byId[n.id]=n;});
+    // setas: saem da direita do nó de origem e entram na esquerda do destino (ou por cima/baixo)
+    f.setas.forEach(function(e,ei){
+      var a=byId[e.de], b=byId[e.para]; if(!a||!b)return;
+      var ax=a.x+MF_NW, ay=a.y+MF_NH/2, bx=b.x, by=b.y+MF_NH/2;
+      if(b.x+MF_NW/2 < a.x+MF_NW/2){ ax=a.x; bx=b.x+MF_NW; } // destino à esquerda: sai pela esquerda
+      var dx=Math.max(30,Math.abs(bx-ax)/2);
+      var c1=ax+(bx>=ax?dx:-dx), c2=bx-(bx>=ax?dx:-dx);
+      s+='<path d="M'+ax+','+ay+' C'+c1+','+ay+' '+c2+','+by+' '+bx+','+by+'" fill="none" stroke="var(--ink-2)" stroke-width="2" marker-end="url(#mfArrow)" data-mfseta="'+ei+'" style="cursor:pointer"><title>'+escAttr(a.nome)+' → '+escAttr(b.nome)+(MF_MODE==='apagar'?' (clique pra excluir)':'')+'</title></path>';
+    });
+    f.nos.forEach(function(n){
+      var sel=(MF_SEL===n.id)?' sel':'';
+      var linhas=String(n.nome||'').split(/\s+/).reduce(function(acc,w){
+        var last=acc[acc.length-1];
+        if(last&&(last+' '+w).length<=22)acc[acc.length-1]=last+' '+w; else acc.push(w);
+        return acc;
+      },[]).slice(0,2);
+      var txt=linhas.map(function(t,i){ return '<tspan x="'+(n.x+MF_NW/2)+'" dy="'+(i===0?0:13)+'">'+escAttr(t)+'</tspan>'; }).join('');
+      s+='<g class="mf-node'+sel+'" data-mfno="'+n.id+'" transform="translate(0,0)">'+
+        '<rect x="'+n.x+'" y="'+n.y+'" width="'+MF_NW+'" height="'+MF_NH+'" rx="10" fill="'+n.cor+'" fill-opacity=".18" stroke="'+n.cor+'" stroke-width="2"/>'+
+        '<text x="'+(n.x+MF_NW/2)+'" y="'+(n.y+MF_NH/2+(linhas.length>1?-3:4))+'" text-anchor="middle" style="font-size:12.5px;font-weight:600;fill:var(--ink)">'+txt+'</text>'+
+        '<title>'+escAttr(n.nome)+(MF_MODE==='mover'?' — arraste pra mover, duplo clique pra renomear':(MF_MODE==='ligar'?' — clique pra ligar':' — clique pra excluir'))+'</title></g>';
+    });
+    return '<svg id="mfSvg" viewBox="0 0 '+MF_W+' '+MF_H+'" style="width:100%;height:auto;min-width:900px">'+s+'</svg>';
+  }
+  function macroFluxoHTML(){
+    var f=mfData();
+    var modos=[['mover','✥ Mover'],['ligar','⇢ Ligar'],['apagar','✕ Excluir']].map(function(m){
+      return '<button class="subtab'+(MF_MODE===m[0]?' active':'')+'" data-mfmode="'+m[0]+'">'+m[1]+'</button>';
+    }).join('');
+    var svcOpts='<option value="">+ Etapa do serviço…</option>'+SERV.map(function(sv,si){return '<option value="'+si+'">'+escAttr(sv.n)+'</option>';}).join('');
+    return '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px">'+
+        '<div><div class="eyebrow" style="margin:0">Macro-fluxo do processo ('+f.nos.length+' etapa'+(f.nos.length===1?'':'s')+')</div>'+
+        '<div class="note">Desenhe a sequência macro da obra. <b>Mover</b>: arraste as caixas (duplo clique renomeia). <b>Ligar</b>: clique na origem e depois no destino. <b>Excluir</b>: clique na caixa ou na seta.</div></div>'+
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+modos+
+          '<select class="esel" id="mfAddSvc">'+svcOpts+'</select>'+
+          '<button class="btn primary" id="mfAdd">+ Etapa</button>'+
+          (f.nos.length?'<button class="btn" id="mfLimpar">Limpar tudo</button>':'')+
+        '</div>'+
+      '</div>'+
+      '<div class="mf-wrap'+(MF_MODE==='ligar'?' ligando':(MF_MODE==='apagar'?' apagando':''))+'" id="mfWrap">'+mfSVG()+'</div>'+
+      (MF_MODE==='ligar'?'<div class="note" style="margin-top:6px">'+(MF_SEL?'Agora clique na etapa de <b>destino</b> (ou na mesma pra cancelar).':'Clique na etapa de <b>origem</b>.')+'</div>':'')+
+    '</div>';
+  }
+  function wireMacroFluxo(){
+    var wrap=document.getElementById('mfWrap'); if(!wrap)return;
+    var f=mfData(), svg=document.getElementById('mfSvg');
+    document.querySelectorAll('[data-mfmode]').forEach(function(b){
+      b.addEventListener('click',function(){ MF_MODE=b.getAttribute('data-mfmode'); MF_SEL=null; go('cr-lb'); });
+    });
+    var add=document.getElementById('mfAdd');
+    if(add)add.addEventListener('click',function(){ mfAddNo(); });
+    var addSvc=document.getElementById('mfAddSvc');
+    if(addSvc)addSvc.addEventListener('change',function(){
+      var si=addSvc.value; if(si==='')return; var sv=SERV[+si];
+      mfAddNo(sv?sv.n:'', sv?svcColor(sv):null);
+    });
+    var limpar=document.getElementById('mfLimpar');
+    if(limpar)limpar.addEventListener('click',function(){
+      if(!confirm('Apagar todas as etapas e setas do macro-fluxo?'))return;
+      f.nos=[]; f.setas=[]; MF_SEL=null; lbMarkDirty(); go('cr-lb');
+    });
+    if(!svg)return;
+    // excluir seta
+    svg.querySelectorAll('[data-mfseta]').forEach(function(path){
+      path.addEventListener('click',function(){
+        if(MF_MODE!=='apagar')return;
+        f.setas.splice(+path.getAttribute('data-mfseta'),1); lbMarkDirty(); go('cr-lb');
+      });
+    });
+    var escala=function(){ var r=svg.getBoundingClientRect(); return MF_W/(r.width||1); };
+    svg.querySelectorAll('[data-mfno]').forEach(function(g){
+      var id=g.getAttribute('data-mfno'), no=f.nos.filter(function(n){return n.id===id;})[0];
+      if(!no)return;
+      g.addEventListener('dblclick',function(){
+        if(MF_MODE!=='mover')return;
+        var nome=prompt('Nome da etapa:',no.nome); if(nome===null)return;
+        no.nome=nome.trim()||no.nome; lbMarkDirty(); go('cr-lb');
+      });
+      g.addEventListener('pointerdown',function(ev){
+        if(MF_MODE==='apagar'){
+          f.nos=f.nos.filter(function(n){return n.id!==id;});
+          f.setas=f.setas.filter(function(e){return e.de!==id&&e.para!==id;});
+          lbMarkDirty(); go('cr-lb'); return;
+        }
+        if(MF_MODE==='ligar'){
+          if(!MF_SEL){ MF_SEL=id; go('cr-lb'); return; }
+          if(MF_SEL===id){ MF_SEL=null; go('cr-lb'); return; }
+          var existe=f.setas.some(function(e){return e.de===MF_SEL&&e.para===id;});
+          if(!existe)f.setas.push({de:MF_SEL,para:id});
+          MF_SEL=null; lbMarkDirty(); go('cr-lb'); return;
+        }
+        // mover: arrasta a caixa, só grava no final
+        ev.preventDefault();
+        var k=escala(), x0=ev.clientX, y0=ev.clientY, nx=no.x, ny=no.y, moveu=false;
+        g.setPointerCapture&&g.setPointerCapture(ev.pointerId);
+        var rect=g.querySelector('rect'), text=g.querySelector('text');
+        function mv(e2){
+          var dx=(e2.clientX-x0)*k, dy=(e2.clientY-y0)*k;
+          if(Math.abs(dx)>2||Math.abs(dy)>2)moveu=true;
+          var X=Math.max(0,Math.min(MF_W-MF_NW,nx+dx)), Y=Math.max(0,Math.min(MF_H-MF_NH,ny+dy));
+          g.setAttribute('transform','translate('+(X-no.x)+','+(Y-no.y)+')');
+          g._x=X; g._y=Y;
+        }
+        function up(){
+          g.removeEventListener('pointermove',mv); g.removeEventListener('pointerup',up); g.removeEventListener('pointercancel',up);
+          if(moveu&&g._x!=null){ no.x=Math.round(g._x); no.y=Math.round(g._y); lbMarkDirty(); go('cr-lb'); }
+        }
+        g.addEventListener('pointermove',mv); g.addEventListener('pointerup',up); g.addEventListener('pointercancel',up);
+      });
+    });
+  }
   VIEWS['cr-lb']=function(){
     if(!LOTS.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os lotes da obra primeiro (Tempo Caminho → Lotes & Quantidades).</div></div>';
     var d=lbData(), ids=lbLoteIds();
@@ -6985,6 +7121,7 @@
     }).join('');
     return head('Linha de Balanço','Estudo de ritmo independente do Tempo-Caminho.',
         '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
+      '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+cronoTabsHTML('cr-lb')+'</div>'+
       '<div class="card" style="margin-bottom:14px">'+
         '<div class="tc-head" style="margin-bottom:6px"><div><h3>Linha de Balanço</h3>'+
         '<p>Tempo na horizontal, lotes na vertical (o primeiro lote embaixo). Cada atividade começa numa semana, leva N semanas em cada lote e avança de lote em lote no ritmo que você definir — a inclinação da faixa é esse ritmo. '+
@@ -7004,7 +7141,8 @@
         '<div class="eyebrow" style="margin-bottom:2px">Lotes da linha de balanço ('+d.lotes.length+' de '+ids.length+')</div>'+
         '<div class="note" style="margin-bottom:8px">Marque quais lotes entram no estudo. A ordem é a mesma do cadastro de lotes; o primeiro marcado fica embaixo no gráfico.</div>'+
         '<div class="lotchips">'+loteChips+'</div>'+
-      '</div>';
+      '</div>'+
+      '<div style="height:14px"></div>'+macroFluxoHTML();
   };
   function wireLinhaBalanco(){
     var root=document.getElementById('content'); if(!root)return;
@@ -7045,6 +7183,8 @@
     });
     var save=document.getElementById('lbSave');
     if(save)save.addEventListener('click',lbSalvar);
+    wireCronoTabs();
+    wireMacroFluxo();
   }
   function editarPorEquipeHTML(){
     var segs=buildSchedule().slice().sort(function(a,b){return a.si-b.si||a.team-b.team||a.start-b.start;});
@@ -7110,6 +7250,41 @@
       (ACTIVE_CENARIO?'<span class="note" style="color:var(--warn);white-space:nowrap">Editando cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</span>':'')+
       (ADJ_DIRTY?'<span class="note" style="color:var(--warn);white-space:nowrap">ajustes não salvos</span>':'')+
       '<button class="btn" data-zoom="full" style="margin-left:auto">✕ Sair da tela cheia</button></div>';
+  }
+  /** Barra de abas do Tempo-Caminho. É a mesma na Matriz e na Linha de Balanço: as abas internas
+   *  da matriz (tc/ajuste/equipe/resumo/gantt) levam pra lá já abertas na aba certa, "Linha de
+   *  balanço" leva pra tela própria, e as demais são atalhos pras outras telas.
+   *  viewAtual = 'cr-matriz' ou 'cr-lb' (pra marcar a aba ativa certa). */
+  function cronoTabsHTML(viewAtual){
+    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['lb','Linha de balanço','cr-lb'],['medio','Médio prazo','lp-medio'],
+      ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
+      ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
+    return TABS.filter(function(t){
+      if(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
+      if(t[2]&&!canViewTab(t[2]))return false;
+      return true;
+    }).map(function(t){
+      var act='';
+      if(t[0]==='lb')act=(viewAtual==='cr-lb')?' active':'';
+      else if(!t[2])act=(viewAtual==='cr-matriz'&&t[0]===window._cronoTab)?' active':'';
+      return '<button class="subtab'+act+'" data-tab="'+t[0]+'"'+(t[2]?' data-nav="'+t[2]+'"':'')+'>'+t[1]+'</button>';
+    }).join('');
+  }
+  /** Clique nas abas: atalho pra outra tela, ou aba interna da matriz (voltando pra ela se
+   *  estivermos na Linha de Balanço). */
+  function wireCronoTabs(root){
+    var box=root||document;
+    box.querySelectorAll('#cronoTabs .subtab,#lbTabs .subtab').forEach(function(b){
+      b.addEventListener('click',function(){
+        var nav=b.getAttribute('data-nav');
+        if(nav){ go(nav); return; }
+        window._cronoTab=b.getAttribute('data-tab');
+        if(current!=='cr-matriz'){ go('cr-matriz'); return; }
+        var tabs=document.getElementById('cronoTabs');
+        if(tabs)tabs.querySelectorAll('.subtab').forEach(function(x){x.classList.toggle('active',x===b);});
+        renderCrono();
+      });
+    });
   }
   function cronoContent(){
     var tab=window._cronoTab||'tc';
@@ -7626,17 +7801,7 @@
         toast(b.getAttribute('data-label')+' — função do app (mockup visual)');
       });
     });
-    var tabs=document.getElementById('cronoTabs');
-    if(tabs)tabs.querySelectorAll('.subtab').forEach(function(b){
-      b.addEventListener('click',function(){
-        var nav=b.getAttribute('data-nav');
-        if(nav){go(nav);return;}
-        window._cronoTab=b.getAttribute('data-tab');
-        tabs.querySelectorAll('.subtab').forEach(function(x){x.classList.remove('active');});
-        b.classList.add('active');
-        renderCrono();
-      });
-    });
+    wireCronoTabs();
     var saveIntoCen=document.getElementById('saveIntoCenBtn');
     if(saveIntoCen)saveIntoCen.addEventListener('click',saveIntoActiveCenario);
     var exitCen=document.getElementById('exitCenBtn');
