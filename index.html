@@ -6884,6 +6884,7 @@
   var LB_TAB='lb';        // aba interna: lb | ajuste | gantt | curva
   var LB_VIEW='linhas';   // desenho da linha de balanço: linhas (faixas) | quadros (blocos)
   var LB_GANTT_FONTE='lb';// gantt: lb | tc
+  var LB_GANTT_VISTA='grafico'; // gantt: grafico | cronograma
   var MF_W=1200, MF_H=460, MF_NW=136, MF_NH=44; // caixas compactas: cabem mais etapas
 
   function lbLoteIds(){ return window._LOTIDS||[]; }
@@ -7080,10 +7081,17 @@
     var yy=function(j,faixa){ return topoLote[j]+3+((faixa||0)+0.5)*faixaH; };
     var porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
     var s='';
+    // Separação entre lotes: faixa alternada mais marcada, linha divisória e o nome do lote
+    // numa etiqueta com fundo — fica claro onde um lote termina e o outro começa.
     lotes.forEach(function(id,j){
-      if(j%2===0)s+='<rect x="'+pl+'" y="'+topoLote[j]+'" width="'+iw+'" height="'+alturaLote[j]+'" fill="var(--elev)" opacity=".5"/>';
-      s+='<text class="axm" x="'+(pl-8)+'" y="'+(topoLote[j]+alturaLote[j]/2+3)+'" text-anchor="end" style="font-size:'+(faixaH<17?8.5:10.5)+'px">'+escAttr(lbNomeLote(id))+'</text>';
+      var y=topoLote[j], h=alturaLote[j];
+      s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+h+'" fill="'+(j%2===0?'var(--elev)':'var(--surface)')+'" opacity="'+(j%2===0?'.9':'.45')+'"/>';
+      s+='<line x1="'+pl+'" y1="'+y+'" x2="'+(W-pr)+'" y2="'+y+'" stroke="var(--line-2)" stroke-width="1"/>';
+      var nome=escAttr(lbNomeLote(id)), fs=faixaH<17?8.5:10, larg=Math.max(34,nome.length*fs*0.62+10);
+      s+='<rect x="'+(pl-larg-6)+'" y="'+(y+h/2-9)+'" width="'+larg+'" height="18" rx="5" fill="var(--elev)" stroke="var(--line)"/>'+
+        '<text x="'+(pl-6-larg/2)+'" y="'+(y+h/2+3.5)+'" text-anchor="middle" style="font-size:'+fs+'px;font-weight:700;fill:var(--ink)">'+nome+'</text>';
     });
+    s+='<line x1="'+pl+'" y1="'+(pt+ih)+'" x2="'+(W-pr)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>';
     // grade: uma linha por semana (5 dias), rótulo da semana do projeto
     var semanas=Math.ceil(totDias/DIAS_SEM);
     var passo=Math.max(1,Math.ceil(semanas/26));
@@ -7136,23 +7144,85 @@
       });
     });
     var totDias=Math.max(DIAS_SEM,Math.ceil(calc.maxDia));
-    var labelW=240, W=1060, pl=labelW, pr=16, pt=22, pb=40, rowH=Math.max(13,Math.min(26,Math.floor(560/Math.max(1,linhas.length))));
+    // Colunas à esquerda, como num cronograma: tarefa | início | término | duração.
+    var colT=330, colD=78, labelW=colT+colD*2+56, W=1320, pl=labelW, pr=16, pt=38, pb=40;
+    var rowH=Math.max(14,Math.min(26,Math.floor(620/Math.max(1,linhas.length))));
     var ih=linhas.length*rowH, H=pt+ih+pb, iw=W-pl-pr;
+    var xIni=colT+8, xFim=xIni+colD, xDur=xFim+colD;
     var xx=function(d){ return pl+iw*d/Math.max(1,totDias); };
     var s='';
+    s+='<text class="axm" x="8" y="'+(pt-14)+'" style="font-weight:700">Tarefa</text>'+
+      '<text class="axm" x="'+xIni+'" y="'+(pt-14)+'" style="font-weight:700">Início</text>'+
+      '<text class="axm" x="'+xFim+'" y="'+(pt-14)+'" style="font-weight:700">Término</text>'+
+      '<text class="axm" x="'+xDur+'" y="'+(pt-14)+'" style="font-weight:700">Dias</text>'+
+      '<line x1="0" y1="'+(pt-8)+'" x2="'+(W-pr)+'" y2="'+(pt-8)+'" stroke="var(--line-2)"/>'+
+      '<line x1="'+(pl-8)+'" y1="'+(pt-8)+'" x2="'+(pl-8)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>';
     var semanas=Math.ceil(totDias/DIAS_SEM), passo=Math.max(1,Math.ceil(semanas/26));
     for(var k=0;k<=semanas;k+=passo){
       var x=xx(k*DIAS_SEM);
       s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>'+
         '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
     }
+    var loteAnterior=null;
     linhas.forEach(function(L,i){
       var y=pt+i*rowH;
-      if(i%2===0)s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
-      s+='<text class="axm" x="'+(pl-8)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+(rowH<17?8:9.5)+'px">'+escAttr(lbNomeLote(L.lote))+' · '+escAttr(L.e.nome)+'</text>';
+      if(i%2===0)s+='<rect x="0" y="'+y+'" width="'+(W-pr)+'" height="'+rowH+'" fill="var(--elev)" opacity=".5"/>';
+      if(loteAnterior!==null&&loteAnterior!==L.lote)s+='<line x1="0" y1="'+y+'" x2="'+(W-pr)+'" y2="'+y+'" stroke="var(--line-2)"/>';
+      loteAnterior=L.lote;
+      var fs=rowH<17?8:9.5;
+      s+='<text class="axm" x="'+xIni+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.ini,c.inicio))+'</text>'+
+        '<text class="axm" x="'+xFim+'" y="'+(y+rowH/2+3)+'" style="font-size:'+fs+'px">'+fmtDate(lbDiaParaData(L.it.fim-1,c.inicio))+'</text>'+
+        '<text class="axm" x="'+(xDur+16)+'" y="'+(y+rowH/2+3)+'" text-anchor="end" style="font-size:'+fs+'px">'+L.it.dur+'</text>';
+      s+='<text class="axm" x="6" y="'+(y+rowH/2+3)+'" style="font-size:'+(rowH<17?8:9.5)+'px"><tspan style="fill:var(--muted)">'+escAttr(lbNomeLote(L.lote))+' · </tspan>'+escAttr(L.e.nome)+'</text>';
       s+='<rect x="'+xx(L.it.ini).toFixed(1)+'" y="'+(y+rowH*0.18).toFixed(1)+'" width="'+Math.max(2,xx(L.it.fim)-xx(L.it.ini)).toFixed(1)+'" height="'+(rowH*0.64).toFixed(1)+'" rx="3" fill="'+(L.e.cor||'#888')+'"><title>'+escAttr(L.e.nome)+' · '+escAttr(lbNomeLote(L.lote))+'\ndia '+Math.round(L.it.ini)+' → '+Math.round(L.it.fim)+'</title></rect>';
     });
-    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:880px">'+s+'</svg>';
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:1100px">'+s+'</svg>';
+  }
+  /** Visão "cronograma" (estilo MS Project): tabela agrupada por lote, com início, término e
+   *  duração de cada etapa e a linha-resumo do lote. */
+  function lbProjectHTML(){
+    var calc=lbCalc(); if(!calc||!calc.itens.length)return '<div class="note">Sem etapas pra montar o cronograma.</div>';
+    var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    var ordem=lbOrdemEtapas(c), linhas='';
+    calc.lotes.forEach(function(lid,j){
+      var itens=calc.itens.filter(function(x){return x.j===j;});
+      if(!itens.length)return;
+      var ini=Math.min.apply(null,itens.map(function(x){return x.ini;}));
+      var fim=Math.max.apply(null,itens.map(function(x){return x.fim;}));
+      linhas+='<tr style="background:var(--elev);font-weight:700"><td>'+escAttr(lbNomeLote(lid))+'</td>'+
+        '<td class="mono">'+fmtDate(lbDiaParaData(ini,c.inicio))+'</td><td class="mono">'+fmtDate(lbDiaParaData(fim-1,c.inicio))+'</td>'+
+        '<td class="r mono">'+Math.round((fim-ini)*10)/10+'</td><td class="note">'+itens.length+' etapa(s)</td></tr>';
+      ordem.forEach(function(eid){
+        var it=itens.filter(function(x){return x.eid===eid;})[0]; if(!it)return;
+        var e=porId[eid];
+        linhas+='<tr><td style="padding-left:26px"><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</td>'+
+          '<td class="mono">'+fmtDate(lbDiaParaData(it.ini,c.inicio))+'</td><td class="mono">'+fmtDate(lbDiaParaData(it.fim-1,c.inicio))+'</td>'+
+          '<td class="r mono">'+it.dur+'</td><td class="note">'+(it.nEq>1?('equipe '+it.eq+' de '+it.nEq):'')+'</td></tr>';
+      });
+    });
+    return '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Lote / etapa</th><th>Início</th><th>Término</th><th class="r">Dias</th><th>Equipe</th></tr></thead><tbody>'+linhas+'</tbody></table></div>';
+  }
+  /** Exporta o cronograma da linha de balanço (uma linha por etapa × lote). */
+  function lbExportarCronograma(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var calc=lbCalc(); if(!calc||!calc.itens.length){alert('Nada pra exportar.');return;}
+    var c=calc.c, porId={}; c.etapas.forEach(function(e){porId[e.id]=e;});
+    var sv=SERV[lbSvcIdx(lbRoot().servicoSel)];
+    var rows=[['Serviço','Lote','Etapa','Sigla','Início','Término','Duração (dias)','Equipe']];
+    var ordem=lbOrdemEtapas(c);
+    calc.lotes.forEach(function(lid,j){
+      ordem.forEach(function(eid){
+        var it=calc.itens.filter(function(x){return x.eid===eid&&x.j===j;})[0]; if(!it)return;
+        var e=porId[eid];
+        rows.push([(sv&&sv.n)||'',lbNomeLote(lid),e.nome,lbSigla(e),
+          fmtDate(lbDiaParaData(it.ini,c.inicio)),fmtDate(lbDiaParaData(it.fim-1,c.inicio)),it.dur,
+          it.nEq>1?('Equipe '+it.eq+'/'+it.nEq):'Equipe única']);
+      });
+    });
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Cronograma');
+    XLSX.writeFile(wb,'linha-de-balanco-'+((sv&&sv.n)||'servico').replace(/[^\w]+/g,'-').toLowerCase()+'.xlsx');
+    toast('Cronograma exportado.');
   }
   /** Curva S da linha de balanço: % acumulado do trabalho (soma das durações etapa×lote). */
   function lbCurvaSVG(){
@@ -7372,12 +7442,22 @@
       var fontes=[['lb','Linha de balanço'],['tc','Tempo-Caminho']].map(function(f){
         return '<button class="subtab'+(LB_GANTT_FONTE===f[0]?' active':'')+'" data-lbgantt="'+f[0]+'">'+f[1]+'</button>';
       }).join('');
+      var vistasG=[['grafico','Gráfico'],['cronograma','Cronograma (Project)']].map(function(v){
+        return '<button class="subtab'+(LB_GANTT_VISTA===v[0]?' active':'')+'" data-lbgvista="'+v[0]+'">'+v[1]+'</button>';
+      }).join('');
+      var ehCron=(LB_GANTT_VISTA==='cronograma'&&LB_GANTT_FONTE==='lb');
       corpo='<div class="card">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:6px">'+
-          '<div><div class="eyebrow" style="margin:0">Gantt</div><div class="note">'+(LB_GANTT_FONTE==='lb'?'Uma barra por etapa em cada lote, na ordem executiva.':'Os serviços do cronograma (Tempo-Caminho), pra comparar.')+'</div></div>'+
-          '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Fonte:</span>'+fontes+'</div>'+
+          '<div><div class="eyebrow" style="margin:0">'+(ehCron?'Cronograma da linha de balanço':'Gantt')+'</div><div class="note">'+
+            (LB_GANTT_FONTE!=='lb'?'Os serviços do cronograma (Tempo-Caminho), pra comparar.':(ehCron?'Agrupado por lote, com a linha-resumo do lote e cada etapa com início, término e duração.':'Uma linha por etapa em cada lote, com início, término e duração ao lado da barra.'))+
+          '</div></div>'+
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+            '<span style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Fonte:</span>'+fontes+'</span>'+
+            (LB_GANTT_FONTE==='lb'?'<span style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Ver:</span>'+vistasG+'</span>'+
+              '<button class="btn" id="lbExpCron">↧ Exportar cronograma</button>':'')+
+          '</div>'+
         '</div>'+
-        '<div class="tc-wrap" style="padding:6px">'+(LB_GANTT_FONTE==='lb'?lbGanttSVG():ganttSVG())+'</div>'+
+        (ehCron?lbProjectHTML():'<div class="tc-wrap" style="padding:6px">'+(LB_GANTT_FONTE==='lb'?lbGanttSVG():ganttSVG())+'</div>')+
       '</div>';
     } else {
       corpo='<div class="card">'+
@@ -7450,6 +7530,11 @@
     root.querySelectorAll('[data-lbgantt]').forEach(function(b){
       b.addEventListener('click',function(){ LB_GANTT_FONTE=b.getAttribute('data-lbgantt'); go('cr-lb'); });
     });
+    root.querySelectorAll('[data-lbgvista]').forEach(function(b){
+      b.addEventListener('click',function(){ LB_GANTT_VISTA=b.getAttribute('data-lbgvista'); go('cr-lb'); });
+    });
+    var expCron=document.getElementById('lbExpCron');
+    if(expCron)expCron.addEventListener('click',lbExportarCronograma);
     root.querySelectorAll('[data-lbfolga]').forEach(function(inp){
       inp.addEventListener('change',function(){
         var e=cfg.etapas[+inp.getAttribute('data-lbfolga')]; if(!e)return;
