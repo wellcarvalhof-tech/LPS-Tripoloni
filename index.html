@@ -3489,8 +3489,8 @@
       var t=0; MP_SIT_ORDEM.forEach(function(s){ t+=g[k].c[s]||0; });
       maxV=Math.max(maxV,t,g[k].ident);
     });
-    var W=Math.max(360,ks.length*42), H=190, base=H-26, topo=14, passo=W/ks.length;
-    var bw=Math.min(26,passo*0.56);
+    var W=Math.max(300,ks.length*27), H=190, base=H-26, topo=14, passo=W/ks.length;
+    var bw=Math.min(17,passo*0.6);
     var y=function(v){ return base-(base-topo)*v/maxV; };
     var barras='', pts=[];
     ks.forEach(function(k,i){
@@ -3533,8 +3533,8 @@
       if(s.tmdN)maxD=Math.max(maxD,s.tmdS/s.tmdN);
       if(s.tmrN)maxD=Math.max(maxD,s.tmrS/s.tmrN);
     });
-    var W=Math.max(360,ks.length*42), H=190, base=H-26, topo=16, passo=W/ks.length;
-    var bw=Math.min(24,passo*0.5);
+    var W=Math.max(300,ks.length*27), H=190, base=H-26, topo=16, passo=W/ks.length;
+    var bw=Math.min(16,passo*0.55);
     var yN=function(v){ return base-(base-topo)*v/maxN; };
     var yD=function(v){ return base-(base-topo)*v/maxD; };
     var barras='', ptsD=[], ptsR=[];
@@ -4067,14 +4067,16 @@
     var modoBtns=[['semana','Semanal'],['mes','Mensal']].map(function(m){
       return '<button class="subtab'+(MP_EVO===m[0]?' active':'')+'" data-mpevo="'+m[0]+'">'+m[1]+'</button>';
     }).join('');
-    var porPer='<div class="card" style="margin-top:14px">'+
+    var porPer='<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">'+
         '<div><div class="eyebrow" style="margin:0">Restrições por '+(MP_EVO==='mes'?'mês':'semana')+'</div>'+
         '<div class="note">Barras: situação na data de impacto. Linha: quantas foram identificadas.</div></div>'+
         '<div class="subtabs" style="margin:0;border:0;padding:0">'+modoBtns+'</div></div>'+
       '<div style="margin-top:10px">'+mpPorPeriodoHTML(lista,MP_EVO)+'</div></div>';
-    var evo='<div class="card" style="margin-top:14px">'+
-      '<div class="eyebrow">Evolução do TMD e do TMR</div>'+
+    var evo='<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">'+
+        '<div class="eyebrow" style="margin:0">Evolução do TMD e do TMR</div>'+
+        '<div class="subtabs" style="margin:0;border:0;padding:0">'+modoBtns+'</div></div>'+
       '<div class="note">Média de dias por '+(MP_EVO==='mes'?'mês':'semana')+' de identificação. TMR acima do TMD quer dizer que a remoção demora mais do que o tempo que havia.</div>'+
       '<div style="margin-top:10px">'+mpEvolucaoHTML(lista,MP_EVO)+'</div></div>';
     // Próximas a vencer e críticas
@@ -4083,17 +4085,17 @@
     var crit=abertas.filter(function(r){return mpSit(r)==='atrasada';}).sort(function(a,b){return mpAtraso(b)-mpAtraso(a);}).slice(0,10);
     var tabela=function(tit,cor,rows,colExtra,extraFn){
       return '<div class="card"><div class="eyebrow" style="color:'+cor+'">'+tit+'</div>'+
-        (rows.length?'<table class="edtbl" style="font-size:12px;margin-top:10px;table-layout:fixed;width:100%"><thead><tr>'+
-          '<th>Restrição</th><th style="width:96px">Impacto</th><th style="width:96px">Prev. remoção</th><th style="width:104px">'+colExtra+'</th><th style="width:110px">Responsável</th></tr></thead><tbody>'+
+        (rows.length?'<table class="edtbl" style="font-size:11.5px;margin-top:10px;table-layout:fixed;width:100%;min-width:0"><thead><tr>'+
+          '<th>Restrição</th><th style="width:74px">Impacto</th><th style="width:74px">Prev. rem.</th><th style="width:62px">'+colExtra+'</th><th style="width:84px">Responsável</th></tr></thead><tbody>'+
           rows.map(function(r){
             return '<tr><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escAttr(r.descricao||'')+'"><b class="mono">'+escAttr(r.codigo||'')+'</b> '+escAttr(r.descricao||'')+'</td>'+
               '<td class="mono">'+brDate(mpLimite(r))+'</td>'+
               '<td class="mono">'+brDate(r.data_prazo)+'</td>'+
-              '<td class="mono">'+extraFn(r)+'</td>'+
+              '<td class="mono" style="white-space:nowrap">'+extraFn(r)+'</td>'+
               '<td class="note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escAttr(r.responsavel||'—')+'</td></tr>';
           }).join('')+'</tbody></table>':'<div class="note" style="margin-top:8px">Nada por aqui.</div>')+'</div>';
     };
-    var listas='<div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">'+
+    var listas='<div class="grid g2" style="margin-top:14px">'+
       tabela('Próximas a vencer','var(--accent)',prox,'Faltam',function(r){return mpDias(hoje,mpLimite(r))+' dias';})+
       tabela('Críticas (impacto vencido)','var(--crit)',crit,'Atraso',function(r){return mpAtraso(r)+' dias';})+
     '</div>';
@@ -4101,7 +4103,8 @@
       mpQuebra(lista,'categoria','categoria')+mpQuebra(lista,'setor','setor')+mpQuebra(lista,'responsavel','responsável')+'</div>';
     var nota='<div class="note" style="margin-top:14px">IRR = removidas no prazo ÷ (removidas + atrasadas em aberto). '+
       'Canceladas e as que ainda estão dentro do prazo ficam fora da conta.</div>';
-    return periodo+kpis+'<div class="grid g2">'+sitCard+irrSem+'</div>'+porPer+evo+listas+quebras+nota;
+    return periodo+kpis+'<div class="grid g2">'+sitCard+irrSem+'</div>'+
+      '<div class="grid g2" style="margin-top:14px">'+porPer+evo+'</div>'+listas+quebras+nota;
   }
 
   function mpAcharId(id){ return MP.filter(function(x){return x.id===id;})[0]; }
