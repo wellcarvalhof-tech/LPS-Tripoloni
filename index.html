@@ -1,4 +1,9 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2D6FA6">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <title>LPS Tripoloni · Sistema</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -201,6 +206,48 @@
     .app.nav-collapsed{grid-template-columns:1fr}
   }
   .menu-toggle{display:none}
+
+  /* ---------- Modo campo (celular) ----------
+     O app nasceu pra tela larga. Abaixo de 760px a gente compacta o que dá, deixa as tabelas
+     e as abas rolarem na horizontal em vez de quebrar, e sobe uma barra fixa embaixo com as
+     telas que se usa na obra. A barra some em tela grande. */
+  .fieldbar{display:none}
+  @media (max-width:760px){
+    .content{padding:14px 12px calc(78px + env(safe-area-inset-bottom))}
+    .topbar{padding:9px 12px;gap:8px}
+    .crumb{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+    .top-right{gap:6px}
+    .top-right .obra-sel .k{display:none}
+    .top-right .obra-sel{padding:4px 8px}
+    .card{padding:13px 12px;border-radius:12px}
+    .page-head h2{font-size:19px}
+    .page-head-mini{justify-content:flex-start}
+    .page-actions{margin-left:0;flex-wrap:wrap}
+    .subtabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    .subtabs::-webkit-scrollbar{display:none}
+    .subtab{white-space:nowrap;padding:9px 11px}
+    .tbl-wrap{-webkit-overflow-scrolling:touch}
+    .btn{min-height:38px;padding:9px 13px}
+    .icon-btn{min-width:36px;min-height:36px}
+    .einp{height:34px;font-size:13.5px}
+    .esel{height:32px;font-size:13px}
+    .banner{display:block;font-size:12.5px;padding:10px 12px}
+    /* A barra de importar/exportar do Tempo-Caminho tem ~16 botões e tomaria a tela inteira
+       antes das abas. Importação é trabalho de computador — no celular ela sai de cena. */
+    #cronoToolbar{display:none!important}
+    /* A legenda repete o que já está nas caixinhas de serviço logo abaixo — some pra sobrar tela. */
+    .legend{display:none!important}
+    /* A data come 100px dos 375 da tela. Encolhe (o left da coluna "Semana" acompanha). */
+    table.tcm td.dt,table.tcm th:nth-child(1){width:66px;min-width:66px;max-width:66px;font-size:9px;padding:3px 4px}
+    table.tcm td.wk,table.tcm th:nth-child(2){left:66px;width:46px;min-width:46px;max-width:46px}
+    .fieldbar{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;position:fixed;left:0;right:0;bottom:0;z-index:55;
+      background:var(--surface);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom));
+      box-shadow:0 -2px 10px rgba(0,0,0,.08)}
+    .fieldbar button{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;cursor:pointer;
+      font-family:inherit;font-size:10px;font-weight:600;color:var(--muted);padding:6px 2px;border-radius:9px;min-height:46px}
+    .fieldbar button svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+    .fieldbar button.active{color:var(--accent)}
+  }
 
   /* ---------- Landing: seleção de obras ---------- */
   .landing{position:fixed;inset:0;overflow-y:auto;background:var(--bg);z-index:80;display:none}
@@ -497,7 +544,9 @@
         <div class="avatar" title="Conta"></div>
       </div>
     </div>
+    <div id="offBar" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 14px;background:var(--warn-bg);color:var(--ink);border-bottom:1px solid var(--line);font-size:12.5px"></div>
     <div class="content" id="content"></div>
+    <nav class="fieldbar" id="fieldBar" aria-label="atalhos do modo campo"></nav>
   </div>
 </div>
 
@@ -884,7 +933,10 @@
     }
     return r;
   }
-  async function sbLoadCadastro(obraId){
+  /* Busca as linhas da obra no banco. Fica separado de aplicarCadastro de propósito: é o mesmo
+   * conjunto de linhas que vai pro retrato offline, e aí os dois caminhos (online e sem sinal)
+   * montam o app pelo mesmo código. */
+  async function sbFetchCadastro(obraId){
     var res=await Promise.all([
       SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
@@ -897,7 +949,11 @@
       SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true})
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
-    var obra=res[0].data, svc=res[1].data||[], lot=res[2].data||[], q=res[3].data||[], rec=res[4].data||[], apr=res[5].data||[], cen=res[6].data||[], prod=res[7].data||[], apo=res[8].data||[];
+    return {obra:res[0].data,svc:res[1].data||[],lot:res[2].data||[],q:res[3].data||[],rec:res[4].data||[],
+            apr:res[5].data||[],cen:res[6].data||[],prod:res[7].data||[],apo:res[8].data||[]};
+  }
+  function aplicarCadastro(d){
+    var obra=d.obra, svc=d.svc||[], lot=d.lot||[], q=d.q||[], rec=d.rec||[], apr=d.apr||[], cen=d.cen||[], prod=d.prod||[], apo=d.apo||[];
     SERV=svc.map(function(r,i){return {id:r.id,n:r.nome,u:r.unidade||'un',c:PALVARS[i%6],hex:r.cor||'#64748b',eq:r.teams||1,p:String(r.produtividade||0),lag:r.lag_semanas||0,cfg:r.config||{}};});
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
@@ -924,6 +980,44 @@
     LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
     PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO=''; PROG_LIDO=false;
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
+  }
+  async function sbLoadCadastro(obraId){
+    var dados=await sbFetchCadastro(obraId);
+    aplicarCadastro(dados);
+    offlineSalvar(obraId,dados);   // retrato pra abrir sem sinal depois (não espera)
+  }
+
+  /* ---------- Retrato offline da obra (IndexedDB) ----------
+   * Guarda as linhas como vieram do banco. Serve o que o cronograma precisa: obra, serviços,
+   * lotes, quantidades, recursos, realizado, cenários, produção e apoio. As telas que buscam
+   * sozinhas quando abrem (programação semanal, médio prazo, PPC, medições) continuam pedindo
+   * rede — offline elas avisam em vez de mostrar dado velho. */
+  var IDB_NOME='lps-tripoloni', IDB_LOJA='obras';
+  function idbAbrir(){
+    return new Promise(function(ok,err){
+      try{
+        var r=indexedDB.open(IDB_NOME,1);
+        r.onupgradeneeded=function(){ var db=r.result; if(!db.objectStoreNames.contains(IDB_LOJA))db.createObjectStore(IDB_LOJA); };
+        r.onsuccess=function(){ ok(r.result); };
+        r.onerror=function(){ err(r.error); };
+      }catch(e){ err(e); }
+    });
+  }
+  function idbTx(modo,fn){
+    return idbAbrir().then(function(db){
+      return new Promise(function(ok,err){
+        var tx=db.transaction(IDB_LOJA,modo), st=tx.objectStore(IDB_LOJA), req=fn(st);
+        req.onsuccess=function(){ ok(req.result); };
+        req.onerror=function(){ err(req.error); };
+      });
+    });
+  }
+  function offlineSalvar(obraId,dados){
+    return idbTx('readwrite',function(st){ return st.put({em:new Date().toISOString(),dados:dados},'obra:'+obraId); })
+      .catch(function(){ /* aparelho sem IndexedDB ou armazenamento cheio: segue sem retrato */ });
+  }
+  function offlineLer(obraId){
+    return idbTx('readonly',function(st){ return st.get('obra:'+obraId); }).catch(function(){ return null; });
   }
 
   function showAuth(){var g=document.getElementById('authGate');if(g)g.hidden=false;}
@@ -1012,7 +1106,21 @@
   var MY_ROLE={papel:'planejador',permissoes:['*']};
   var IS_APP_ADMIN=false; // desenvolvedor: acesso total a todas as obras (migração 17)
   function isPlanejador(){ return IS_APP_ADMIN||MY_ROLE.papel==='planejador'; }
-  function isReadOnly(){ return !IS_APP_ADMIN&&MY_ROLE.papel==='visualizador'; }
+  /* Sem sinal o app abre pelo retrato guardado. Como não dá pra gravar, ele entra em só
+   * leitura — melhor avisar do que deixar digitar algo que se perderia. */
+  var OFFLINE_MODE=false, OFFLINE_EM='';
+  function isReadOnly(){ return OFFLINE_MODE||(!IS_APP_ADMIN&&MY_ROLE.papel==='visualizador'); }
+  function refreshOffBar(){
+    var b=document.getElementById('offBar'); if(!b)return;
+    if(!OFFLINE_MODE){ b.style.display='none'; return; }
+    var q=''; try{ var d=new Date(OFFLINE_EM); q=fmtDate(d)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }catch(e){}
+    b.style.display='flex';
+    b.innerHTML='<b>Sem conexão</b> — mostrando o retrato da obra de '+(q||'antes')+
+      '. Dá pra consultar, não dá pra alterar.'+
+      '<button class="btn" id="offTentar" style="margin-left:auto;padding:4px 10px;white-space:nowrap">Tentar de novo</button>';
+    var t=document.getElementById('offTentar');
+    if(t)t.addEventListener('click',function(){ if(selectedObra)selectObra(selectedObra.id,current); });
+  }
   function canViewTab(view){
     if(view==='torre-rel')view='torre'; // relatório é parte da Torre de Controle
     if(view==='cad-acessos'||view==='cad-log')return isPlanejador();
@@ -1086,6 +1194,52 @@
     if(el){el.classList.add('active');
       var grp=el.closest('.nav-group'); if(grp && !grp.classList.contains('nav-solo')) grp.classList.add('open');}
   }
+  /* ================= Modo campo (celular) =================
+   * Planejar é coisa de tela larga: montar matriz, arrastar linha de balanço, cadastrar lote.
+   * Na obra o que se faz é consultar e acompanhar. Então no celular liberamos as telas de
+   * consulta/acompanhamento e as de cadastro avisam antes de abrir — não ficam proibidas,
+   * só deixam claro que vão ser desconfortáveis. */
+  var MOBILE_OK={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-hist':1,'cr-cenarios':1,
+    'ac-curvas':1,'ac-med':1,'lp-medio':1,'lp-semana':1,'lp-ppc':1};
+  var MOBILE_FORCE={};                                   // telas que o usuário mandou abrir assim mesmo
+  var MOBILE_TAB_MATRIZ={tc:1,resumo:1,gantt:1};         // abas da matriz no celular
+  var MOBILE_TAB_LB={lb:1,gantt:1};                      // abas da linha de balanço no celular
+  var MOBILE_HIST_OCULTA={realizado:1,cadastro:1,catFuncoes:1,catEquip:1,equipe:1,apoioaloc:1};
+  function isMobile(){ try{ return window.matchMedia('(max-width:760px)').matches; }catch(e){ return false; } }
+  function mobileBloqueada(view){ return isMobile()&&!MOBILE_OK[view]&&!MOBILE_FORCE[view]; }
+  function mobileGateHTML(view){
+    var nome=(CRUMB[view]||['Esta tela']).join(' · ');
+    return '<div class="card" style="text-align:center;padding:30px 16px">'+
+      '<div style="font-size:30px;line-height:1;margin-bottom:10px">🖥️</div>'+
+      '<h2 style="margin:0 0 6px;font-family:Archivo,sans-serif;font-size:18px">'+escAttr(nome)+'</h2>'+
+      '<div class="note" style="max-width:380px;margin:0 auto 18px">Essa é uma tela de cadastro/edição, feita pra monitor. No celular ela abre, mas fica apertada — o recomendado é usar o computador.</div>'+
+      '<button class="btn" id="mobAbrir">Abrir mesmo assim</button></div>';
+  }
+  /* Barra fixa embaixo com as telas de obra. Respeita a permissão de cada perfil. */
+  var FIELDBAR=[['torre','Torre','grid'],['cr-matriz','Matriz','chart'],['cr-hist','Histograma','pulse'],
+                ['lp-semana','Semana','check'],['__menu','Menu','folder']];
+  function renderFieldBar(){
+    var el=document.getElementById('fieldBar'); if(!el)return;
+    el.innerHTML=FIELDBAR.filter(function(f){ return f[0]==='__menu'||canViewTab(f[0]); }).map(function(f){
+      var act=(f[0]===current)?' active':'';
+      return '<button data-fb="'+f[0]+'" class="'+act.trim()+'"><svg viewBox="0 0 24 24">'+(ICONS[f[2]]||'')+'</svg>'+f[1]+'</button>';
+    }).join('');
+    el.querySelectorAll('[data-fb]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var id=b.getAttribute('data-fb');
+        if(id==='__menu'){ document.getElementById('side').classList.toggle('open'); return; }
+        go(id);
+      });
+    });
+  }
+  // Girar o aparelho ou abrir no desktop muda o que cabe na tela: redesenha ao cruzar o limite.
+  (function(){
+    var ultimo=isMobile();
+    window.addEventListener('resize',function(){
+      var m=isMobile(); if(m===ultimo)return;
+      ultimo=m; renderFieldBar(); if(current)go(current);
+    });
+  })();
   function go(view){
     if(!canViewTab(view))view=firstAllowedTab();
     var sameView=(view===current);
@@ -1095,8 +1249,14 @@
     current=view; markActive();
     var c=CRUMB[view]||['—'];
     document.getElementById('crumb').innerHTML=c.map(function(x,i){return i===c.length-1?'<b>'+x+'</b>':x;}).join(' <span style="opacity:.4">/</span> ');
-    document.getElementById('content').innerHTML=(VIEWS[view]||VIEWS.torre)();
-    afterRender(view);
+    if(mobileBloqueada(view)){
+      document.getElementById('content').innerHTML=mobileGateHTML(view);
+      var ab=document.getElementById('mobAbrir');
+      if(ab)ab.addEventListener('click',function(){ MOBILE_FORCE[view]=1; go(view); });
+    } else {
+      document.getElementById('content').innerHTML=(VIEWS[view]||VIEWS.torre)();
+      afterRender(view);
+    }
     if(sameView){
       document.getElementById('content').scrollTop=keepContentScroll;
       window.scrollTo(0,keepPageScroll);
@@ -1115,6 +1275,7 @@
     refreshTopSaveBtn(); refreshLotViewBtn(); refreshRoleBadge(); applyReadOnly();
     if(selectedObra){ try{ safeStore.setItem('lps-tripoloni-lastview',view); }catch(e){} }
     PRES_TELA=(CRUMB[view]||[]).join(' / ');
+    renderFieldBar(); refreshOffBar();
   }
   function hasAnyDirty(){
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
@@ -1328,6 +1489,7 @@
 
     window._cronoTab=window._cronoTab||'tc';
     if(isReadOnly()&&(window._cronoTab==='ajuste'||window._cronoTab==='equipe'))window._cronoTab='tc';
+    if(isMobile()&&!MOBILE_TAB_MATRIZ[window._cronoTab])window._cronoTab='tc';
     var tabs=cronoTabsHTML('cr-matriz');
 
     return head('Tempo-Caminho','Cronograma automático para obras rodoviárias — monte, importe, ajuste e exporte.','')+
@@ -1679,6 +1841,7 @@
   var TOT_FILTER='todos', TOT_OPEN={};
   var SVCPR_FILTER='todos', SVCPR_OPEN={};
   function sectionCard(key,title,note,actionsHtml,bodyHtml){
+    if(isMobile()&&MOBILE_HIST_OCULTA[key])return ''; // cadastro e apontamento ficam fora do celular
     var open=HIST_OPEN[key]!==false;
     return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;'+(open?'margin-bottom:10px':'')+'">'+
       '<div style="display:flex;align-items:flex-start;gap:6px"><button class="iconbtn" data-histtoggle="'+key+'" title="'+(open?'Recolher':'Expandir')+'">'+(open?'▾':'▸')+'</button>'+
@@ -7938,7 +8101,10 @@
       return '<button class="subtab'+(MF_MODE===m[0]?' active':'')+'" data-mfmode="'+m[0]+'">'+m[1]+'</button>';
     }).join('');
     var durTot=calc&&calc.maxDia?(Math.ceil(calc.maxDia)+' dias (~'+(Math.ceil(calc.maxDia/DIAS_SEM))+' semanas)'):'—';
-    var abas=[['ajuste','Ajuste manual'],['lb','Linha de balanço'],['gantt','Gantt'],['curva','Curva S']].map(function(t){
+    if(isMobile()&&!MOBILE_TAB_LB[LB_TAB])LB_TAB='lb';
+    var abas=[['ajuste','Ajuste manual'],['lb','Linha de balanço'],['gantt','Gantt'],['curva','Curva S']].filter(function(t){
+      return !isMobile()||MOBILE_TAB_LB[t[0]];   // no celular: linha de balanço e gantt
+    }).map(function(t){
       return '<button class="subtab'+(LB_TAB===t[0]?' active':'')+'" data-lbtab="'+t[0]+'">'+t[1]+'</button>';
     }).join('');
     var vistas=[['linhas','Linhas + quadros'],['so-linhas','Só linhas'],['quadros','Só quadros']].map(function(v){
@@ -8394,6 +8560,7 @@
     return TABS.filter(function(t){
       if(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
       if(t[2]&&!canViewTab(t[2]))return false;
+      if(isMobile()&&!MOBILE_TAB_MATRIZ[t[0]])return false; // no celular: tempo caminho, resumo e gantt
       return true;
     }).map(function(t){
       var act='';
@@ -9203,13 +9370,19 @@
   async function selectObra(id,initialView,silent){
     var o=(window._OBRAS||[]).find(function(x){return x.id===id;})||{id:id,nome:'Obra'};
     document.getElementById('obraSelName').textContent=o.nome||'Obra';
+    OFFLINE_MODE=false; OFFLINE_EM='';
     try{ await sbLoadCadastro(id); }
-    catch(e){ if(!silent)alert('Falha ao carregar a obra: '+((e&&e.message)||e)); return; }
+    catch(e){
+      var snap=null; try{ snap=await offlineLer(id); }catch(e2){}
+      if(snap&&snap.dados){ aplicarCadastro(snap.dados); OFFLINE_MODE=true; OFFLINE_EM=snap.em||''; }
+      else { if(!silent)alert('Falha ao carregar a obra: '+((e&&e.message)||e)); return; }
+    }
     selectedObra={id:id,nome:o.nome}; CUR={id:id,nome:o.nome};
     // Perfil nesta obra. Sem linha em obra_membros (admin global) ou erro (migração 14 ainda
     // não rodada) → segue como planejador, igual era antes.
     MY_ROLE={papel:'planejador',permissoes:['*']};
     try{
+      if(OFFLINE_MODE)throw new Error('offline');   // sem rede não dá pra conferir o perfil
       if(!IS_APP_ADMIN)IS_APP_ADMIN=await sbIsAppAdmin(); // entrou direto numa obra, sem passar pela lista
       var role=await sbLoadMyRole(id);
       // Desenvolvedor não é rebaixado pelo papel que tiver (ou não tiver) nesta obra.
@@ -9283,6 +9456,37 @@
   document.querySelectorAll('.avatar').forEach(function(el){el.style.cursor='pointer';if(!el.title||el.title==='Conta')el.title='Sair da conta';el.addEventListener('click',function(){if(confirm('Sair da conta?'))signOut();});});
 
   // Boot: sessão
+  /* ---------- Service worker ----------
+   * Guarda o app (não os dados) pra abrir sem sinal e permite instalar na tela inicial.
+   * Só roda em http/https — aberto direto do arquivo (file://) o navegador não aceita. */
+  (function registraSW(){
+    if(!('serviceWorker' in navigator))return;
+    if(location.protocol!=='http:'&&location.protocol!=='https:')return;
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      reg.addEventListener('updatefound',function(){
+        var novo=reg.installing; if(!novo)return;
+        novo.addEventListener('statechange',function(){
+          // Só avisa quando JÁ existia uma versão rodando — na primeira visita não há o que atualizar.
+          if(novo.state==='installed'&&navigator.serviceWorker.controller)mostrarAtualizacao(reg);
+        });
+      });
+    }).catch(function(e){ console.warn('Service worker não registrado:',e&&e.message); });
+    var recarregando=false;
+    navigator.serviceWorker.addEventListener('controllerchange',function(){
+      if(recarregando)return; recarregando=true; location.reload();
+    });
+  })();
+  function mostrarAtualizacao(reg){
+    var b=document.createElement('div');
+    b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:200;display:flex;gap:10px;align-items:center;'+
+      'background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:11px;padding:10px 14px;font-size:13px';
+    b.innerHTML='Nova versão disponível. <button class="btn primary" style="padding:5px 11px">Atualizar</button>';
+    b.querySelector('button').addEventListener('click',function(){
+      if(reg.waiting)reg.waiting.postMessage('pular-espera'); else location.reload();
+    });
+    document.body.appendChild(b);
+  }
+
   (async function boot(){
     if(!SB){ showAuth(); return; }
     try{ var s=await SB.auth.getSession(); if(s&&s.data&&s.data.session){ hideAuth(); await enterApp(); } else { showAuth(); } }
