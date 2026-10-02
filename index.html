@@ -381,6 +381,13 @@
   .mp-lotebtn:hover{color:var(--accent);text-decoration:underline}
   .mp-vazia{display:block;width:100%;min-height:34px;background:none;border:0;cursor:pointer;border-radius:5px}
   .mp-vazia:hover{background:var(--elev);box-shadow:inset 0 0 0 1px var(--line)}
+  /* Quebra por categoria/setor/responsável: tudo numa linha só, sem rolagem lateral. */
+  .mpq{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;border-top:1px solid var(--line-2)}
+  .mpq-head{border-top:0;color:var(--muted);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;padding-top:10px}
+  .mpq-l{flex:0 0 86px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2)}
+  .mpq-b{flex:1;min-width:0;height:13px}
+  .mpq-n{flex:0 0 26px;text-align:right}
+  .mpq-i{flex:0 0 36px;text-align:right;font-weight:700}
   .mp-list{list-style:none;margin:0;padding:0}
   .mp-li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 4px;border-top:1px solid var(--line-2);font-size:12.5px}
   .mp-li:first-child{border-top:0}
@@ -3348,7 +3355,7 @@
    * com o prazo vencido. Se fosse gravado, estaria errado no dia seguinte, porque ninguém
    * volta no sistema só pra mudar o rótulo. */
   async function sbMPListar(obraId){
-    var r=await SB.from('restricoes').select('id,codigo,descricao,servico_id,lote_id,pacote,local,categoria,setor,responsavel,data_identificacao,data_prazo,data_prazo_original,data_conclusao,status,semana,equipe,revisoes,observacao')
+    var r=await SB.from('restricoes').select('id,codigo,descricao,servico_id,lote_id,pacote,local,categoria,setor,responsavel,data_identificacao,data_impacto,data_prazo,data_prazo_original,data_conclusao,status,semana,equipe,revisoes,observacao')
       .eq('obra_id',obraId).order('created_at',{ascending:true});
     if(r.error)throw r.error; return r.data||[];
   }
@@ -3364,6 +3371,7 @@
   var MP_DET=null;                                     // restrição aberta no acompanhamento
   var MP_F={sit:'todas',cat:'',setor:'',resp:'',q:''};  // filtros do acompanhamento
   var MP_DASH={ini:'',fim:''};                         // recorte do dashboard (data de identificação)
+  var MP_EVO='semana';                                 // granularidade dos gráficos de evolução
   var MP_FORM=null;                                    // {loteId,servicoId,semana,equipe} com o cadastro aberto
 
   var MP_SITS={
@@ -3375,17 +3383,22 @@
     cancelada :{lab:'Cancelada',           cor:'#9ca3af'}
   };
   var MP_SIT_ORDEM=['rem_prazo','rem_atraso','atrasada','no_prazo','sem_data','cancelada'];
+  /** A data que decide tudo é a de IMPACTO — quando a restrição passa a atrapalhar a obra.
+   *  A previsão de remoção é o plano de quem vai resolver e pode ser revisada; adiar o plano
+   *  não muda o fato de a obra ser impactada na mesma data, então não mexe no IRR. */
+  function mpLimite(r){ return r.data_impacto||r.data_prazo||''; }
   function mpSit(r){
     if(r.status==='cancelada')return 'cancelada';
-    if(r.status==='removida')return (r.data_conclusao&&r.data_prazo&&r.data_conclusao>r.data_prazo)?'rem_atraso':'rem_prazo';
-    if(!r.data_prazo)return 'sem_data';
-    return (r.data_prazo<todayISO())?'atrasada':'no_prazo';
+    var lim=mpLimite(r);
+    if(r.status==='removida')return (r.data_conclusao&&lim&&r.data_conclusao>lim)?'rem_atraso':'rem_prazo';
+    if(!lim)return 'sem_data';
+    return (lim<todayISO())?'atrasada':'no_prazo';
   }
   function mpDias(a,b){ if(!a||!b)return null; return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000); }
   function mpAtraso(r){
-    var s=mpSit(r);
-    if(s==='atrasada')return mpDias(r.data_prazo,todayISO());
-    if(s==='rem_atraso')return mpDias(r.data_prazo,r.data_conclusao);
+    var s=mpSit(r), lim=mpLimite(r);
+    if(s==='atrasada')return mpDias(lim,todayISO());
+    if(s==='rem_atraso')return mpDias(lim,r.data_conclusao);
     return 0;
   }
   function mpLoteNome(id){ var i=(window._LOTIDS||[]).indexOf(id); return i>=0?LOTS[i]:''; }
@@ -3417,22 +3430,12 @@
     var venc=c.rem_prazo+c.rem_atraso+c.atrasada;
     var tmdS=0,tmdN=0,tmrS=0,tmrN=0;
     lista.forEach(function(r){
-      var base=r.data_prazo_original||r.data_prazo;
+      var base=mpLimite(r);
       if(base&&r.data_identificacao){ var d=mpDias(r.data_identificacao,base); if(d!=null&&d>=0){tmdS+=d;tmdN++;} }
       if(r.status==='removida'&&r.data_conclusao&&r.data_identificacao){ var d2=mpDias(r.data_identificacao,r.data_conclusao); if(d2!=null&&d2>=0){tmrS+=d2;tmrN++;} }
     });
-    // Prazo revisado conta à parte: adiar a data tira a restrição da conta de atrasadas e
-    // levanta o IRR. Não é fraude, é replanejamento — mas precisa ficar à vista.
-    var revN=0, revDias=0;
-    lista.forEach(function(r){
-      var rev=Array.isArray(r.revisoes)?r.revisoes:[];
-      if(!rev.length)return;
-      revN++;
-      var d=mpDias(r.data_prazo_original,r.data_prazo); if(d!=null)revDias+=d;
-    });
     return {c:c,total:lista.length,venc:venc,irr:venc?Math.round(100*c.rem_prazo/venc):null,
-      tmd:tmdN?tmdS/tmdN:null,tmr:tmrN?tmrS/tmrN:null,tmdN:tmdN,tmrN:tmrN,
-      revN:revN,revDias:revN?revDias/revN:null};
+      tmd:tmdN?tmdS/tmdN:null,tmr:tmrN?tmrS/tmrN:null,tmdN:tmdN,tmrN:tmrN};
   }
   function mpNoPeriodo(){
     return MP.filter(function(r){
@@ -3452,6 +3455,111 @@
       return true;
     });
   }
+  /* ---------- Agrupamento por período ---------- */
+  var MP_MESES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  function mpPer(iso,modo){
+    if(!iso)return null;
+    var d=new Date(iso+'T00:00:00'); if(isNaN(d))return null;
+    if(modo==='mes')return {k:d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2),
+                            lab:MP_MESES[d.getMonth()]+'/'+String(d.getFullYear()).slice(-2)};
+    var sem=isoWeek(d);
+    return {k:d.getFullYear()+'-W'+('0'+sem).slice(-2), lab:'S'+sem};
+  }
+  /** Eixo de períodos presente nos dados, do mais antigo pro mais novo, limitado aos últimos n. */
+  function mpEixo(mapa,n){
+    var ks=Object.keys(mapa).sort();
+    return ks.slice(-(n||24));
+  }
+
+  /** Restrições por semana/mês: barras empilhadas por situação (na data de impacto) e a linha
+   *  de identificadas (na data em que apareceram) — a leitura do Excel da obra. */
+  function mpPorPeriodoHTML(lista,modo){
+    var g={};
+    function slot(k,lab){ return g[k]||(g[k]={lab:lab,ident:0,c:{}}); }
+    lista.forEach(function(r){
+      var pi=mpPer(mpLimite(r),modo);
+      if(pi){ var s=slot(pi.k,pi.lab); var sit=mpSit(r); s.c[sit]=(s.c[sit]||0)+1; }
+      var pd=mpPer(r.data_identificacao,modo);
+      if(pd)slot(pd.k,pd.lab).ident++;
+    });
+    var ks=mpEixo(g,modo==='mes'?18:24);
+    if(!ks.length)return '<div class="note">Sem dados no período.</div>';
+    var maxV=1;
+    ks.forEach(function(k){
+      var t=0; MP_SIT_ORDEM.forEach(function(s){ t+=g[k].c[s]||0; });
+      maxV=Math.max(maxV,t,g[k].ident);
+    });
+    var W=Math.max(360,ks.length*42), H=190, base=H-26, topo=14, passo=W/ks.length;
+    var bw=Math.min(26,passo*0.56);
+    var y=function(v){ return base-(base-topo)*v/maxV; };
+    var barras='', pts=[];
+    ks.forEach(function(k,i){
+      var x=(i+0.5)*passo, acc=0;
+      MP_SIT_ORDEM.forEach(function(s){
+        var v=g[k].c[s]||0; if(!v)return;
+        var y1=y(acc+v), y2=y(acc);
+        barras+='<rect x="'+(x-bw/2)+'" y="'+y1+'" width="'+bw+'" height="'+Math.max(1,y2-y1)+'" fill="'+MP_SITS[s].cor+'"><title>'+g[k].lab+' · '+MP_SITS[s].lab+': '+v+'</title></rect>';
+        acc+=v;
+      });
+      if(acc)barras+='<text x="'+x+'" y="'+(y(acc)-4)+'" text-anchor="middle" font-size="9" fill="var(--ink-2)">'+acc+'</text>';
+      pts.push([x,y(g[k].ident),g[k].ident,g[k].lab]);
+      barras+='<text x="'+x+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+g[k].lab+'</text>';
+    });
+    var linha='<polyline points="'+pts.map(function(p){return p[0]+','+p[1];}).join(' ')+'" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linejoin="round"/>'+
+      pts.map(function(p){ return '<circle cx="'+p[0]+'" cy="'+p[1]+'" r="2.6" fill="var(--ink)"><title>'+p[3]+': '+p[2]+' identificadas</title></circle>'; }).join('');
+    var leg=MP_SIT_ORDEM.map(function(s){
+      return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2)"><span style="width:10px;height:10px;border-radius:3px;background:'+MP_SITS[s].cor+'"></span>'+MP_SITS[s].lab+'</span>';
+    }).join('')+'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:2px;background:var(--ink)"></span>Identificadas</span>';
+    return '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+H+'" style="width:100%;min-width:'+W+'px;height:'+H+'px;display:block">'+
+      '<line x1="0" y1="'+base+'" x2="'+W+'" y2="'+base+'" stroke="var(--line)"/>'+barras+linha+'</svg></div>'+
+      '<div style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:8px">'+leg+'</div>';
+  }
+
+  /** Evolução do TMD e do TMR: barras de identificadas no período e as duas médias em dias. */
+  function mpEvolucaoHTML(lista,modo){
+    var g={};
+    lista.forEach(function(r){
+      var p=mpPer(r.data_identificacao,modo); if(!p)return;
+      var s=g[p.k]||(g[p.k]={lab:p.lab,n:0,tmdS:0,tmdN:0,tmrS:0,tmrN:0});
+      s.n++;
+      var d=mpDias(r.data_identificacao,mpLimite(r)); if(d!=null&&d>=0){ s.tmdS+=d; s.tmdN++; }
+      if(r.status==='removida'){ var d2=mpDias(r.data_identificacao,r.data_conclusao); if(d2!=null&&d2>=0){ s.tmrS+=d2; s.tmrN++; } }
+    });
+    var ks=mpEixo(g,modo==='mes'?18:24);
+    if(!ks.length)return '<div class="note">Sem dados no período.</div>';
+    var maxN=1,maxD=1;
+    ks.forEach(function(k){ var s=g[k];
+      maxN=Math.max(maxN,s.n);
+      if(s.tmdN)maxD=Math.max(maxD,s.tmdS/s.tmdN);
+      if(s.tmrN)maxD=Math.max(maxD,s.tmrS/s.tmrN);
+    });
+    var W=Math.max(360,ks.length*42), H=190, base=H-26, topo=16, passo=W/ks.length;
+    var bw=Math.min(24,passo*0.5);
+    var yN=function(v){ return base-(base-topo)*v/maxN; };
+    var yD=function(v){ return base-(base-topo)*v/maxD; };
+    var barras='', ptsD=[], ptsR=[];
+    ks.forEach(function(k,i){
+      var s=g[k], x=(i+0.5)*passo;
+      barras+='<rect x="'+(x-bw/2)+'" y="'+yN(s.n)+'" width="'+bw+'" height="'+Math.max(1,base-yN(s.n))+'" rx="2" fill="var(--accent)" opacity=".30"><title>'+s.lab+': '+s.n+' identificadas</title></rect>'+
+        '<text x="'+x+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+s.lab+'</text>';
+      if(s.tmdN)ptsD.push([x,yD(s.tmdS/s.tmdN),(s.tmdS/s.tmdN)]);
+      if(s.tmrN)ptsR.push([x,yD(s.tmrS/s.tmrN),(s.tmrS/s.tmrN)]);
+    });
+    var linha=function(pts,cor,nome){
+      if(!pts.length)return '';
+      return '<polyline points="'+pts.map(function(p){return p[0]+','+p[1];}).join(' ')+'" fill="none" stroke="'+cor+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'+
+        pts.map(function(p){ return '<circle cx="'+p[0]+'" cy="'+p[1]+'" r="2.8" fill="'+cor+'"><title>'+nome+': '+p[2].toFixed(1)+' dias</title></circle>'; }).join('');
+    };
+    var leg='<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2)"><span style="width:10px;height:10px;border-radius:3px;background:var(--accent);opacity:.4"></span>Identificadas</span>'+
+      '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:2px;background:#3b82f6"></span>TMD (dias disponíveis)</span>'+
+      '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-2)"><span style="width:14px;height:2px;background:#22c55e"></span>TMR (dias até remover)</span>';
+    return '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+H+'" style="width:100%;min-width:'+W+'px;height:'+H+'px;display:block">'+
+      '<line x1="0" y1="'+base+'" x2="'+W+'" y2="'+base+'" stroke="var(--line)"/>'+barras+
+      linha(ptsD,'#3b82f6','TMD')+linha(ptsR,'#22c55e','TMR')+
+      '<text x="2" y="'+(topo-5)+'" font-size="9" fill="var(--muted)">máx '+Math.round(maxD)+' d · '+maxN+' restrições</text></svg></div>'+
+      '<div style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:8px">'+leg+'</div>';
+  }
+
   /** Barra empilhada de situação — mais legível que a rosca do Excel na largura de uma tela. */
   function mpBarraSit(c,total){
     if(!total)return '<div class="note">Sem restrições no período.</div>';
@@ -3481,22 +3589,22 @@
       var segs=MP_SIT_ORDEM.filter(function(s){return ind.c[s]>0;}).map(function(s){
         return '<div title="'+MP_SITS[s].lab+': '+ind.c[s]+'" style="width:'+(100*ind.c[s]/n)+'%;background:'+MP_SITS[s].cor+'"></div>';
       }).join('');
-      return '<tr><td style="white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis">'+escAttr(k)+'</td>'+
-        '<td style="width:100%"><div style="display:flex;height:14px;border-radius:4px;overflow:hidden;width:'+(100*n/maxN)+'%;min-width:3%">'+segs+'</div></td>'+
-        '<td class="r mono" style="white-space:nowrap">'+n+'</td>'+
-        '<td class="r mono" style="white-space:nowrap;font-weight:700">'+(ind.irr==null?'—':ind.irr+'%')+'</td></tr>';
+      return '<div class="mpq"><div class="mpq-l" title="'+escAttr(k)+'">'+escAttr(k)+'</div>'+
+        '<div class="mpq-b"><div style="display:flex;height:100%;width:'+Math.max(4,100*n/maxN)+'%;border-radius:3px;overflow:hidden">'+segs+'</div></div>'+
+        '<div class="mpq-n mono">'+n+'</div>'+
+        '<div class="mpq-i mono">'+(ind.irr==null?'—':ind.irr+'%')+'</div></div>';
     }).join('');
     return '<div class="card"><div class="eyebrow">IRR e situação por '+rotulo+'</div>'+
-      '<div class="tbl-wrap" style="margin-top:10px"><table class="edtbl" style="font-size:12px">'+
-      '<thead><tr><th>'+rotulo+'</th><th></th><th class="r">Nº</th><th class="r">IRR</th></tr></thead><tbody>'+linhas+'</tbody></table></div></div>';
+      '<div class="mpq mpq-head"><div class="mpq-l">'+rotulo+'</div><div class="mpq-b"></div><div class="mpq-n">Nº</div><div class="mpq-i">IRR</div></div>'+
+      linhas+'</div>';
   }
   /** IRR por semana do prazo: quanto do que vencia naquela semana saiu no prazo. */
   function mpIrrSemanaHTML(lista){
     var porSem={};
     lista.forEach(function(r){
       var s=mpSit(r); if(s!=='rem_prazo'&&s!=='rem_atraso'&&s!=='atrasada')return;
-      if(!r.data_prazo)return;
-      var d=new Date(r.data_prazo+'T00:00:00'), k=d.getFullYear()+'-'+('0'+isoWeek(d)).slice(-2);
+      var lim=mpLimite(r); if(!lim)return;
+      var d=new Date(lim+'T00:00:00'), k=d.getFullYear()+'-'+('0'+isoWeek(d)).slice(-2);
       var g=porSem[k]||(porSem[k]={lab:'S'+isoWeek(d),prazo:0,tot:0});
       g.tot++; if(s==='rem_prazo')g.prazo++;
     });
@@ -3640,7 +3748,7 @@
         setor:col.setor>=0?(String(row[col.setor]||'').trim()||null):null,
         responsavel:col.resp>=0?(String(row[col.resp]||'').trim()||null):null,
         data_identificacao:ident||todayISO(),
-        data_prazo:limite||null, data_prazo_original:limite||null,
+        data_impacto:limite||null, data_prazo:limite||null, data_prazo_original:limite||null,
         data_conclusao:(st==='removida'?(remoc||null):null),
         status:st, revisoes:[],
         observacao:col.obs>=0?(String(row[col.obs]||'').trim()||null):null,
@@ -3763,7 +3871,8 @@
         fwrap('Setor','<select id="mpSetor" class="einp" style="width:100%">'+mpOpts(mpSetores().map(function(x){return [x,x];}),f.setor,'— sem setor —')+'</select>')+
         fwrap('Responsável','<input id="mpResp" class="einp" style="width:100%" placeholder="Nome do responsável" list="mpResps">')+
         fwrap('Data (identificação)','<input id="mpData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
-        fwrap('Prev. resolução','<input id="mpResol" class="einp" type="date" style="width:100%">')+
+        fwrap('Data de impacto','<input id="mpImpacto" class="einp" type="date" style="width:100%" title="quando a restrição passa a atrapalhar a obra">')+
+        fwrap('Prev. de remoção','<input id="mpResol" class="einp" type="date" style="width:100%">')+
       '</div>'+
       '<datalist id="mpResps">'+mpResponsaveis().map(function(x){return '<option value="'+escAttr(x)+'">';}).join('')+'</datalist>'+
       '<div style="margin-top:12px;text-align:right"><button class="btn primary" id="mpAdd">+ Adicionar restrição</button></div></div>';
@@ -3775,14 +3884,15 @@
   async function mpSalvarNova(){
     var desc=(mpVal('mpDesc')||'').trim();
     if(!desc){ alert('Descreva a restrição.'); return; }
-    var prazo=mpVal('mpResol')||null;
+    var impacto=mpVal('mpImpacto')||null;
+    var prazo=mpVal('mpResol')||impacto;   // sem previsão própria, vale a data de impacto
     var p={codigo:mpProxCodigo(),descricao:desc,
       lote_id:mpVal('mpLote')||null, servico_id:mpVal('mpServ')||null,
       pacote:(mpVal('mpPacote')||'').trim()||null, local:(mpVal('mpLocal')||'').trim()||null,
       categoria:MP_FORM.cat||'mao_de_obra', setor:mpVal('mpSetor')||null,
       responsavel:(mpVal('mpResp')||'').trim()||null,
       data_identificacao:mpVal('mpData')||todayISO(),
-      data_prazo:prazo, data_prazo_original:prazo,
+      data_impacto:impacto||prazo, data_prazo:prazo, data_prazo_original:prazo,
       status:'aberta', semana:MP_FORM.semana||null, equipe:MP_FORM.equipe||null,
       revisoes:[], observacao:null};
     try{
@@ -3867,24 +3977,25 @@
         '<td class="note" style="white-space:nowrap">'+escAttr(r.setor||'—')+'</td>'+
         '<td class="note" style="white-space:nowrap">'+escAttr(r.responsavel||'—')+'</td>'+
         '<td class="mono" style="white-space:nowrap">'+brDate(r.data_identificacao)+'</td>'+
-        '<td class="mono" style="white-space:nowrap">'+brDate(r.data_prazo)+((r.revisoes||[]).length?' <span class="note" title="prazo revisado '+(r.revisoes||[]).length+'×">↻'+(r.revisoes||[]).length+'</span>':'')+'</td>'+
+        '<td class="mono" style="white-space:nowrap">'+brDate(mpLimite(r))+'</td>'+
+        '<td class="mono" style="white-space:nowrap">'+brDate(r.data_prazo)+((r.revisoes||[]).length?' <span class="note" title="revisada '+(r.revisoes||[]).length+'x">↻'+(r.revisoes||[]).length+'</span>':'')+'</td>'+
         '<td style="white-space:nowrap">'+mpPillSit(r)+'</td>'+
         '<td class="r"><button class="btn" data-mpdet="'+r.id+'" style="padding:4px 10px">'+(aberto?'Fechar':'Abrir')+'</button></td></tr>';
-      return tr+(aberto?'<tr><td colspan="9" style="padding:0">'+mpDetalheHTML(r)+'</td></tr>':'');
+      return tr+(aberto?'<tr><td colspan="10" style="padding:0">'+mpDetalheHTML(r)+'</td></tr>':'');
     }).join('');
     return '<div class="card">'+filtros+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead><tr>'+
       '<th>Código</th><th>Restrição</th><th>Lote / serviço</th><th>Setor</th><th>Responsável</th>'+
-      '<th>Identificada</th><th>Prazo</th><th>Situação</th><th></th></tr></thead><tbody>'+
-      (linhas||'<tr><td colspan="9" class="note">Nenhuma restrição com esses filtros.</td></tr>')+
+      '<th>Identificada</th><th>Impacto</th><th>Prev. remoção</th><th>Situação</th><th></th></tr></thead><tbody>'+
+      (linhas||'<tr><td colspan="10" class="note">Nenhuma restrição com esses filtros.</td></tr>')+
       '</tbody></table></div>'+
       '<div class="note" style="margin-top:8px">'+lista.length+' de '+MP.length+' restrições.</div></div>';
   }
   function mpDetalheHTML(r){
     var rev=(Array.isArray(r.revisoes)?r.revisoes:[]);
-    var hist=rev.length?('<div class="eyebrow" style="margin:14px 0 6px">Revisões de prazo</div>'+
+    var hist=rev.length?('<div class="eyebrow" style="margin:14px 0 6px">Revisões de data</div>'+
       '<ul class="mp-list">'+rev.map(function(v){
-        return '<li class="mp-li"><span class="mono">'+brDate(v.de)+' → '+brDate(v.para)+'</span> <span class="note">'+escAttr(v.motivo||'')+'</span>'+
+        return '<li class="mp-li"><span class="note">'+(v.campo==='impacto'?'impacto':'prev. remoção')+'</span> <span class="mono">'+brDate(v.de)+' → '+brDate(v.para)+'</span> <span class="note">'+escAttr(v.motivo||'')+'</span>'+
           '<span class="note" style="margin-left:auto">'+escAttr((v.por||'')+' · '+brDate((v.em||'').slice(0,10)))+'</span></li>';
       }).join('')+'</ul>'):'';
     var removida=(r.status==='removida'), cancelada=(r.status==='cancelada');
@@ -3893,11 +4004,12 @@
       acoes='<div class="mpgrid" style="margin-top:4px">'+
         fwrap('Concluir em','<input id="mpConcData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
         fwrap('&nbsp;','<button class="btn primary" data-mpresolver="'+r.id+'" style="width:100%">✓ Marcar como removida</button>')+
-        fwrap('Novo prazo','<input id="mpNovoPrazo" class="einp" type="date" style="width:100%" value="'+escAttr(r.data_prazo||'')+'">')+
-        fwrap('Motivo da revisão','<input id="mpMotivo" class="einp" style="width:100%" placeholder="obrigatório pra mudar a data">')+
+        fwrap('Nova data de impacto','<input id="mpNovoImpacto" class="einp" type="date" style="width:100%" value="'+escAttr(mpLimite(r))+'">')+
+        fwrap('Nova prev. de remoção','<input id="mpNovoPrazo" class="einp" type="date" style="width:100%" value="'+escAttr(r.data_prazo||'')+'">')+
+        fwrap('Motivo da revisão','<input id="mpMotivo" class="einp" style="width:100%" placeholder="obrigatório pra mudar qualquer uma das datas">')+
       '</div>'+
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
-        '<button class="btn" data-mprevisar="'+r.id+'">↻ Revisar prazo</button>'+
+        '<button class="btn" data-mprevisar="'+r.id+'">↻ Revisar datas</button>'+
         '<button class="btn" data-mpcancelar="'+r.id+'">⃠ Cancelar restrição</button>'+
         '<button class="btn" data-mpdel="'+r.id+'" style="margin-left:auto">✕ Excluir</button></div>';
     } else {
@@ -3906,11 +4018,12 @@
         '<button class="btn" data-mpreabrir="'+r.id+'">↺ Reabrir</button>'+
         '<button class="btn" data-mpdel="'+r.id+'" style="margin-left:auto">✕ Excluir</button></div>';
     }
-    var tmd=mpDias(r.data_identificacao,r.data_prazo_original||r.data_prazo);
+    var tmd=mpDias(r.data_identificacao,mpLimite(r));
     var tmr=(r.status==='removida')?mpDias(r.data_identificacao,r.data_conclusao):null;
     return '<div class="assign" style="margin:0;border-radius:0">'+
       '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px">'+
-        '<span class="note">Prazo original <b class="mono">'+brDate(r.data_prazo_original)+'</b></span>'+
+        '<span class="note">Impacto <b class="mono">'+brDate(mpLimite(r))+'</b></span>'+
+        '<span class="note">Prev. de remoção <b class="mono">'+brDate(r.data_prazo)+'</b></span>'+
         '<span class="note">Tempo disponível <b class="mono">'+(tmd==null?'—':tmd+' d')+'</b></span>'+
         (tmr!=null?'<span class="note">Tempo de remoção <b class="mono">'+tmr+' d</b></span>':'')+
         (r.pacote?'<span class="note">Pacote <b>'+escAttr(r.pacote)+'</b></span>':'')+
@@ -3945,37 +4058,50 @@
       '<div class="kpi"><div class="stripe" style="background:var(--good)"></div><div class="lab">TMR · tempo médio de remoção</div>'+
         '<div class="val num">'+(ind.tmr==null?'—':ind.tmr.toFixed(1))+'<span style="font-size:14px;color:var(--muted)"> dias</span></div>'+
         '<div class="foot">da identificação até a remoção ('+ind.tmrN+')</div></div>'+
-      '<div class="kpi"><div class="stripe" style="background:var(--warn)"></div><div class="lab">Prazos revisados</div>'+
-        '<div class="val num">'+ind.revN+'</div>'+
-        '<div class="foot">'+(ind.revDias==null?'nenhuma data adiada':('adiados em média '+ind.revDias.toFixed(1)+' dias'))+'</div></div></div>';
+      '</div>';
     var sitCard='<div class="card"><div class="eyebrow">Situação no período</div>'+
       '<div style="margin-top:12px">'+mpBarraSit(ind.c,ind.total)+'</div></div>';
     var irrSem='<div class="card"><div class="eyebrow">IRR por semana</div>'+
       '<div class="note">Quanto do que vencia em cada semana saiu no prazo.</div>'+
       '<div style="margin-top:10px">'+mpIrrSemanaHTML(lista)+'</div></div>';
+    var modoBtns=[['semana','Semanal'],['mes','Mensal']].map(function(m){
+      return '<button class="subtab'+(MP_EVO===m[0]?' active':'')+'" data-mpevo="'+m[0]+'">'+m[1]+'</button>';
+    }).join('');
+    var porPer='<div class="card" style="margin-top:14px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">'+
+        '<div><div class="eyebrow" style="margin:0">Restrições por '+(MP_EVO==='mes'?'mês':'semana')+'</div>'+
+        '<div class="note">Barras: situação na data de impacto. Linha: quantas foram identificadas.</div></div>'+
+        '<div class="subtabs" style="margin:0;border:0;padding:0">'+modoBtns+'</div></div>'+
+      '<div style="margin-top:10px">'+mpPorPeriodoHTML(lista,MP_EVO)+'</div></div>';
+    var evo='<div class="card" style="margin-top:14px">'+
+      '<div class="eyebrow">Evolução do TMD e do TMR</div>'+
+      '<div class="note">Média de dias por '+(MP_EVO==='mes'?'mês':'semana')+' de identificação. TMR acima do TMD quer dizer que a remoção demora mais do que o tempo que havia.</div>'+
+      '<div style="margin-top:10px">'+mpEvolucaoHTML(lista,MP_EVO)+'</div></div>';
     // Próximas a vencer e críticas
     var abertas=lista.filter(function(r){ var s=mpSit(r); return s==='no_prazo'||s==='atrasada'; });
     var prox=abertas.filter(function(r){return mpSit(r)==='no_prazo';}).sort(function(a,b){return (a.data_prazo||'').localeCompare(b.data_prazo||'');}).slice(0,10);
     var crit=abertas.filter(function(r){return mpSit(r)==='atrasada';}).sort(function(a,b){return mpAtraso(b)-mpAtraso(a);}).slice(0,10);
     var tabela=function(tit,cor,rows,colExtra,extraFn){
       return '<div class="card"><div class="eyebrow" style="color:'+cor+'">'+tit+'</div>'+
-        (rows.length?'<div class="tbl-wrap" style="margin-top:10px"><table class="edtbl" style="font-size:12px"><thead><tr>'+
-          '<th>Restrição</th><th>'+colExtra+'</th><th>Responsável</th></tr></thead><tbody>'+
+        (rows.length?'<table class="edtbl" style="font-size:12px;margin-top:10px;table-layout:fixed;width:100%"><thead><tr>'+
+          '<th>Restrição</th><th style="width:96px">Impacto</th><th style="width:96px">Prev. remoção</th><th style="width:104px">'+colExtra+'</th><th style="width:110px">Responsável</th></tr></thead><tbody>'+
           rows.map(function(r){
-            return '<tr><td><b class="mono">'+escAttr(r.codigo||'')+'</b> '+escAttr(r.descricao||'')+'</td>'+
-              '<td class="mono" style="white-space:nowrap">'+extraFn(r)+'</td>'+
-              '<td class="note" style="white-space:nowrap">'+escAttr(r.responsavel||'—')+'</td></tr>';
-          }).join('')+'</tbody></table></div>':'<div class="note" style="margin-top:8px">Nada por aqui.</div>')+'</div>';
+            return '<tr><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escAttr(r.descricao||'')+'"><b class="mono">'+escAttr(r.codigo||'')+'</b> '+escAttr(r.descricao||'')+'</td>'+
+              '<td class="mono">'+brDate(mpLimite(r))+'</td>'+
+              '<td class="mono">'+brDate(r.data_prazo)+'</td>'+
+              '<td class="mono">'+extraFn(r)+'</td>'+
+              '<td class="note" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escAttr(r.responsavel||'—')+'</td></tr>';
+          }).join('')+'</tbody></table>':'<div class="note" style="margin-top:8px">Nada por aqui.</div>')+'</div>';
     };
-    var listas='<div class="grid g2" style="margin-top:14px">'+
-      tabela('Próximas a vencer','var(--accent)',prox,'Prazo',function(r){return brDate(r.data_prazo)+' · '+mpDias(hoje,r.data_prazo)+'d';})+
-      tabela('Críticas (prazo vencido)','var(--crit)',crit,'Atraso',function(r){return mpAtraso(r)+' dias';})+
+    var listas='<div style="margin-top:14px;display:flex;flex-direction:column;gap:14px">'+
+      tabela('Próximas a vencer','var(--accent)',prox,'Faltam',function(r){return mpDias(hoje,mpLimite(r))+' dias';})+
+      tabela('Críticas (impacto vencido)','var(--crit)',crit,'Atraso',function(r){return mpAtraso(r)+' dias';})+
     '</div>';
     var quebras='<div class="grid g3" style="margin-top:14px">'+
       mpQuebra(lista,'categoria','categoria')+mpQuebra(lista,'setor','setor')+mpQuebra(lista,'responsavel','responsável')+'</div>';
     var nota='<div class="note" style="margin-top:14px">IRR = removidas no prazo ÷ (removidas + atrasadas em aberto). '+
       'Canceladas e as que ainda estão dentro do prazo ficam fora da conta.</div>';
-    return periodo+kpis+'<div class="grid g2">'+sitCard+irrSem+'</div>'+listas+quebras+nota;
+    return periodo+kpis+'<div class="grid g2">'+sitCard+irrSem+'</div>'+porPer+evo+listas+quebras+nota;
   }
 
   function mpAcharId(id){ return MP.filter(function(x){return x.id===id;})[0]; }
@@ -3988,12 +4114,12 @@
   function mpExportar(){
     if(typeof XLSX==='undefined'){ alert('Biblioteca de planilha não carregou.'); return; }
     var cab=['Código','Descrição','Categoria','Pacote','Local','Lote','Serviço','Setor','Responsável','Identificada',
-             'Prazo original','Prazo atual','Conclusão','Situação','Dias disponíveis','Dias até remover','Revisões','Observação'];
+             'Data de impacto','Prev. remoção','Prazo original','Conclusão','Situação','Dias disponíveis','Dias até remover','Revisões','Observação'];
     var linhas=mpFiltrada().map(function(r){
       return [r.codigo||'',r.descricao||'',catMeta(r.categoria).label,r.pacote||'',r.local||'',mpLoteNome(r.lote_id),mpServNome(r.servico_id),
-        r.setor||'',r.responsavel||'',r.data_identificacao||'',r.data_prazo_original||'',r.data_prazo||'',
+        r.setor||'',r.responsavel||'',r.data_identificacao||'',mpLimite(r),r.data_prazo||'',r.data_prazo_original||'',
         r.data_conclusao||'',MP_SITS[mpSit(r)].lab,
-        mpDias(r.data_identificacao,r.data_prazo_original||r.data_prazo),
+        mpDias(r.data_identificacao,mpLimite(r)),
         (r.status==='removida'?mpDias(r.data_identificacao,r.data_conclusao):''),
         (Array.isArray(r.revisoes)?r.revisoes.length:0), r.observacao||''];
     });
@@ -4082,13 +4208,17 @@
     }); });
     root.querySelectorAll('[data-mprevisar]').forEach(function(b){ b.addEventListener('click',function(){
       var id=b.getAttribute('data-mprevisar'), r=mpAcharId(id); if(!r)return;
-      var nova=mpVal('mpNovoPrazo'), motivo=(mpVal('mpMotivo')||'').trim();
-      if(!nova){ alert('Escolha a nova data.'); return; }
-      if(nova===(r.data_prazo||'')){ alert('A data é a mesma que já está lá.'); return; }
+      var novoImp=mpVal('mpNovoImpacto'), nova=mpVal('mpNovoPrazo'), motivo=(mpVal('mpMotivo')||'').trim();
+      var mudaImp=(novoImp&&novoImp!==(mpLimite(r)||'')), mudaPrazo=(nova&&nova!==(r.data_prazo||''));
+      if(!mudaImp&&!mudaPrazo){ alert('As datas são as mesmas que já estão lá.'); return; }
       if(!motivo){ alert('Escreva o motivo da revisão — é ele que explica o escorregão da data.'); return; }
-      var rev=(Array.isArray(r.revisoes)?r.revisoes:[]).concat([{de:r.data_prazo||null,para:nova,motivo:motivo,
-        em:new Date().toISOString(),por:window._MEU_EMAIL||''}]);
-      mpPatch(id,{data_prazo:nova,revisoes:rev,data_prazo_original:r.data_prazo_original||r.data_prazo||nova});
+      var agora=new Date().toISOString(), quem=window._MEU_EMAIL||'';
+      var rev=(Array.isArray(r.revisoes)?r.revisoes:[]).slice(), patch={};
+      if(mudaImp){ rev.push({campo:'impacto',de:mpLimite(r)||null,para:novoImp,motivo:motivo,em:agora,por:quem}); patch.data_impacto=novoImp; }
+      if(mudaPrazo){ rev.push({campo:'prazo',de:r.data_prazo||null,para:nova,motivo:motivo,em:agora,por:quem});
+        patch.data_prazo=nova; patch.data_prazo_original=r.data_prazo_original||r.data_prazo||nova; }
+      patch.revisoes=rev;
+      mpPatch(id,patch);
     }); });
     root.querySelectorAll('[data-mpdel]').forEach(function(b){ b.addEventListener('click',async function(){
       var id=b.getAttribute('data-mpdel');
@@ -4107,6 +4237,9 @@
     if(i)i.addEventListener('change',function(){ MP_DASH.ini=i.value; renderMedio(); });
     if(f)f.addEventListener('change',function(){ MP_DASH.fim=f.value; renderMedio(); });
     if(l)l.addEventListener('click',function(){ MP_DASH={ini:'',fim:''}; renderMedio(); });
+    root.querySelectorAll('[data-mpevo]').forEach(function(b){
+      b.addEventListener('click',function(){ MP_EVO=b.getAttribute('data-mpevo'); renderMedio(); });
+    });
   }
 
   /* ================= Programação Semanal =================
