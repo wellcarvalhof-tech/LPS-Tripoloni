@@ -28,6 +28,6 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `22_add_presenca.sql` | Tabela `presenca` — mostra quem está usando o app agora (obra e tela), com sinal de vida a cada minuto | ⚠️ novo — rodar pra ver quem está online |
 | `23_add_auditoria.sql` | Tabela `auditoria` + triggers nas tabelas da obra — registra quem alterou o quê e quando (antes/depois), lido em Cadastro → Histórico de alterações | ⚠️ novo — rodar pra ter o histórico |
 | `24_programacao_semanal.sql` | Campos novos nos `compromissos` (grupo, etapa, lote final, detalhamento, origem, ordem) — Programação Semanal com sugestões do Tempo-Caminho e da Linha de Balanço | ⚠️ novo — rodar pra usar a Programação Semanal |
-| `20_add_linha_balanco.sql` | Coluna `obras.linha_balanco` — estudo de linha de balanço (lotes, atividades, início, duração e ritmo), independente do Tempo-Caminho | ⚠️ novo — rodar pra usar a tela Linha de Balanço |
+| `25_fix_views_security_invoker.sql` | Põe `security_invoker` nas views `vw_ppc_semanal` e `vw_curva_s` — sem isso elas ignoravam a RLS e mostravam dados de todas as obras (aviso crítico do Advisor) | ⚠️ novo — rodar pra fechar a falha |
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.

@@ -331,12 +331,14 @@ select p.id as plano_id, p.obra_id, p.semana_iso, p.data_inicio, p.data_fim,
 from public.planos_semanais p
 left join public.compromissos c on c.plano_id = p.id
 group by p.id, p.obra_id, p.semana_iso, p.data_inicio, p.data_fim;
+alter view public.vw_ppc_semanal set (security_invoker = on); -- sem isso a view ignora a RLS das tabelas
 
 create or replace view public.vw_curva_s as
 select m.obra_id, m.data, sum(m.quantidade) as qtd_dia,
   sum(sum(m.quantidade)) over (partition by m.obra_id order by m.data) as qtd_acumulada
 from public.medicoes m
 group by m.obra_id, m.data;
+alter view public.vw_curva_s set (security_invoker = on); -- idem: cada um vê só as obras em que é membro
 
 insert into public.causas_nao_cumprimento (obra_id, nome, categoria) values
  (null,'Falta de projeto / detalhamento','projeto'),
