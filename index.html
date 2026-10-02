@@ -832,12 +832,14 @@
     var r=await SB.from('apoio_admin').delete().eq('id',id);
     if(r.error)throw r.error;
   }
+  var SEM_COL_TERCEIRO=false; // true quando a migração 19 (quantidade_terceiro) ainda não rodou
   async function sbUpsertApontamentoRecurso(obraId,recursoId,dataSemana,quantidade,quantidadeTerceiro){
     await sbRequireSession();
     var reg={obra_id:obraId,recurso_id:recursoId,data_semana:dataSemana,quantidade:quantidade};
     if(quantidadeTerceiro!=null)reg.quantidade_terceiro=quantidadeTerceiro;
     var r=await SB.from('apontamento_recursos').upsert(reg,{onConflict:'recurso_id,data_semana'});
     if(r.error&&/quantidade_terceiro/.test(r.error.message||'')){ // migração 19 ainda não rodada
+      SEM_COL_TERCEIRO=true;
       delete reg.quantidade_terceiro;
       r=await SB.from('apontamento_recursos').upsert(reg,{onConflict:'recurso_id,data_semana'});
     }
@@ -872,6 +874,16 @@
     var r=await SB.from('producao_diaria').delete().eq('id',id);
     if(r.error)throw r.error;
   }
+  /** Realizado do histograma. A coluna quantidade_terceiro (parcela de terceiro) veio na migração 19;
+   *  se ela ainda não existir, o select inteiro falharia — então recua pro formato antigo. */
+  async function sbSelectApontamentos(obraId){
+    var r=await SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade,quantidade_terceiro').eq('obra_id',obraId);
+    if(r.error&&/quantidade_terceiro/.test(r.error.message||'')){
+      SEM_COL_TERCEIRO=true;
+      r=await SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId);
+    }
+    return r;
+  }
   async function sbLoadCadastro(obraId){
     var res=await Promise.all([
       SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco').eq('id',obraId).single(),
@@ -879,7 +891,7 @@
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId),
       SB.from('recursos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
-      SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId),
+      sbSelectApontamentos(obraId),
       SB.from('cenarios').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('producao_diaria').select('*').eq('obra_id',obraId).order('data',{ascending:false}),
       SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true})
@@ -5895,7 +5907,9 @@
         await sbUpsertApontamentoRecurso(selectedObra.id,recursoId,dataSemana,+REALIZADO_REC[keys[i]]||0,+REALIZADO_TERC[keys[i]]||0);
       }
       REALIZADO_DIRTY={};
-      go('cr-hist'); toast('Apontamentos salvos.');
+      go('cr-hist');
+      if(SEM_COL_TERCEIRO)alert('Apontamentos salvos, mas a coluna Terc não foi gravada: falta rodar a migração sql/19_add_realizado_terceiro.sql no Supabase. Até lá, todo o realizado fica como próprio.');
+      else toast('Apontamentos salvos.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
   }
 
