@@ -376,6 +376,11 @@
   .mp-tag{color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:5px}
   .mp-cats{display:flex;flex-wrap:wrap;gap:6px}
   .mp-catchip{cursor:pointer;border:1px solid;border-radius:7px;padding:5px 11px;font-size:12px;font-weight:600;background:transparent;font-family:inherit}
+  /* Cabeçalho do lote e célula vazia também lançam restrição — o pedido é "clicar no lote". */
+  .mp-lotebtn{background:none;border:0;font:inherit;font-weight:700;color:inherit;cursor:pointer;padding:0;width:100%}
+  .mp-lotebtn:hover{color:var(--accent);text-decoration:underline}
+  .mp-vazia{display:block;width:100%;min-height:34px;background:none;border:0;cursor:pointer;border-radius:5px}
+  .mp-vazia:hover{background:var(--elev);box-shadow:inset 0 0 0 1px var(--line)}
   .mp-list{list-style:none;margin:0;padding:0}
   .mp-li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 4px;border-top:1px solid var(--line-2);font-size:12.5px}
   .mp-li:first-child{border-top:0}
@@ -979,6 +984,7 @@
     LB=null; LB_DIRTY=false; // estudo de linha de balanço desta obra (recarrega do banco)
     LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
     PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO=''; PROG_LIDO=false;
+    MP=[]; MP_LIDO=false; MP_ERRO=''; MP_DET=null; MP_FORM=null; MP_TAB='janela';
     window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
   async function sbLoadCadastro(obraId){
@@ -1040,6 +1046,7 @@
   async function refreshAvatar(){
     var email='';
     try{ var s=await SB.auth.getSession(); email=(s&&s.data&&s.data.session&&s.data.session.user&&s.data.session.user.email)||''; }catch(e){}
+    window._MEU_EMAIL=email;   // usado pra assinar revisões de prazo no médio prazo
     var ini=(email.trim().charAt(0)||'?').toUpperCase();
     document.querySelectorAll('.avatar').forEach(function(el){
       el.textContent=ini;
@@ -3304,12 +3311,8 @@
   ];
   function catMeta(id){for(var i=0;i<MP_CATS.length;i++)if(MP_CATS[i].id===id)return MP_CATS[i];return MP_CATS[0];}
   var MP_SETORES=['Engenharia','Suprimentos','Meio Ambiente','Produção','Jurídico','Cliente','Qualidade','Segurança'];
-  function mpUid(){return Math.random().toString(36).slice(2,8)+Date.now().toString(36);}
   window.MP_WIN=window.MP_WIN||6;
   window.MP_START=window.MP_START||HOJE_W;
-  window.MP_OPEN=window.MP_OPEN||null;
-  window.MP_DRAFT=window.MP_DRAFT||{cat:'mao_de_obra'};
-  window.MP_LIST=window.MP_LIST||[];
   function mpWindowCells(){
     var segs=buildSchedule(); var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
     var start=Math.max(1,Math.min(window.MP_START,tw)); var end=Math.min(tw,start+window.MP_WIN-1);
@@ -3321,11 +3324,266 @@
       }});
     return {cell:cell,start:start,end:end,tw:tw};
   }
-  function renderMedio(){
-    var root=document.getElementById('mpRoot'); if(!root)return;
+  /* ================= Médio Prazo · Restrições =================
+   * Três abas: Janela (recorte do tempo-caminho — clique numa célula ou no cabeçalho do lote
+   * pra lançar), Acompanhamento (a lista com código, onde se resolve, cancela e revisa prazo
+   * com justificativa) e Dashboard (IRR, TMD, TMR e as quebras que hoje se faz no Excel).
+   *
+   * Regra que vale pra tudo aqui: "atrasada" NÃO é status guardado, é calculado — em aberto
+   * com o prazo vencido. Se fosse gravado, estaria errado no dia seguinte, porque ninguém
+   * volta no sistema só pra mudar o rótulo. */
+  async function sbMPListar(obraId){
+    var r=await SB.from('restricoes').select('id,codigo,descricao,servico_id,lote_id,categoria,setor,responsavel,data_identificacao,data_prazo,data_prazo_original,data_conclusao,status,semana,equipe,revisoes,observacao')
+      .eq('obra_id',obraId).order('created_at',{ascending:true});
+    if(r.error)throw r.error; return r.data||[];
+  }
+  async function sbMPCriar(obraId,p){
+    var id=newUuid();
+    var r=await SB.from('restricoes').insert(Object.assign({id:id,obra_id:obraId},p));
+    if(r.error)throw r.error; return id;
+  }
+  async function sbMPAtualizar(id,p){ var r=await SB.from('restricoes').update(p).eq('id',id); if(r.error)throw r.error; }
+  async function sbMPApagar(id){ var r=await SB.from('restricoes').delete().eq('id',id); if(r.error)throw r.error; }
+
+  var MP=[], MP_TAB='janela', MP_LIDO=false, MP_CARREGANDO=false, MP_ERRO='';
+  var MP_DET=null;                                     // restrição aberta no acompanhamento
+  var MP_F={sit:'todas',cat:'',setor:'',resp:'',q:''};  // filtros do acompanhamento
+  var MP_DASH={ini:'',fim:''};                         // recorte do dashboard (data de identificação)
+  var MP_FORM=null;                                    // {loteId,servicoId,semana,equipe} com o cadastro aberto
+
+  var MP_SITS={
+    rem_prazo :{lab:'Removida no prazo',   cor:'#22c55e'},
+    rem_atraso:{lab:'Removida com atraso', cor:'#eab308'},
+    atrasada  :{lab:'Atrasada',            cor:'#ef4444'},
+    no_prazo  :{lab:'Em andamento',        cor:'#3b82f6'},
+    sem_data  :{lab:'Sem data definida',   cor:'#f97316'},
+    cancelada :{lab:'Cancelada',           cor:'#9ca3af'}
+  };
+  var MP_SIT_ORDEM=['rem_prazo','rem_atraso','atrasada','no_prazo','sem_data','cancelada'];
+  function mpSit(r){
+    if(r.status==='cancelada')return 'cancelada';
+    if(r.status==='removida')return (r.data_conclusao&&r.data_prazo&&r.data_conclusao>r.data_prazo)?'rem_atraso':'rem_prazo';
+    if(!r.data_prazo)return 'sem_data';
+    return (r.data_prazo<todayISO())?'atrasada':'no_prazo';
+  }
+  function mpDias(a,b){ if(!a||!b)return null; return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000); }
+  function mpAtraso(r){
+    var s=mpSit(r);
+    if(s==='atrasada')return mpDias(r.data_prazo,todayISO());
+    if(s==='rem_atraso')return mpDias(r.data_prazo,r.data_conclusao);
+    return 0;
+  }
+  function mpLoteNome(id){ var i=(window._LOTIDS||[]).indexOf(id); return i>=0?LOTS[i]:''; }
+  function mpServNome(id){ var s=SERV.filter(function(x){return x.id===id;})[0]; return s?s.n:''; }
+  function mpProxCodigo(){
+    var max=0;
+    MP.forEach(function(r){ var m=/(\d+)\s*$/.exec(r.codigo||''); if(m)max=Math.max(max,+m[1]); });
+    var n=String(max+1); while(n.length<3)n='0'+n;
+    return 'R-'+n;
+  }
+  async function mpCarregar(){
+    if(!selectedObra||MP_CARREGANDO)return;
+    MP_CARREGANDO=true; MP_ERRO='';
+    try{ MP=await sbMPListar(selectedObra.id); }
+    catch(e){ MP_ERRO=(e&&e.message)||String(e); MP=[]; }
+    MP_LIDO=true; MP_CARREGANDO=false;
+    if(current==='lp-medio')renderMedio();
+  }
+
+  /** Indicadores de um conjunto de restrições.
+   *  IRR = removidas no prazo ÷ tudo que já venceu (removidas + atrasadas em aberto). Canceladas
+   *  ficam fora dos dois lados, e o que ainda está dentro do prazo também — senão o índice cairia
+   *  só por existir restrição nova, que ainda nem deveria ter sido removida.
+   *  TMD = média de dias entre identificar e o prazo ORIGINAL (o tempo que se tinha pra remover).
+   *  TMR = média de dias entre identificar e remover de fato. */
+  function mpIndicadores(lista){
+    var c={}; MP_SIT_ORDEM.forEach(function(k){c[k]=0;});
+    lista.forEach(function(r){ c[mpSit(r)]++; });
+    var venc=c.rem_prazo+c.rem_atraso+c.atrasada;
+    var tmdS=0,tmdN=0,tmrS=0,tmrN=0;
+    lista.forEach(function(r){
+      var base=r.data_prazo_original||r.data_prazo;
+      if(base&&r.data_identificacao){ var d=mpDias(r.data_identificacao,base); if(d!=null&&d>=0){tmdS+=d;tmdN++;} }
+      if(r.status==='removida'&&r.data_conclusao&&r.data_identificacao){ var d2=mpDias(r.data_identificacao,r.data_conclusao); if(d2!=null&&d2>=0){tmrS+=d2;tmrN++;} }
+    });
+    // Prazo revisado conta à parte: adiar a data tira a restrição da conta de atrasadas e
+    // levanta o IRR. Não é fraude, é replanejamento — mas precisa ficar à vista.
+    var revN=0, revDias=0;
+    lista.forEach(function(r){
+      var rev=Array.isArray(r.revisoes)?r.revisoes:[];
+      if(!rev.length)return;
+      revN++;
+      var d=mpDias(r.data_prazo_original,r.data_prazo); if(d!=null)revDias+=d;
+    });
+    return {c:c,total:lista.length,venc:venc,irr:venc?Math.round(100*c.rem_prazo/venc):null,
+      tmd:tmdN?tmdS/tmdN:null,tmr:tmrN?tmrS/tmrN:null,tmdN:tmdN,tmrN:tmrN,
+      revN:revN,revDias:revN?revDias/revN:null};
+  }
+  function mpNoPeriodo(){
+    return MP.filter(function(r){
+      if(MP_DASH.ini&&(r.data_identificacao||'')<MP_DASH.ini)return false;
+      if(MP_DASH.fim&&(r.data_identificacao||'')>MP_DASH.fim)return false;
+      return true;
+    });
+  }
+  function mpFiltrada(){
+    var q=(MP_F.q||'').toLowerCase();
+    return MP.filter(function(r){
+      if(MP_F.sit!=='todas'&&mpSit(r)!==MP_F.sit)return false;
+      if(MP_F.cat&&r.categoria!==MP_F.cat)return false;
+      if(MP_F.setor&&(r.setor||'')!==MP_F.setor)return false;
+      if(MP_F.resp&&(r.responsavel||'')!==MP_F.resp)return false;
+      if(q&&((r.descricao||'')+' '+(r.codigo||'')).toLowerCase().indexOf(q)<0)return false;
+      return true;
+    });
+  }
+  /** Barra empilhada de situação — mais legível que a rosca do Excel na largura de uma tela. */
+  function mpBarraSit(c,total){
+    if(!total)return '<div class="note">Sem restrições no período.</div>';
+    var segs=MP_SIT_ORDEM.filter(function(k){return c[k]>0;}).map(function(k){
+      return '<div title="'+MP_SITS[k].lab+': '+c[k]+'" style="width:'+(100*c[k]/total)+'%;background:'+MP_SITS[k].cor+'"></div>';
+    }).join('');
+    var leg=MP_SIT_ORDEM.map(function(k){
+      return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2)">'+
+        '<span style="width:10px;height:10px;border-radius:3px;background:'+MP_SITS[k].cor+(c[k]?'':';opacity:.3')+'"></span>'+
+        MP_SITS[k].lab+' <b class="mono">'+c[k]+'</b></span>';
+    }).join('');
+    return '<div style="display:flex;height:12px;border-radius:99px;overflow:hidden;background:var(--elev)">'+segs+'</div>'+
+      '<div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:10px">'+leg+'</div>';
+  }
+  /** Quebra por um campo (categoria, setor, responsável): barra empilhada por linha + IRR. */
+  function mpQuebra(lista,chave,rotulo){
+    var grupos={};
+    lista.forEach(function(r){
+      var k=(chave==='categoria'?catMeta(r.categoria).label:(r[chave]||'(não informado)'));
+      (grupos[k]||(grupos[k]=[])).push(r);
+    });
+    var nomes=Object.keys(grupos).sort(function(a,b){return grupos[b].length-grupos[a].length;});
+    if(!nomes.length)return '';
+    var maxN=nomes.reduce(function(m,k){return Math.max(m,grupos[k].length);},0);
+    var linhas=nomes.map(function(k){
+      var ind=mpIndicadores(grupos[k]), n=grupos[k].length;
+      var segs=MP_SIT_ORDEM.filter(function(s){return ind.c[s]>0;}).map(function(s){
+        return '<div title="'+MP_SITS[s].lab+': '+ind.c[s]+'" style="width:'+(100*ind.c[s]/n)+'%;background:'+MP_SITS[s].cor+'"></div>';
+      }).join('');
+      return '<tr><td style="white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis">'+escAttr(k)+'</td>'+
+        '<td style="width:100%"><div style="display:flex;height:14px;border-radius:4px;overflow:hidden;width:'+(100*n/maxN)+'%;min-width:3%">'+segs+'</div></td>'+
+        '<td class="r mono" style="white-space:nowrap">'+n+'</td>'+
+        '<td class="r mono" style="white-space:nowrap;font-weight:700">'+(ind.irr==null?'—':ind.irr+'%')+'</td></tr>';
+    }).join('');
+    return '<div class="card"><div class="eyebrow">IRR e situação por '+rotulo+'</div>'+
+      '<div class="tbl-wrap" style="margin-top:10px"><table class="edtbl" style="font-size:12px">'+
+      '<thead><tr><th>'+rotulo+'</th><th></th><th class="r">Nº</th><th class="r">IRR</th></tr></thead><tbody>'+linhas+'</tbody></table></div></div>';
+  }
+  /** IRR por semana do prazo: quanto do que vencia naquela semana saiu no prazo. */
+  function mpIrrSemanaHTML(lista){
+    var porSem={};
+    lista.forEach(function(r){
+      var s=mpSit(r); if(s!=='rem_prazo'&&s!=='rem_atraso'&&s!=='atrasada')return;
+      if(!r.data_prazo)return;
+      var d=new Date(r.data_prazo+'T00:00:00'), k=d.getFullYear()+'-'+('0'+isoWeek(d)).slice(-2);
+      var g=porSem[k]||(porSem[k]={lab:'S'+isoWeek(d),prazo:0,tot:0});
+      g.tot++; if(s==='rem_prazo')g.prazo++;
+    });
+    var ks=Object.keys(porSem).sort(); if(!ks.length)return '<div class="note">Nenhuma restrição com prazo já vencido no período.</div>';
+    ks=ks.slice(-20);
+    var W=Math.max(320,ks.length*34), H=150, base=H-22, topo=10;
+    var faixas='<rect x="0" y="'+topo+'" width="'+W+'" height="'+((base-topo)*0.4)+'" fill="#22c55e" opacity=".10"/>'+
+      '<rect x="0" y="'+(topo+(base-topo)*0.4)+'" width="'+W+'" height="'+((base-topo)*0.2)+'" fill="#eab308" opacity=".12"/>'+
+      '<rect x="0" y="'+(topo+(base-topo)*0.6)+'" width="'+W+'" height="'+((base-topo)*0.4)+'" fill="#ef4444" opacity=".10"/>';
+    var bw=Math.min(26,(W/ks.length)*0.62);
+    var barras=ks.map(function(k,i){
+      var g=porSem[k], pct=g.tot?Math.round(100*g.prazo/g.tot):0;
+      var x=(i+0.5)*(W/ks.length), h=(base-topo)*pct/100;
+      var cor=pct>=60?'#22c55e':(pct>=40?'#eab308':'#ef4444');
+      return '<rect x="'+(x-bw/2)+'" y="'+(base-h)+'" width="'+bw+'" height="'+h+'" rx="2" fill="'+cor+'"><title>'+g.lab+': '+g.prazo+' de '+g.tot+' no prazo</title></rect>'+
+        '<text x="'+x+'" y="'+(base-h-3)+'" text-anchor="middle" font-size="9" fill="var(--ink-2)">'+pct+'%</text>'+
+        '<text x="'+x+'" y="'+(H-6)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+g.lab+'</text>';
+    }).join('');
+    return '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+H+'" style="width:100%;min-width:'+W+'px;height:'+H+'px;display:block">'+
+      faixas+'<line x1="0" y1="'+base+'" x2="'+W+'" y2="'+base+'" stroke="var(--line)"/>'+barras+'</svg></div>'+
+      '<div class="note" style="margin-top:6px">Semana em que a restrição deveria estar removida. Verde ≥ 60%, amarelo 40–60%, vermelho &lt; 40%.</div>';
+  }
+
+  function mpVal(id){ var e=document.getElementById(id); return e?e.value:''; }
+  function mpOpts(lista,sel,vazio){
+    return (vazio?'<option value="">'+vazio+'</option>':'')+lista.map(function(o){
+      return '<option value="'+escAttr(o[0])+'"'+(String(sel||'')===String(o[0])?' selected':'')+'>'+escAttr(o[1])+'</option>';
+    }).join('');
+  }
+  function mpTagCat(cat){ var m=catMeta(cat); return '<span class="mp-tag" style="background:'+m.color+'">'+m.label+'</span>'; }
+  function mpPillSit(r){
+    var s=mpSit(r), m=MP_SITS[s], at=mpAtraso(r);
+    return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 9px;border-radius:99px;background:'+m.cor+'22;color:'+m.cor+'">'+
+      m.lab+(at>0?' · '+at+'d':'')+'</span>';
+  }
+
+  /* ---------- Cadastro ---------- */
+  function mpFormHTML(){
+    var f=MP_FORM;
+    var lotes=(window._LOTIDS||[]).map(function(id,i){return [id,LOTS[i]];});
+    var servs=SERV.map(function(s){return [s.id,s.n];});
+    var catChips=MP_CATS.map(function(c){
+      var on=(f.cat||'mao_de_obra')===c.id;
+      return '<button class="mp-catchip" data-mpcat="'+c.id+'" style="border-color:'+c.color+';'+(on?'background:'+c.color+';color:'+pickFont(c.color):'color:var(--ink)')+'">'+c.label+'</button>';
+    }).join('');
+    var onde=f.semana?('Semana '+f.semana+(f.equipe?' · Equipe '+f.equipe:'')):'';
+    return '<div class="card" style="margin-bottom:14px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">'+
+        '<div><div class="eyebrow" style="margin:0">Nova restrição</div>'+
+        '<div class="note">Vai entrar como <b class="mono">'+mpProxCodigo()+'</b>'+(onde?' — '+onde:'')+'</div></div>'+
+        '<button class="iconbtn" data-mpformclose="1">✕</button></div>'+
+      '<div class="mpf" style="margin-bottom:10px"><label>Descrição</label>'+
+        '<textarea id="mpDesc" class="einp" style="width:100%;height:56px;padding:8px;resize:vertical" placeholder="Ex.: aguardando entrega de aço CA-50"></textarea></div>'+
+      '<div class="mpf" style="margin-bottom:10px"><label>Categoria</label><div class="mp-cats">'+catChips+'</div></div>'+
+      '<div class="mpgrid">'+
+        fwrap('Lote','<select id="mpLote" class="einp" style="width:100%">'+mpOpts(lotes,f.loteId,'— sem lote —')+'</select>')+
+        fwrap('Serviço','<select id="mpServ" class="einp" style="width:100%">'+mpOpts(servs,f.servicoId,'— sem serviço —')+'</select>')+
+        fwrap('Setor','<select id="mpSetor" class="einp" style="width:100%">'+mpOpts(MP_SETORES.map(function(x){return [x,x];}),f.setor,'— sem setor —')+'</select>')+
+        fwrap('Responsável','<input id="mpResp" class="einp" style="width:100%" placeholder="Nome do responsável" list="mpResps">')+
+        fwrap('Data (identificação)','<input id="mpData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
+        fwrap('Prev. resolução','<input id="mpResol" class="einp" type="date" style="width:100%">')+
+      '</div>'+
+      '<datalist id="mpResps">'+mpResponsaveis().map(function(x){return '<option value="'+escAttr(x)+'">';}).join('')+'</datalist>'+
+      '<div style="margin-top:12px;text-align:right"><button class="btn primary" id="mpAdd">+ Adicionar restrição</button></div></div>';
+  }
+  function mpResponsaveis(){
+    var m={}; MP.forEach(function(r){ if(r.responsavel)m[r.responsavel]=1; });
+    return Object.keys(m).sort();
+  }
+  async function mpSalvarNova(){
+    var desc=(mpVal('mpDesc')||'').trim();
+    if(!desc){ alert('Descreva a restrição.'); return; }
+    var prazo=mpVal('mpResol')||null;
+    var p={codigo:mpProxCodigo(),descricao:desc,
+      lote_id:mpVal('mpLote')||null, servico_id:mpVal('mpServ')||null,
+      categoria:MP_FORM.cat||'mao_de_obra', setor:mpVal('mpSetor')||null,
+      responsavel:(mpVal('mpResp')||'').trim()||null,
+      data_identificacao:mpVal('mpData')||todayISO(),
+      data_prazo:prazo, data_prazo_original:prazo,
+      status:'aberta', semana:MP_FORM.semana||null, equipe:MP_FORM.equipe||null,
+      revisoes:[], observacao:null};
+    try{
+      var id=await sbMPCriar(selectedObra.id,p);
+      MP.push(Object.assign({id:id},p));
+      MP_FORM=null; renderMedio(); toast('Restrição '+p.codigo+' registrada.');
+    }catch(e){
+      alert('Falha ao salvar: '+((e&&e.message)||e)+'\n\nSe a mensagem fala em coluna que não existe, falta rodar sql/26_restricoes_acompanhamento.sql no Supabase.');
+    }
+  }
+
+  /* ---------- Aba 1: Janela ---------- */
+  function mpJanelaHTML(){
     var wc=mpWindowCells();
-    var byCell={}; window.MP_LIST.forEach(function(r){var k=r.week+'::'+r.li+'::'+r.si+'::'+r.team;(byCell[k]||(byCell[k]=[])).push(r);});
-    var pend=window.MP_LIST.filter(function(r){return r.status==='pendente';}).length;
+    var porCelula={};
+    MP.forEach(function(r){
+      if(r.semana==null||!r.lote_id)return;
+      var li=(window._LOTIDS||[]).indexOf(r.lote_id); if(li<0)return;
+      var si=SERV.map(function(s){return s.id;}).indexOf(r.servico_id);
+      var k=r.semana+'::'+li+'::'+si+'::'+(r.equipe||1);
+      (porCelula[k]||(porCelula[k]=[])).push(r);
+    });
+    var abertas=MP.filter(function(r){return r.status!=='removida'&&r.status!=='cancelada';}).length;
     var top='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;margin-bottom:12px">'+
       '<div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">Janela:</span>'+
         '<button class="btn'+(window.MP_WIN===6?' primary':'')+'" data-mpwin="6" style="padding:5px 11px">6 semanas</button>'+
@@ -3334,74 +3592,293 @@
         '<button class="iconbtn" data-mpnav="-1">◀</button>'+
         '<span class="mono" style="font-size:13px">Semana '+wc.start+' – '+wc.end+' <span style="color:var(--muted)">('+fmtDate(mondayOf(wc.start))+' – '+fmtDate(mondayOf(wc.end))+')</span></span>'+
         '<button class="iconbtn" data-mpnav="1">▶</button></div>'+
-      '<span class="pill mut" style="margin-left:auto">'+pend+' pendentes / '+window.MP_LIST.length+' totais</span>'+
-      '<button class="btn" data-import="1" style="padding:5px 11px">↥ Importar Excel</button>'+
-      '<button class="btn" data-mpexport="1" style="padding:5px 11px">↧ Exportar restrições</button></div>';
-    var leg='<div class="legend" style="margin-bottom:12px"><span style="font-weight:600">Categorias:</span>'+MP_CATS.map(function(c){return '<span><span class="dot" style="background:'+c.color+'"></span>'+c.label+'</span>';}).join('')+'</div>';
-    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l){return '<th class="lot">'+l+'</th>';}).join('');
+      '<span class="pill mut" style="margin-left:auto">'+abertas+' em aberto / '+MP.length+' no total</span></div>';
+    var leg='<div class="legend" style="margin-bottom:12px"><span style="font-weight:600">Categorias:</span>'+
+      MP_CATS.map(function(c){return '<span><span class="dot" style="background:'+c.color+'"></span>'+c.label+'</span>';}).join('')+
+      '<span class="note" style="margin-left:auto">Clique numa célula — ou no nome do lote — pra lançar uma restrição ali.</span></div>';
+    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l,i){
+      return '<th class="lot"><button class="mp-lotebtn" data-mplote="'+i+'" title="Nova restrição neste lote">'+escAttr(l)+'</button></th>';
+    }).join('');
     var body='';
     for(var w=wc.end;w>=wc.start;w--){
       var d=mondayOf(w),tds='';
       for(var li=0;li<LOTS.length;li++){
         var subs=wc.cell[w+'::'+li];
-        if(!subs){tds+='<td class="cell"></td>';continue;}
+        if(!subs){ tds+='<td class="cell"><button class="mp-vazia" data-mpnova="'+w+'::'+li+'::-1::1" title="Nova restrição"></button></td>'; continue; }
         var inner=subs.map(function(sc,i){
-          var rs=byCell[sc.key]||[]; var ring=rs.length?catMeta((rs.filter(function(r){return r.status==='pendente';})[0]||rs[0]).category).color:'';
+          var rs=porCelula[sc.key]||[];
+          var pend=rs.filter(function(r){return r.status!=='removida'&&r.status!=='cancelada';});
+          var ring=rs.length?catMeta((pend[0]||rs[0]).categoria).color:'';
           var badge=rs.length?'<span class="mp-badge" style="background:'+ring+'">'+rs.length+'</span>':'';
-          return '<button class="tcm-seg mp-cell" data-mpcell="'+sc.key+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.color+';color:'+pickFont(sc.color)+(i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+(ring?';box-shadow:inset 0 0 0 3px '+ring:'')+'">'+fmtBR(sc.qty)+badge+'</button>';
+          return '<button class="tcm-seg mp-cell" data-mpnova="'+sc.key+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.color+';color:'+pickFont(sc.color)+(i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+(ring?';box-shadow:inset 0 0 0 3px '+ring:'')+'">'+fmtBR(sc.qty)+badge+'</button>';
         }).join('');
         tds+='<td class="cell"><div class="tcm-row" style="min-height:34px">'+inner+'</div></td>';
       }
       body+='<tr><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td>'+tds+'</tr>';
     }
-    var matrix='<div class="tc-wrap" style="margin-bottom:14px"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
-    var detail='';
-    if(window.MP_OPEN){
-      var p=window.MP_OPEN.split('::'),w2=+p[0],li2=+p[1],si2=+p[2],team2=+p[3];
-      var rs2=byCell[window.MP_OPEN]||[];
-      var chips=rs2.map(function(r){var m=catMeta(r.category);return '<div class="mp-restr" style="border-left-color:'+m.color+'"><span class="mp-tag" style="background:'+m.color+'">'+m.label+'</span> <b>'+r.description+'</b> <span class="note">— '+(r.setor||'sem setor')+' · '+(r.responsible||'sem responsável')+' · id '+brDate(r.date)+(r.resol?' · prev '+brDate(r.resol):'')+'</span><span style="margin-left:auto;display:inline-flex;gap:6px"><button class="btn" data-mpresolve="'+r.id+'" style="padding:4px 10px'+(r.status==='resolvida'?'':';background:#141A20;color:#fff;border-color:#141A20')+'">'+(r.status==='pendente'?'✓ Resolver':'↺ Reabrir')+'</button><button class="iconbtn" data-mprdel="'+r.id+'">✕</button></span></div>';}).join('');
-      var catChips=MP_CATS.map(function(c){var on=(window.MP_DRAFT.cat||'mao_de_obra')===c.id;return '<button class="mp-catchip" data-mpcat="'+c.id+'" style="border-color:'+c.color+';'+(on?'background:'+c.color+';color:'+pickFont(c.color):'color:var(--ink)')+'">'+c.label+'</button>';}).join('');
-      detail='<div class="card" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">'+
-        '<div><div style="font-weight:700">'+SERV[si2].n+' — Equipe '+team2+'</div><div class="note">'+LOTS[li2]+' — Semana '+w2+' ('+fmtDate(mondayOf(w2))+')</div></div>'+
-        '<button class="iconbtn" data-mpclose="1">✕</button></div>'+
-        (chips?'<div style="margin-bottom:14px;display:flex;flex-direction:column;gap:8px">'+chips+'</div>':'')+
-        '<div class="assign" style="margin:0"><div class="lab" style="margin-bottom:10px">Nova restrição</div>'+
-          '<div class="mpf" style="margin-bottom:10px"><label>Descrição</label><textarea id="mpDesc" class="einp" style="width:100%;height:56px;padding:8px;resize:vertical" placeholder="Ex.: aguardando entrega de aço CA-50"></textarea></div>'+
-          '<div class="mpf" style="margin-bottom:10px"><label>Categoria</label><div class="mp-cats">'+catChips+'</div></div>'+
-          '<div class="mpgrid">'+
-            fwrap('Data (identificação)','<input id="mpData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
-            fwrap('Prev. resolução','<input id="mpResol" class="einp" type="date" style="width:100%">')+
-            fwrap('Setor','<select id="mpSetor" class="einp" style="width:100%">'+MP_SETORES.map(function(x){return '<option>'+x+'</option>';}).join('')+'</select>')+
-            fwrap('Responsável','<input id="mpResp" class="einp" style="width:100%" placeholder="Nome do responsável">')+
-            fwrap('Local','<input id="mpLocal" class="einp" style="width:100%" value="'+LOTS[li2]+'">')+
-          '</div><div style="margin-top:10px;text-align:right"><button class="btn primary" id="mpAdd">+ Adicionar restrição</button></div></div></div>';
+    var matriz='<div class="tc-wrap" style="margin-bottom:14px"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    return top+leg+(MP_FORM?mpFormHTML():'')+matriz;
+  }
+
+  /* ---------- Aba 2: Acompanhamento ---------- */
+  function mpAcompHTML(){
+    if(!MP.length)return '<div class="card"><div class="note">Nenhuma restrição registrada ainda. Lance a primeira na aba <b>Janela</b>.</div></div>';
+    var setores={}, resps={};
+    MP.forEach(function(r){ if(r.setor)setores[r.setor]=1; if(r.responsavel)resps[r.responsavel]=1; });
+    var fSit=[['todas','Todas as situações']].concat(MP_SIT_ORDEM.map(function(k){return [k,MP_SITS[k].lab];}));
+    var filtros='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">'+
+      '<input class="einp" id="mpBusca" style="width:210px" placeholder="buscar por código ou texto" value="'+escAttr(MP_F.q)+'">'+
+      '<select class="esel" id="mpFSit">'+mpOpts(fSit,MP_F.sit)+'</select>'+
+      '<select class="esel" id="mpFCat">'+mpOpts(MP_CATS.map(function(c){return [c.id,c.label];}),MP_F.cat,'Todas as categorias')+'</select>'+
+      '<select class="esel" id="mpFSetor">'+mpOpts(Object.keys(setores).sort().map(function(x){return [x,x];}),MP_F.setor,'Todos os setores')+'</select>'+
+      '<select class="esel" id="mpFResp">'+mpOpts(Object.keys(resps).sort().map(function(x){return [x,x];}),MP_F.resp,'Todos os responsáveis')+'</select>'+
+      '<button class="btn" id="mpExport" style="margin-left:auto">↧ Exportar Excel</button></div>';
+    var lista=mpFiltrada();
+    var linhas=lista.map(function(r){
+      var aberto=(MP_DET===r.id);
+      var tr='<tr'+(aberto?' style="background:var(--elev)"':'')+'>'+
+        '<td class="mono" style="white-space:nowrap"><b>'+escAttr(r.codigo||'—')+'</b></td>'+
+        '<td>'+mpTagCat(r.categoria)+' '+escAttr(r.descricao||'')+'</td>'+
+        '<td class="note" style="white-space:nowrap">'+escAttr([mpLoteNome(r.lote_id),mpServNome(r.servico_id)].filter(Boolean).join(' / ')||'—')+'</td>'+
+        '<td class="note" style="white-space:nowrap">'+escAttr(r.setor||'—')+'</td>'+
+        '<td class="note" style="white-space:nowrap">'+escAttr(r.responsavel||'—')+'</td>'+
+        '<td class="mono" style="white-space:nowrap">'+brDate(r.data_identificacao)+'</td>'+
+        '<td class="mono" style="white-space:nowrap">'+brDate(r.data_prazo)+((r.revisoes||[]).length?' <span class="note" title="prazo revisado '+(r.revisoes||[]).length+'×">↻'+(r.revisoes||[]).length+'</span>':'')+'</td>'+
+        '<td style="white-space:nowrap">'+mpPillSit(r)+'</td>'+
+        '<td class="r"><button class="btn" data-mpdet="'+r.id+'" style="padding:4px 10px">'+(aberto?'Fechar':'Abrir')+'</button></td></tr>';
+      return tr+(aberto?'<tr><td colspan="9" style="padding:0">'+mpDetalheHTML(r)+'</td></tr>':'');
+    }).join('');
+    return '<div class="card">'+filtros+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead><tr>'+
+      '<th>Código</th><th>Restrição</th><th>Lote / serviço</th><th>Setor</th><th>Responsável</th>'+
+      '<th>Identificada</th><th>Prazo</th><th>Situação</th><th></th></tr></thead><tbody>'+
+      (linhas||'<tr><td colspan="9" class="note">Nenhuma restrição com esses filtros.</td></tr>')+
+      '</tbody></table></div>'+
+      '<div class="note" style="margin-top:8px">'+lista.length+' de '+MP.length+' restrições.</div></div>';
+  }
+  function mpDetalheHTML(r){
+    var rev=(Array.isArray(r.revisoes)?r.revisoes:[]);
+    var hist=rev.length?('<div class="eyebrow" style="margin:14px 0 6px">Revisões de prazo</div>'+
+      '<ul class="mp-list">'+rev.map(function(v){
+        return '<li class="mp-li"><span class="mono">'+brDate(v.de)+' → '+brDate(v.para)+'</span> <span class="note">'+escAttr(v.motivo||'')+'</span>'+
+          '<span class="note" style="margin-left:auto">'+escAttr((v.por||'')+' · '+brDate((v.em||'').slice(0,10)))+'</span></li>';
+      }).join('')+'</ul>'):'';
+    var removida=(r.status==='removida'), cancelada=(r.status==='cancelada');
+    var acoes='';
+    if(!removida&&!cancelada){
+      acoes='<div class="mpgrid" style="margin-top:4px">'+
+        fwrap('Concluir em','<input id="mpConcData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
+        fwrap('&nbsp;','<button class="btn primary" data-mpresolver="'+r.id+'" style="width:100%">✓ Marcar como removida</button>')+
+        fwrap('Novo prazo','<input id="mpNovoPrazo" class="einp" type="date" style="width:100%" value="'+escAttr(r.data_prazo||'')+'">')+
+        fwrap('Motivo da revisão','<input id="mpMotivo" class="einp" style="width:100%" placeholder="obrigatório pra mudar a data">')+
+      '</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+        '<button class="btn" data-mprevisar="'+r.id+'">↻ Revisar prazo</button>'+
+        '<button class="btn" data-mpcancelar="'+r.id+'">⃠ Cancelar restrição</button>'+
+        '<button class="btn" data-mpdel="'+r.id+'" style="margin-left:auto">✕ Excluir</button></div>';
+    } else {
+      acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+        '<span class="note">'+(removida?('Removida em '+brDate(r.data_conclusao)+'.'):'Cancelada.')+'</span>'+
+        '<button class="btn" data-mpreabrir="'+r.id+'">↺ Reabrir</button>'+
+        '<button class="btn" data-mpdel="'+r.id+'" style="margin-left:auto">✕ Excluir</button></div>';
     }
-    var list='';
-    if(window.MP_LIST.length){
-      var lrows=window.MP_LIST.map(function(r){var m=catMeta(r.category);return '<li class="mp-li"><span class="mp-tag" style="background:'+m.color+'">'+m.label+'</span>'+(r.status==='pendente'?'<span style="color:var(--crit)">▲</span>':'<span style="color:var(--good)">✓</span>')+' <b>'+r.description+'</b> <span class="note">— '+SERV[r.si].n+' / '+LOTS[r.li]+' / Equipe '+r.team+' / S'+r.week+(r.setor?' — '+r.setor:'')+(r.responsible?' — '+r.responsible:'')+' — id '+brDate(r.date)+(r.resol?' — prev '+brDate(r.resol):'')+'</span><span style="margin-left:auto;display:inline-flex;gap:6px"><button class="btn" data-mpopen="'+(r.week+'::'+r.li+'::'+r.si+'::'+r.team)+'" style="padding:4px 10px">Abrir</button><button class="iconbtn" data-mprdel="'+r.id+'">✕</button></span></li>';}).join('');
-      list='<div class="card"><div class="eyebrow">Restrições registradas</div><ul class="mp-list">'+lrows+'</ul></div>';
-    }
-    root.innerHTML=top+leg+matrix+detail+list;
-    // wiring
-    root.querySelectorAll('[data-mpwin]').forEach(function(b){b.addEventListener('click',function(){window.MP_WIN=+b.getAttribute('data-mpwin');renderMedio();});});
-    root.querySelectorAll('[data-mpnav]').forEach(function(b){b.addEventListener('click',function(){window.MP_START=Math.max(1,Math.min(wc.tw,window.MP_START+(+b.getAttribute('data-mpnav'))));renderMedio();});});
-    root.querySelectorAll('[data-mpexport]').forEach(function(b){b.addEventListener('click',function(){toast('Exportar restrições — função do app (mockup visual)');});});
-    root.querySelectorAll('[data-mpcell]').forEach(function(b){b.addEventListener('click',function(){window.MP_OPEN=b.getAttribute('data-mpcell');window.MP_DRAFT={cat:'mao_de_obra'};renderMedio();});});
-    root.querySelectorAll('[data-mpclose]').forEach(function(b){b.addEventListener('click',function(){window.MP_OPEN=null;renderMedio();});});
-    root.querySelectorAll('[data-mpopen]').forEach(function(b){b.addEventListener('click',function(){window.MP_OPEN=b.getAttribute('data-mpopen');renderMedio();});});
-    root.querySelectorAll('[data-mpresolve]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-mpresolve');window.MP_LIST.forEach(function(r){if(r.id===id)r.status=r.status==='pendente'?'resolvida':'pendente';});renderMedio();});});
-    root.querySelectorAll('[data-mprdel]').forEach(function(b){b.addEventListener('click',function(){var id=b.getAttribute('data-mprdel');window.MP_LIST=window.MP_LIST.filter(function(r){return r.id!==id;});renderMedio();});});
-    root.querySelectorAll('[data-mpcat]').forEach(function(b){b.addEventListener('click',function(){
-      window.MP_DRAFT.cat=b.getAttribute('data-mpcat');
-      root.querySelectorAll('[data-mpcat]').forEach(function(x){var c=catMeta(x.getAttribute('data-mpcat')),on=x===b;x.style.background=on?c.color:'transparent';x.style.color=on?pickFont(c.color):'var(--ink)';});
-    });});
-    var add=document.getElementById('mpAdd');
-    if(add)add.addEventListener('click',function(){
-      var desc=(document.getElementById('mpDesc').value||'').trim(); if(!desc)return;
-      var pp=window.MP_OPEN.split('::');
-      window.MP_LIST.push({id:mpUid(),description:desc,date:document.getElementById('mpData').value||todayISO(),resol:document.getElementById('mpResol').value||'',setor:document.getElementById('mpSetor').value||'',responsible:(document.getElementById('mpResp').value||'').trim(),category:window.MP_DRAFT.cat||'mao_de_obra',status:'pendente',week:+pp[0],li:+pp[1],si:+pp[2],team:+pp[3],location:document.getElementById('mpLocal').value||LOTS[+pp[1]]});
-      renderMedio();
+    var tmd=mpDias(r.data_identificacao,r.data_prazo_original||r.data_prazo);
+    var tmr=(r.status==='removida')?mpDias(r.data_identificacao,r.data_conclusao):null;
+    return '<div class="assign" style="margin:0;border-radius:0">'+
+      '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px">'+
+        '<span class="note">Prazo original <b class="mono">'+brDate(r.data_prazo_original)+'</b></span>'+
+        '<span class="note">Tempo disponível <b class="mono">'+(tmd==null?'—':tmd+' d')+'</b></span>'+
+        (tmr!=null?'<span class="note">Tempo de remoção <b class="mono">'+tmr+' d</b></span>':'')+
+        '<span class="note">Semana '+(r.semana||'—')+(r.equipe?' · Equipe '+r.equipe:'')+'</span></div>'+
+      '<div class="mpf" style="margin-bottom:10px"><label>Observação</label>'+
+        '<textarea id="mpObs" class="einp" data-mpobs="'+r.id+'" style="width:100%;height:46px;padding:8px;resize:vertical" placeholder="anotações do acompanhamento">'+escAttr(r.observacao||'')+'</textarea></div>'+
+      acoes+hist+'</div>';
+  }
+
+  /* ---------- Aba 3: Dashboard ---------- */
+  function mpDashHTML(){
+    var lista=mpNoPeriodo(), ind=mpIndicadores(lista);
+    var hoje=todayISO();
+    var periodo='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px">'+
+      '<span class="lab" style="margin:0">Período (data de identificação)</span>'+
+      '<input class="einp" type="date" id="mpDashIni" value="'+escAttr(MP_DASH.ini)+'">'+
+      '<span class="note">a</span>'+
+      '<input class="einp" type="date" id="mpDashFim" value="'+escAttr(MP_DASH.fim)+'">'+
+      '<button class="btn" id="mpDashLimpar">Tudo</button></div>';
+    var irrTxt=(ind.irr==null?'—':ind.irr+'%');
+    var irrCor=(ind.irr==null?'--muted':(ind.irr>=60?'--good':(ind.irr>=40?'--warn':'--crit')));
+    var kpis='<div class="grid g4" style="margin-bottom:14px">'+
+      '<div class="kpi"><div class="stripe" style="background:var('+irrCor+')"></div><div class="lab">IRR</div>'+
+        '<div class="val num" style="color:var('+irrCor+')">'+irrTxt+'</div>'+
+        '<div class="foot">'+ind.c.rem_prazo+' no prazo de '+ind.venc+' já vencidas</div></div>'+
+      '<div class="kpi"><div class="stripe" style="background:var(--info)"></div><div class="lab">Restrições</div>'+
+        '<div class="val num">'+ind.total+'</div><div class="foot">'+(ind.c.atrasada)+' atrasadas · '+(ind.c.no_prazo)+' em dia</div></div>'+
+      '<div class="kpi"><div class="stripe" style="background:var(--accent)"></div><div class="lab">TMD · tempo médio disponível</div>'+
+        '<div class="val num">'+(ind.tmd==null?'—':ind.tmd.toFixed(1))+'<span style="font-size:14px;color:var(--muted)"> dias</span></div>'+
+        '<div class="foot">da identificação até o prazo original ('+ind.tmdN+')</div></div>'+
+      '<div class="kpi"><div class="stripe" style="background:var(--good)"></div><div class="lab">TMR · tempo médio de remoção</div>'+
+        '<div class="val num">'+(ind.tmr==null?'—':ind.tmr.toFixed(1))+'<span style="font-size:14px;color:var(--muted)"> dias</span></div>'+
+        '<div class="foot">da identificação até a remoção ('+ind.tmrN+')</div></div>'+
+      '<div class="kpi"><div class="stripe" style="background:var(--warn)"></div><div class="lab">Prazos revisados</div>'+
+        '<div class="val num">'+ind.revN+'</div>'+
+        '<div class="foot">'+(ind.revDias==null?'nenhuma data adiada':('adiados em média '+ind.revDias.toFixed(1)+' dias'))+'</div></div></div>';
+    var sitCard='<div class="card"><div class="eyebrow">Situação no período</div>'+
+      '<div style="margin-top:12px">'+mpBarraSit(ind.c,ind.total)+'</div></div>';
+    var irrSem='<div class="card"><div class="eyebrow">IRR por semana</div>'+
+      '<div class="note">Quanto do que vencia em cada semana saiu no prazo.</div>'+
+      '<div style="margin-top:10px">'+mpIrrSemanaHTML(lista)+'</div></div>';
+    // Próximas a vencer e críticas
+    var abertas=lista.filter(function(r){ var s=mpSit(r); return s==='no_prazo'||s==='atrasada'; });
+    var prox=abertas.filter(function(r){return mpSit(r)==='no_prazo';}).sort(function(a,b){return (a.data_prazo||'').localeCompare(b.data_prazo||'');}).slice(0,10);
+    var crit=abertas.filter(function(r){return mpSit(r)==='atrasada';}).sort(function(a,b){return mpAtraso(b)-mpAtraso(a);}).slice(0,10);
+    var tabela=function(tit,cor,rows,colExtra,extraFn){
+      return '<div class="card"><div class="eyebrow" style="color:'+cor+'">'+tit+'</div>'+
+        (rows.length?'<div class="tbl-wrap" style="margin-top:10px"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+          '<th>Restrição</th><th>'+colExtra+'</th><th>Responsável</th></tr></thead><tbody>'+
+          rows.map(function(r){
+            return '<tr><td><b class="mono">'+escAttr(r.codigo||'')+'</b> '+escAttr(r.descricao||'')+'</td>'+
+              '<td class="mono" style="white-space:nowrap">'+extraFn(r)+'</td>'+
+              '<td class="note" style="white-space:nowrap">'+escAttr(r.responsavel||'—')+'</td></tr>';
+          }).join('')+'</tbody></table></div>':'<div class="note" style="margin-top:8px">Nada por aqui.</div>')+'</div>';
+    };
+    var listas='<div class="grid g2" style="margin-top:14px">'+
+      tabela('Próximas a vencer','var(--accent)',prox,'Prazo',function(r){return brDate(r.data_prazo)+' · '+mpDias(hoje,r.data_prazo)+'d';})+
+      tabela('Críticas (prazo vencido)','var(--crit)',crit,'Atraso',function(r){return mpAtraso(r)+' dias';})+
+    '</div>';
+    var quebras='<div class="grid g3" style="margin-top:14px">'+
+      mpQuebra(lista,'categoria','categoria')+mpQuebra(lista,'setor','setor')+mpQuebra(lista,'responsavel','responsável')+'</div>';
+    var nota='<div class="note" style="margin-top:14px">IRR = removidas no prazo ÷ (removidas + atrasadas em aberto). '+
+      'Canceladas e as que ainda estão dentro do prazo ficam fora da conta.</div>';
+    return periodo+kpis+'<div class="grid g2">'+sitCard+irrSem+'</div>'+listas+quebras+nota;
+  }
+
+  function mpAcharId(id){ return MP.filter(function(x){return x.id===id;})[0]; }
+  async function mpPatch(id,patch){
+    var r=mpAcharId(id); if(!r)return;
+    try{ await sbMPAtualizar(id,patch); Object.assign(r,patch); }
+    catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)+'\n\nSe fala em coluna inexistente, falta rodar sql/26_restricoes_acompanhamento.sql.'); return; }
+    renderMedio();
+  }
+  function mpExportar(){
+    if(typeof XLSX==='undefined'){ alert('Biblioteca de planilha não carregou.'); return; }
+    var cab=['Código','Descrição','Categoria','Lote','Serviço','Setor','Responsável','Identificada',
+             'Prazo original','Prazo atual','Conclusão','Situação','Dias disponíveis','Dias até remover','Revisões','Observação'];
+    var linhas=mpFiltrada().map(function(r){
+      return [r.codigo||'',r.descricao||'',catMeta(r.categoria).label,mpLoteNome(r.lote_id),mpServNome(r.servico_id),
+        r.setor||'',r.responsavel||'',r.data_identificacao||'',r.data_prazo_original||'',r.data_prazo||'',
+        r.data_conclusao||'',MP_SITS[mpSit(r)].lab,
+        mpDias(r.data_identificacao,r.data_prazo_original||r.data_prazo),
+        (r.status==='removida'?mpDias(r.data_identificacao,r.data_conclusao):''),
+        (Array.isArray(r.revisoes)?r.revisoes.length:0), r.observacao||''];
     });
+    var ws=XLSX.utils.aoa_to_sheet([cab].concat(linhas));
+    var wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Restrições');
+    XLSX.writeFile(wb,'restricoes_'+((selectedObra&&selectedObra.nome)||'obra').replace(/[^\w]+/g,'_')+'.xlsx');
+  }
+
+  function renderMedio(){
+    var root=document.getElementById('mpRoot'); if(!root)return;
+    if(!selectedObra){ root.innerHTML='<div class="card"><div class="note">Abra uma obra.</div></div>'; return; }
+    var abas=[['janela','Janela'],['acomp','Acompanhamento'],['dash','Dashboard']].map(function(t){
+      return '<button class="subtab'+(MP_TAB===t[0]?' active':'')+'" data-mptab="'+t[0]+'">'+t[1]+'</button>';
+    }).join('');
+    var corpo;
+    if(MP_ERRO){
+      corpo='<div class="banner" style="border-color:var(--crit)">Não deu pra carregar as restrições: '+escAttr(MP_ERRO)+
+        '<br>Se a mensagem fala em coluna que não existe, rode <b>sql/26_restricoes_acompanhamento.sql</b> no Supabase.</div>';
+    } else if(!MP_LIDO){ corpo='<div class="note">Carregando…</div>'; }
+    else if(MP_TAB==='acomp'){ corpo=mpAcompHTML(); }
+    else if(MP_TAB==='dash'){ corpo=mpDashHTML(); }
+    else { corpo=mpJanelaHTML(); }
+    root.innerHTML='<div class="subtabs">'+abas+'</div>'+corpo;
+
+    root.querySelectorAll('[data-mptab]').forEach(function(b){
+      b.addEventListener('click',function(){ MP_TAB=b.getAttribute('data-mptab'); MP_FORM=null; renderMedio(); });
+    });
+    if(MP_TAB==='janela')mpWireJanela(root);
+    if(MP_TAB==='acomp')mpWireAcomp(root);
+    if(MP_TAB==='dash')mpWireDash(root);
+  }
+
+  function mpWireJanela(root){
+    root.querySelectorAll('[data-mpwin]').forEach(function(b){ b.addEventListener('click',function(){ window.MP_WIN=+b.getAttribute('data-mpwin'); renderMedio(); }); });
+    root.querySelectorAll('[data-mpnav]').forEach(function(b){ b.addEventListener('click',function(){
+      var wc=mpWindowCells();
+      window.MP_START=Math.max(1,Math.min(wc.tw,window.MP_START+(+b.getAttribute('data-mpnav')))); renderMedio();
+    }); });
+    root.querySelectorAll('[data-mpnova]').forEach(function(b){ b.addEventListener('click',function(){
+      var p=b.getAttribute('data-mpnova').split('::'), li=+p[1], si=+p[2];
+      MP_FORM={cat:'mao_de_obra', semana:+p[0], equipe:+p[3]||null,
+        loteId:(window._LOTIDS||[])[li]||'', servicoId:(si>=0&&SERV[si])?SERV[si].id:''};
+      renderMedio();
+      var d=document.getElementById('mpDesc'); if(d)d.focus();
+    }); });
+    root.querySelectorAll('[data-mplote]').forEach(function(b){ b.addEventListener('click',function(){
+      var li=+b.getAttribute('data-mplote');
+      MP_FORM={cat:'mao_de_obra', semana:window.MP_START, equipe:null, loteId:(window._LOTIDS||[])[li]||'', servicoId:''};
+      renderMedio();
+      var d=document.getElementById('mpDesc'); if(d)d.focus();
+    }); });
+    root.querySelectorAll('[data-mpformclose]').forEach(function(b){ b.addEventListener('click',function(){ MP_FORM=null; renderMedio(); }); });
+    root.querySelectorAll('[data-mpcat]').forEach(function(b){ b.addEventListener('click',function(){
+      if(MP_FORM)MP_FORM.cat=b.getAttribute('data-mpcat');
+      root.querySelectorAll('[data-mpcat]').forEach(function(x){
+        var c=catMeta(x.getAttribute('data-mpcat')), on=(x===b);
+        x.style.background=on?c.color:'transparent'; x.style.color=on?pickFont(c.color):'var(--ink)';
+      });
+    }); });
+    var add=document.getElementById('mpAdd'); if(add)add.addEventListener('click',mpSalvarNova);
+  }
+
+  function mpWireAcomp(root){
+    var b1=document.getElementById('mpBusca');
+    if(b1)b1.addEventListener('change',function(){ MP_F.q=b1.value; renderMedio(); });
+    [['mpFSit','sit'],['mpFCat','cat'],['mpFSetor','setor'],['mpFResp','resp']].forEach(function(p){
+      var el=document.getElementById(p[0]);
+      if(el)el.addEventListener('change',function(){ MP_F[p[1]]=el.value; renderMedio(); });
+    });
+    var ex=document.getElementById('mpExport'); if(ex)ex.addEventListener('click',mpExportar);
+    root.querySelectorAll('[data-mpdet]').forEach(function(b){ b.addEventListener('click',function(){
+      var id=b.getAttribute('data-mpdet'); MP_DET=(MP_DET===id)?null:id; renderMedio();
+    }); });
+    root.querySelectorAll('[data-mpresolver]').forEach(function(b){ b.addEventListener('click',function(){
+      var data=mpVal('mpConcData')||todayISO();
+      mpPatch(b.getAttribute('data-mpresolver'),{status:'removida',data_conclusao:data});
+    }); });
+    root.querySelectorAll('[data-mpreabrir]').forEach(function(b){ b.addEventListener('click',function(){
+      mpPatch(b.getAttribute('data-mpreabrir'),{status:'aberta',data_conclusao:null});
+    }); });
+    root.querySelectorAll('[data-mpcancelar]').forEach(function(b){ b.addEventListener('click',function(){
+      if(!confirm('Cancelar esta restrição? Ela sai da conta do IRR mas continua no histórico.'))return;
+      mpPatch(b.getAttribute('data-mpcancelar'),{status:'cancelada'});
+    }); });
+    root.querySelectorAll('[data-mprevisar]').forEach(function(b){ b.addEventListener('click',function(){
+      var id=b.getAttribute('data-mprevisar'), r=mpAcharId(id); if(!r)return;
+      var nova=mpVal('mpNovoPrazo'), motivo=(mpVal('mpMotivo')||'').trim();
+      if(!nova){ alert('Escolha a nova data.'); return; }
+      if(nova===(r.data_prazo||'')){ alert('A data é a mesma que já está lá.'); return; }
+      if(!motivo){ alert('Escreva o motivo da revisão — é ele que explica o escorregão da data.'); return; }
+      var rev=(Array.isArray(r.revisoes)?r.revisoes:[]).concat([{de:r.data_prazo||null,para:nova,motivo:motivo,
+        em:new Date().toISOString(),por:window._MEU_EMAIL||''}]);
+      mpPatch(id,{data_prazo:nova,revisoes:rev,data_prazo_original:r.data_prazo_original||r.data_prazo||nova});
+    }); });
+    root.querySelectorAll('[data-mpdel]').forEach(function(b){ b.addEventListener('click',async function(){
+      var id=b.getAttribute('data-mpdel');
+      if(!confirm('Excluir esta restrição de vez? Isso tira ela do histórico e dos indicadores.'))return;
+      try{ await sbMPApagar(id); MP=MP.filter(function(x){return x.id!==id;}); MP_DET=null; renderMedio(); toast('Restrição excluída.'); }
+      catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+    }); });
+    root.querySelectorAll('[data-mpobs]').forEach(function(t){ t.addEventListener('blur',function(){
+      var id=t.getAttribute('data-mpobs'), r=mpAcharId(id);
+      if(r&&(r.observacao||'')!==t.value)mpPatch(id,{observacao:t.value||null});
+    }); });
+  }
+
+  function mpWireDash(root){
+    var i=document.getElementById('mpDashIni'), f=document.getElementById('mpDashFim'), l=document.getElementById('mpDashLimpar');
+    if(i)i.addEventListener('change',function(){ MP_DASH.ini=i.value; renderMedio(); });
+    if(f)f.addEventListener('change',function(){ MP_DASH.fim=f.value; renderMedio(); });
+    if(l)l.addEventListener('click',function(){ MP_DASH={ini:'',fim:''}; renderMedio(); });
   }
 
   /* ================= Programação Semanal =================
@@ -4311,7 +4788,7 @@
         });
       });
     }
-    if(view==='lp-medio'){renderMedio();}
+    if(view==='lp-medio'){ renderMedio(); if(!MP_LIDO&&!MP_CARREGANDO)mpCarregar(); }
     if(view==='lp-semana'){ wireProg(); if(!PROG_LIDO&&!PROG_CARREGANDO)progCarregar(); }
     if(view==='ac-prod'){renderProd();}
     if(view==='lp-ppc'){ppcBars('ppcb2');pareto();}

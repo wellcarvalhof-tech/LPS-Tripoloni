@@ -29,6 +29,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `23_add_auditoria.sql` | Tabela `auditoria` + triggers nas tabelas da obra — registra quem alterou o quê e quando (antes/depois), lido em Cadastro → Histórico de alterações | ⚠️ novo — rodar pra ter o histórico |
 | `24_programacao_semanal.sql` | Campos novos nos `compromissos` (grupo, etapa, lote final, detalhamento, origem, ordem) — Programação Semanal com sugestões do Tempo-Caminho e da Linha de Balanço | ⚠️ novo — rodar pra usar a Programação Semanal |
 | `25_fix_views_security_invoker.sql` | Põe `security_invoker` nas views `vw_ppc_semanal` e `vw_curva_s` — sem isso elas ignoravam a RLS e mostravam dados de todas as obras (aviso crítico do Advisor) | ⚠️ novo — rodar pra fechar a falha |
+| `26_restricoes_acompanhamento.sql` | Restrições com código (R-001), prazo original, data de conclusão, histórico de revisões e status `cancelada` — base do acompanhamento e do dashboard de IRR/TMD/TMR | ⚠️ novo — rodar pra usar o Médio Prazo |
 
 Pra saber **o que já rodou neste banco**, cole `CHECK_migracoes.sql` no SQL Editor do Supabase: ele lista cada migração com rodou/falta, sem alterar nada.
 
