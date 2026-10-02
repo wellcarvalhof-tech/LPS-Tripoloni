@@ -24,6 +24,7 @@ select * from (
   ('23_add_auditoria',              (select count(*)>0 from t where table_name='auditoria')),
   ('24_programacao_semanal',        (select count(*)>0 from c where table_name='compromissos' and column_name='grupo')),
   ('26_restricoes_acompanhamento',  (select count(*)>0 from c where table_name='restricoes' and column_name='data_conclusao')),
+  ('27_restricoes_pacote_local',    (select count(*)>0 from c where table_name='restricoes' and column_name='pacote')),
   ('25_fix_views_security_invoker', (select coalesce(bool_and(array_to_string(cl.reloptions,',') like '%security_invoker=%'),false)
                                        from pg_class cl join pg_namespace n on n.oid=cl.relnamespace
                                       where n.nspname='public' and cl.relname in ('vw_ppc_semanal','vw_curva_s')))
