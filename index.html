@@ -708,14 +708,18 @@
     var back=document.createElement('div'); back.className='segmenu-backdrop';
     var linhas=PRES_LISTA.map(function(p){
       var eu=(p.user_id===meu);
-      return '<tr'+(eu?' style="background:var(--elev)"':'')+'><td>'+escAttr(p.email||'(sem e-mail)')+(eu?' <span class="note">(você)</span>':'')+'</td>'+
-        '<td>'+escAttr(p.obra_nome||'—')+'</td><td class="note">'+escAttr(p.tela||'')+'</td>'+
+      var corta='overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      return '<tr'+(eu?' style="background:var(--elev)"':'')+'>'+
+        '<td style="'+corta+'" title="'+escAttr(p.email||'')+'">'+escAttr(p.email||'(sem e-mail)')+(eu?' <span class="note">(você)</span>':'')+'</td>'+
+        '<td style="'+corta+'" title="'+escAttr(p.obra_nome||'')+'">'+escAttr(p.obra_nome||'—')+'</td>'+
+        '<td class="note" style="'+corta+'" title="'+escAttr(p.tela||'')+'">'+escAttr(p.tela||'—')+'</td>'+
         '<td class="note" style="white-space:nowrap">'+presHaQuanto(p.visto_em)+'</td></tr>';
     }).join('');
     back.innerHTML='<div class="segmenu-panel card" style="max-width:620px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Quem está no app agora</div>'+
       '<div class="note" style="margin-bottom:10px">Quem deu sinal de vida nos últimos 5 minutos. Você vê as pessoas das obras em que participa.</div>'+
-      (linhas?'<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Pessoa</th><th>Obra</th><th>Tela</th><th>Visto</th></tr></thead><tbody>'+linhas+'</tbody></table></div>':'<div class="note">Ninguém online agora.</div>')+
+      (linhas?'<table class="edtbl" style="min-width:0;table-layout:fixed;font-size:12.5px"><thead><tr>'+
+        '<th>Pessoa</th><th style="width:150px">Obra</th><th style="width:140px">Tela</th><th style="width:66px">Visto</th></tr></thead><tbody>'+linhas+'</tbody></table>':'<div class="note">Ninguém online agora.</div>')+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" id="presFechar">Fechar</button></div></div>';
     document.body.appendChild(back);
     back.addEventListener('pointerdown',function(e){ if(e.target===back)back.remove(); });
@@ -10214,6 +10218,9 @@
   }
   function showLanding(){
     selectedObra=null;
+    // Sem obra aberta o go() não roda, então a presença ficava sem obra E sem tela — parecia
+    // que a pessoa estava invisível. Aqui ela aparece como quem está escolhendo a obra.
+    PRES_TELA='Escolhendo obra'; sbPresencaPing().then(presRefresh);
     try{ safeStore.removeItem('lps-tripoloni-lastobra'); safeStore.removeItem('lps-tripoloni-lastview'); }catch(e){}
     document.getElementById('landing').classList.add('show');
   }
