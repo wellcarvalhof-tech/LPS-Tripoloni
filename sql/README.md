@@ -32,6 +32,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `26_restricoes_acompanhamento.sql` | Restrições com código (R-001), prazo original, data de conclusão, histórico de revisões e status `cancelada` — base do acompanhamento e do dashboard de IRR/TMD/TMR | ⚠️ novo — rodar pra usar o Médio Prazo |
 | `27_restricoes_pacote_local.sql` | Campos livres `pacote` e `local` nas restrições — o que a planilha da obra já traz e não cabia em serviço/lote | ⚠️ novo — rodar pra importar a planilha de restrições |
 | `28_restricoes_data_impacto.sql` | Separa `data_impacto` (quando atrapalha a obra, base do prazo e do IRR) da `data_prazo` (previsão de remoção, revisável) | ⚠️ novo — rodar junto com a 26 e a 27 |
+| `29_estacas_geometria.sql` | Largura, volumes de projeto e espessura por estaca, "não se aplica" e código/EAP do serviço — base da importação do controle de produção | ⚠️ novo — rodar pra importar os informes de produção |
 
 Pra saber **o que já rodou neste banco**, cole `CHECK_migracoes.sql` no SQL Editor do Supabase: ele lista cada migração com rodou/falta, sem alterar nada.
 

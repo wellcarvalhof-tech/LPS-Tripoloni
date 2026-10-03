@@ -979,7 +979,7 @@
   }
   function aplicarCadastro(d){
     var obra=d.obra, svc=d.svc||[], lot=d.lot||[], q=d.q||[], rec=d.rec||[], apr=d.apr||[], cen=d.cen||[], prod=d.prod||[], apo=d.apo||[];
-    SERV=svc.map(function(r,i){return {id:r.id,n:r.nome,u:r.unidade||'un',c:PALVARS[i%6],hex:r.cor||'#64748b',eq:r.teams||1,p:String(r.produtividade||0),lag:r.lag_semanas||0,cfg:r.config||{}};});
+    SERV=svc.map(function(r,i){return {id:r.id,n:r.nome,u:r.unidade||'un',c:PALVARS[i%6],hex:r.cor||'#64748b',eq:r.teams||1,p:String(r.produtividade||0),lag:r.lag_semanas||0,cfg:r.config||{},codigo:r.codigo||'',eap:r.eap||'',grupo:r.grupo||''};});
     LOTS=lot.map(function(r){return r.nome;});
     window._LOTIDS=lot.map(function(r){return r.id;});
     LOTE_PACOTE=lot.map(function(r){return r.pacote_contratual||'';});
@@ -4593,6 +4593,206 @@
    * estaca só somam pra virar a quantidade do lote inteiro (a mesma usada no Tempo-Caminho), e
    * o avanço só alimenta o "realizado" (producao_diaria) que já move a Curva S. Todos os lotes
    * aparecem como grupos recolhíveis — clique no lote pra abrir as estacas dele. */
+  /* ---------- Importar o "Informes de produção" ----------
+   * A planilha da obra tem uma linha por estaca de 20m e, por serviço, um par Início/Término.
+   * O cabeçalho vem em três andares: macro-item da EAP (2 Terraplenagem), código do cronograma
+   * contratual (T02, T02.2…) e o item (2.1 Corte). A linha de baixo traz INÍCIO / TÉRMINO.
+   *
+   * O que entra: estaca (KM + offset), largura, "nomenclatura de acessos", volumes de projeto
+   * de terraplanagem (corte/rebaixo/aterro) e as datas. As espessuras de camada ficam pra
+   * etapa dos indicadores — elas só servem pra calcular quantidade, e isso ainda não existe.
+   *
+   * Lote = KM. Só entra em lote que JÁ existe no app: criar lote mexe na matriz do
+   * Tempo-Caminho, e isso não pode acontecer de surpresa dentro de uma importação. */
+  function estNorm(v){ return String(v==null?'':v).normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/\s+/g,' ').trim(); }
+  function estAchaCol(h,regexes){
+    for(var j=0;j<regexes.length;j++)
+      for(var i=0;i<h.length;i++)
+        if(regexes[j].test(h[i]))return i;
+    return -1;
+  }
+  function importarInformesArquivo(){
+    if(!selectedObra){ alert('Abra uma obra antes de importar.'); return; }
+    if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(importarInformesWorkbook).catch(function(e){
+        alert('Não consegui ler o arquivo: '+((e&&e.message)||e));
+      });
+    });
+  }
+  async function importarInformesWorkbook(wb){
+    // 1) acha a aba e a linha de cabeçalho (a que tem ESTACAS e os itens da EAP)
+    var aoa=null,hdr=-1;
+    for(var n=0;n<wb.SheetNames.length&&hdr<0;n++){
+      var linhas=sheetRows(wb.Sheets[wb.SheetNames[n]]);
+      for(var i=0;i<Math.min(linhas.length,20);i++){
+        var h=(linhas[i]||[]).map(estNorm);
+        if(estAchaCol(h,[/^ESTACAS?$/])>=0 && estAchaCol(h,[/^KM$/])>=0 && estAchaCol(h,[/LARGURA/])>=0){ aoa=linhas; hdr=i; break; }
+      }
+    }
+    if(hdr<0){ alert('Não achei o cabeçalho.\n\nPreciso de uma aba com as colunas ESTACAS, KM e Largura, e os serviços com INÍCIO/TÉRMINO logo abaixo.'); return; }
+    var hItens=(aoa[hdr]||[]).map(estNorm);
+    var hSub  =(aoa[hdr+1]||[]).map(estNorm);
+    var hCod  =hdr>0?(aoa[hdr-1]||[]).map(estNorm):[];
+    var hGrupo=hdr>1?(aoa[hdr-2]||[]).map(estNorm):[];
+    var col={
+      km:      estAchaCol(hItens,[/^KM$/]),
+      estaca:  estAchaCol(hItens,[/^ESTACAS?$/]),
+      acesso:  estAchaCol(hItens,[/NOMECLATURA|NOMENCLATURA/]),
+      largura: estAchaCol(hItens,[/^LARGURA$/])
+    };
+    // CORTE / REBAIXO / ATERRO ficam na linha de baixo, sob "VOLUMES DE PROJETO"
+    var volIni=estAchaCol(hItens,[/VOLUMES DE PROJETO/]);
+    var cCorte=-1,cReb=-1,cAter=-1;
+    if(volIni>=0){
+      for(var k=volIni;k<Math.min(volIni+6,hSub.length);k++){
+        if(/^CORTE$/.test(hSub[k]))cCorte=k;
+        else if(/^REBAIXO$/.test(hSub[k]))cReb=k;
+        else if(/^ATERRO$/.test(hSub[k]))cAter=k;
+      }
+    }
+    // 2) serviços: todo item cujo par de colunas abaixo é INÍCIO/TÉRMINO
+    var servCols=[];
+    for(var j=0;j<hItens.length;j++){
+      if(!hItens[j])continue;
+      if(!/^INICIO$/.test(hSub[j]||'')||!/^TERMINO$/.test(hSub[j+1]||''))continue;
+      var achaAcima=function(linha){
+        for(var x=j;x>=Math.max(0,j-12);x--) if(linha[x])return linha[x];
+        return '';
+      };
+      servCols.push({c:j,nome:String(aoa[hdr][j]).trim(),
+        codigo:(hCod.length?achaAcima(hCod):'').replace(/^.*-->\s*/,''),
+        grupo:(hGrupo.length?achaAcima(hGrupo):'')});
+    }
+    if(!servCols.length){ alert('Não achei nenhum serviço com o par INÍCIO / TÉRMINO.'); return; }
+
+    // 3) linhas de dados agrupadas por KM
+    var porKm={}, semKm=0, linhasOk=0;
+    for(var L=hdr+2;L<aoa.length;L++){
+      var row=aoa[L]||[];
+      var km=col.km>=0?String(row[col.km]==null?'':row[col.km]).trim():'';
+      var est=col.estaca>=0?row[col.estaca]:null;
+      if(!km||est==null||est===''){ if(km||est!=null&&est!=='')semKm++; continue; }
+      var dist=Number(est); if(!isFinite(dist))continue;
+      linhasOk++;
+      var reg={dist:Math.round(dist),
+        largura:col.largura>=0?Number(row[col.largura])||null:null,
+        acesso:col.acesso>=0?(String(row[col.acesso]==null?'':row[col.acesso]).trim()||null):null,
+        corte:cCorte>=0?Number(row[cCorte])||null:null,
+        rebaixo:cReb>=0?Number(row[cReb])||null:null,
+        aterro:cAter>=0?Number(row[cAter])||null:null,
+        datas:{}};
+      servCols.forEach(function(s){
+        var a=excelDateToIso(row[s.c]), b=excelDateToIso(row[s.c+1]);
+        var ini=/^\d{4}-\d{2}-\d{2}$/.test(a)?a:'', fim=/^\d{4}-\d{2}-\d{2}$/.test(b)?b:'';
+        if(ini||fim)reg.datas[s.c]={inicio:ini,fim:fim};
+      });
+      (porKm[km]||(porKm[km]=[])).push(reg);
+    }
+    var kms=Object.keys(porKm).sort();
+    if(!kms.length){ alert('Nenhuma linha com KM e estaca preenchidos.'); return; }
+
+    // 4) de-para: KM -> lote existente, e serviço da planilha -> serviço do app
+    var loteDe={}, kmSemLote=[];
+    var porNome={}; (window._LOTIDS||[]).forEach(function(id,i){ porNome[estNorm(LOTS[i])]=id; });
+    kms.forEach(function(km){ var id=porNome[estNorm(km)]; if(id)loteDe[km]=id; else kmSemLote.push(km); });
+    var servDe={}, servSemPar=[];
+    var svcPorCodigo={}, svcPorNome={};
+    SERV.forEach(function(s){ if(s.codigo)svcPorCodigo[estNorm(s.codigo)]=s.id; svcPorNome[estNorm(s.n)]=s.id; });
+    // O código da EAP é mais grosso que o item: na planilha, T04 cobre "2.2.1 CFT 01" e
+    // "2.2.2 CFT 02" ao mesmo tempo. Então o nome manda, e o código só vale quando aparece
+    // uma única vez — senão dois serviços diferentes cairiam no mesmo do app.
+    var vezesCod={}; servCols.forEach(function(s){ var k=estNorm(s.codigo); if(k)vezesCod[k]=(vezesCod[k]||0)+1; });
+    servCols.forEach(function(s){
+      var semNum=estNorm(s.nome.replace(/^[\d.]+\s*/,''));
+      var alvo=svcPorNome[estNorm(s.nome)]||svcPorNome[semNum];
+      if(!alvo&&s.codigo&&vezesCod[estNorm(s.codigo)]===1)alvo=svcPorCodigo[estNorm(s.codigo)];
+      if(alvo)servDe[s.c]=alvo; else servSemPar.push(s);
+    });
+
+    var escolha=await estDialogoImport({kms:kms,porKm:porKm,servCols:servCols,loteDe:loteDe,
+      kmSemLote:kmSemLote,servDe:servDe,servSemPar:servSemPar,linhasOk:linhasOk});
+    if(!escolha)return;
+    Object.keys(escolha.servDe).forEach(function(c){ if(escolha.servDe[c])servDe[c]=escolha.servDe[c]; else delete servDe[c]; });
+
+    // 5) grava: estacas primeiro (sem repetir as que já existem), depois os apontamentos
+    var novasEst=0, novosAp=0, pulados=0;
+    try{
+      for(var ki=0;ki<kms.length;ki++){
+        var km=kms[ki], loteId=loteDe[km];
+        if(!loteId){ pulados+=porKm[km].length; continue; }
+        if(!ESTACAS[loteId])await sbLoadEstacas(loteId);
+        var existe={}; (ESTACAS[loteId]||[]).forEach(function(e){ existe[Math.round(e.dist)]=e.id; });
+        var criar=porKm[km].filter(function(r){ return !existe[r.dist]; }).map(function(r){
+          return {id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,numero:r.dist,distancia_m:r.dist,
+                  largura_m:r.largura,acesso:r.acesso,vol_corte:r.corte,vol_rebaixo:r.rebaixo,vol_aterro:r.aterro};
+        });
+        for(var ci=0;ci<criar.length;ci+=400){
+          var rr=await SB.from('lote_estacas').insert(criar.slice(ci,ci+400));
+          if(rr.error)throw rr.error;
+        }
+        criar.forEach(function(c){ existe[c.numero]=c.id; });
+        novasEst+=criar.length;
+        // apontamentos
+        var aps=[];
+        porKm[km].forEach(function(r){
+          var eid=existe[r.dist]; if(!eid)return;
+          Object.keys(r.datas).forEach(function(c){
+            var sid=servDe[c]; if(!sid)return;
+            aps.push({id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,estaca_id:eid,servico_id:sid,
+                      data_inicio:r.datas[c].inicio||null,data_fim:r.datas[c].fim||null});
+          });
+        });
+        for(var ai=0;ai<aps.length;ai+=400){
+          var ra=await SB.from('estaca_apontamentos').upsert(aps.slice(ai,ai+400),{onConflict:'estaca_id,servico_id'});
+          if(ra.error)throw ra.error;
+        }
+        novosAp+=aps.length;
+        delete ESTACAS[loteId];   // força recarregar com o que entrou
+      }
+    }catch(e){
+      alert('Falha na importação: '+((e&&e.message)||e)+'\n\nSe fala em coluna que não existe, rode sql/29_estacas_geometria.sql no Supabase.');
+      return;
+    }
+    renderProd();
+    alert(novasEst+' estaca(s) criadas e '+novosAp+' apontamento(s) gravados.'+
+      (pulados?'\n\n'+pulados+' linha(s) ficaram de fora: o KM não tem lote correspondente no app.':''));
+  }
+  /** Resumo antes de gravar: o que casou, o que não casou e o de-para dos serviços que faltam. */
+  function estDialogoImport(info){
+    return new Promise(function(resolve){
+      var back=document.createElement('div'); back.className='segmenu-backdrop';
+      var nDatas=0; info.kms.forEach(function(km){ info.porKm[km].forEach(function(r){ nDatas+=Object.keys(r.datas).length; }); });
+      var kmOk=info.kms.length-info.kmSemLote.length;
+      var svcOpts='<option value="">— ignorar —</option>'+SERV.map(function(s){return '<option value="'+s.id+'">'+escAttr(s.n)+'</option>';}).join('');
+      var linhasDe=info.servSemPar.map(function(s){
+        return '<tr><td>'+escAttr(s.nome)+(s.codigo?' <span class="note">'+escAttr(s.codigo)+'</span>':'')+'</td>'+
+          '<td><select class="esel" data-estdepara="'+s.c+'" style="max-width:260px">'+svcOpts+'</select></td></tr>';
+      }).join('');
+      back.innerHTML='<div class="segmenu-panel card" style="max-width:680px;max-height:86vh;overflow:auto">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Importar informes de produção</div>'+
+        '<div class="note" style="margin-bottom:12px"><b>'+info.linhasOk+'</b> estacas e <b>'+nDatas+'</b> apontamentos de data na planilha. Nada é gravado até você confirmar.</div>'+
+        '<div class="note"><b>'+kmOk+'</b> de '+info.kms.length+' KMs têm lote correspondente no app.'+
+          (info.kmSemLote.length?' Sem lote (ficam de fora): <b>'+escAttr(info.kmSemLote.join(', '))+'</b> — crie esses lotes antes se quiser importá-los.':'')+'</div>'+
+        '<div class="note" style="margin-top:6px"><b>'+(info.servCols.length-info.servSemPar.length)+'</b> de '+info.servCols.length+' serviços casaram automaticamente (por código da EAP ou nome).</div>'+
+        (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços sem par no app</div>'+
+          '<div class="tbl-wrap"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>':'')+
+        '<div class="note" style="margin-top:12px">As espessuras de camada não entram nesta versão — elas só servem pra calcular quantidade, que ainda não existe na tela.</div>'+
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
+          '<button class="btn" id="estImpCancel">Cancelar</button>'+
+          '<button class="btn primary" id="estImpOk">Importar</button></div></div>';
+      document.body.appendChild(back);
+      function fim(v){ back.remove(); resolve(v); }
+      back.addEventListener('pointerdown',function(e){ if(e.target===back)fim(null); });
+      back.querySelector('#estImpCancel').addEventListener('click',function(){ fim(null); });
+      back.querySelector('#estImpOk').addEventListener('click',function(){
+        var mapa={};
+        back.querySelectorAll('[data-estdepara]').forEach(function(sel){ mapa[sel.getAttribute('data-estdepara')]=sel.value||''; });
+        fim({servDe:mapa});
+      });
+    });
+  }
+
   function estacasHTML(){
     if(!LOTS.length)return '<div class="card"><div class="note">Nenhum lote cadastrado ainda. Cadastre em "Lotes & Quantidades".</div></div>';
     var dirtyN=Object.keys(ESTACA_QTY_DIRTY).length;
@@ -4601,6 +4801,7 @@
       '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
         '<button class="btn" id="estModeloBtn">⇩ Planilha modelo</button>'+
         '<button class="btn" id="estImportBtn">↥ Importar estaqueamento</button>'+
+        '<button class="btn" id="estInformesBtn">↥ Importar informes de produção</button>'+
         '<button class="btn primary" id="estSaveQtd"'+(dirtyN?'':' disabled')+'>💾 Salvar quantidades'+(dirtyN?' ('+dirtyN+')':'')+'</button>'+
       '</div></div></div>';
     return toolbar+LOTS.map(function(l,li){return estLoteGroupHTML(li);}).join('');
@@ -4977,6 +5178,8 @@
       if(saveQtdBtn)saveQtdBtn.addEventListener('click',saveEstacaQtdAll);
       var modeloBtn=document.getElementById('estModeloBtn');
       if(modeloBtn)modeloBtn.addEventListener('click',exportEstacasModelo);
+      var infBtn=document.getElementById('estInformesBtn');
+      if(infBtn)infBtn.addEventListener('click',importarInformesArquivo);
       var importBtn=document.getElementById('estImportBtn');
       if(importBtn)importBtn.addEventListener('click',function(){
         pickExcelFile(function(file){readWorkbookFile(file).then(importEstacasWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});
