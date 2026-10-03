@@ -4598,9 +4598,14 @@
    * O cabeçalho vem em três andares: macro-item da EAP (2 Terraplenagem), código do cronograma
    * contratual (T02, T02.2…) e o item (2.1 Corte). A linha de baixo traz INÍCIO / TÉRMINO.
    *
-   * O que entra: estaca (KM + offset), largura, "nomenclatura de acessos", volumes de projeto
-   * de terraplanagem (corte/rebaixo/aterro) e as datas. As espessuras de camada ficam pra
-   * etapa dos indicadores — elas só servem pra calcular quantidade, e isso ainda não existe.
+   * ATENÇÃO ao que a planilha representa: ela controla a OBRA TODA, enquanto o app planeja só
+   * o SALDO de serviço. Por isso o volume importado vai pra estaca_quantidades.volume_projeto
+   * e nunca pra quantidade — se fosse pra quantidade, somaria em lote_servico e o Tempo-Caminho
+   * passaria a ser recalculado sobre o escopo inteiro, inflando prazo e histograma.
+   *
+   * O que entra: estaca (KM + offset), largura, "nomenclatura de acessos", as datas, e o volume
+   * de projeto por serviço — corte/rebaixo/aterro vêm das colunas de volume; as camadas de
+   * pavimento saem de largura × espessura × espaçamento.
    *
    * Lote = KM. Só entra em lote que JÁ existe no app: criar lote mexe na matriz do
    * Tempo-Caminho, e isso não pode acontecer de surpresa dentro de uma importação. */
@@ -4635,6 +4640,18 @@
     var hSub  =(aoa[hdr+1]||[]).map(estNorm);
     var hCod  =hdr>0?(aoa[hdr-1]||[]).map(estNorm):[];
     var hGrupo=hdr>1?(aoa[hdr-2]||[]).map(estNorm):[];
+    // Cada camada tem a espessura numa coluna própria; o item correspondente é reconhecido
+    // pelo nome. Corte/rebaixo/aterro não têm espessura — o volume vem pronto da cubação.
+    var CAMADAS=[
+      {esp:/1.? CFT SOLO/,    item:/CFT 0?1/},
+      {esp:/2.? CFT RACHAO/,  item:/CFT 0?2/},
+      {esp:/3.? CFT RACHAO/,  item:/CFT 0?3/},
+      {esp:/MACADAME/,        item:/SUB.?BASE/},
+      {esp:/BGS BASE/,        item:/^\s*[\d.]*\s*BASE$/},
+      {esp:/BGTC BASE/,       item:/^\s*[\d.]*\s*BASE$/},
+      {esp:/ALTURA CBUQ/,     item:/CBUQ/},
+      {esp:/PAV.? RIGIDO/,    item:/PAVIMENTO RIGIDO/}
+    ];
     var col={
       km:      estAchaCol(hItens,[/^KM$/]),
       estaca:  estAchaCol(hItens,[/^ESTACAS?$/]),
@@ -4668,6 +4685,15 @@
 
     // 3) linhas de dados agrupadas por KM
     var porKm={}, semKm=0, linhasOk=0;
+    // espaçamento das estacas: lido das próprias distâncias da planilha (20m na obra)
+    var espacPadrao=20;
+    (function(){
+      var ds=[];
+      for(var L2=hdr+2;L2<Math.min(hdr+12,aoa.length);L2++){
+        var v2=(aoa[L2]||[])[col.estaca]; if(v2!=null&&v2!=='')ds.push(Number(v2));
+      }
+      for(var i2=1;i2<ds.length;i2++){ var d2=ds[i2]-ds[i2-1]; if(d2>0){ espacPadrao=d2; break; } }
+    })();
     for(var L=hdr+2;L<aoa.length;L++){
       var row=aoa[L]||[];
       var km=col.km>=0?String(row[col.km]==null?'':row[col.km]).trim():'';
@@ -4675,13 +4701,31 @@
       if(!km||est==null||est===''){ if(km||est!=null&&est!=='')semKm++; continue; }
       var dist=Number(est); if(!isFinite(dist))continue;
       linhasOk++;
+      var larg=col.largura>=0?Number(row[col.largura])||null:null;
       var reg={dist:Math.round(dist),
-        largura:col.largura>=0?Number(row[col.largura])||null:null,
+        largura:larg,
         acesso:col.acesso>=0?(String(row[col.acesso]==null?'':row[col.acesso]).trim()||null):null,
         corte:cCorte>=0?Number(row[cCorte])||null:null,
         rebaixo:cReb>=0?Number(row[cReb])||null:null,
         aterro:cAter>=0?Number(row[cAter])||null:null,
-        datas:{}};
+        vols:{}, datas:{}};
+      servCols.forEach(function(sv){
+        var nm=estNorm(sv.nome), v=null;
+        if(/CORTE REBAIXO/.test(nm))v=reg.rebaixo;
+        else if(/CORTE/.test(nm))v=reg.corte;
+        else if(/ATERRO/.test(nm))v=reg.aterro;
+        else {
+          var soma=0, achou=false;
+          CAMADAS.forEach(function(cm){
+            if(!cm.item.test(nm))return;
+            var ce=estAchaCol(hItens,[cm.esp]); if(ce<0)return;
+            var e=Number(row[ce]); if(!isFinite(e)||e<=0)return;
+            if(larg&&larg>0){ soma+=larg*e*espacPadrao; achou=true; }
+          });
+          if(achou)v=soma;
+        }
+        if(v!=null&&isFinite(v)&&v>0)reg.vols[sv.c]=v;
+      });
       servCols.forEach(function(s){
         var a=excelDateToIso(row[s.c]), b=excelDateToIso(row[s.c+1]);
         var ini=/^\d{4}-\d{2}-\d{2}$/.test(a)?a:'', fim=/^\d{4}-\d{2}-\d{2}$/.test(b)?b:'';
@@ -4716,7 +4760,7 @@
     Object.keys(escolha.servDe).forEach(function(c){ if(escolha.servDe[c])servDe[c]=escolha.servDe[c]; else delete servDe[c]; });
 
     // 5) grava: estacas primeiro (sem repetir as que já existem), depois os apontamentos
-    var novasEst=0, novosAp=0, pulados=0;
+    var novasEst=0, novosAp=0, novosVol=0, pulados=0;
     try{
       for(var ki=0;ki<kms.length;ki++){
         var km=kms[ki], loteId=loteDe[km];
@@ -4734,7 +4778,7 @@
         criar.forEach(function(c){ existe[c.numero]=c.id; });
         novasEst+=criar.length;
         // apontamentos
-        var aps=[];
+        var aps=[], vols=[];
         porKm[km].forEach(function(r){
           var eid=existe[r.dist]; if(!eid)return;
           Object.keys(r.datas).forEach(function(c){
@@ -4742,12 +4786,22 @@
             aps.push({id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,estaca_id:eid,servico_id:sid,
                       data_inicio:r.datas[c].inicio||null,data_fim:r.datas[c].fim||null});
           });
+          Object.keys(r.vols).forEach(function(c){
+            var sid=servDe[c]; if(!sid)return;
+            // volume_projeto só: quantidade e lote_servico são do planejamento do saldo
+            vols.push({id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,estaca_id:eid,servico_id:sid,
+                       volume_projeto:r.vols[c]});
+          });
         });
         for(var ai=0;ai<aps.length;ai+=400){
           var ra=await SB.from('estaca_apontamentos').upsert(aps.slice(ai,ai+400),{onConflict:'estaca_id,servico_id'});
           if(ra.error)throw ra.error;
         }
-        novosAp+=aps.length;
+        for(var vi=0;vi<vols.length;vi+=400){
+          var rv=await SB.from('estaca_quantidades').upsert(vols.slice(vi,vi+400),{onConflict:'estaca_id,servico_id'});
+          if(rv.error)throw rv.error;
+        }
+        novosAp+=aps.length; novosVol+=vols.length;
         delete ESTACAS[loteId];   // força recarregar com o que entrou
       }
     }catch(e){
@@ -4755,14 +4809,16 @@
       return;
     }
     renderProd();
-    alert(novasEst+' estaca(s) criadas e '+novosAp+' apontamento(s) gravados.'+
+    alert(novasEst+' estaca(s) criadas, '+novosAp+' apontamento(s) e '+novosVol+' volume(s) de projeto gravados.'+
       (pulados?'\n\n'+pulados+' linha(s) ficaram de fora: o KM não tem lote correspondente no app.':''));
   }
   /** Resumo antes de gravar: o que casou, o que não casou e o de-para dos serviços que faltam. */
   function estDialogoImport(info){
     return new Promise(function(resolve){
       var back=document.createElement('div'); back.className='segmenu-backdrop';
-      var nDatas=0; info.kms.forEach(function(km){ info.porKm[km].forEach(function(r){ nDatas+=Object.keys(r.datas).length; }); });
+      var nDatas=0,nVols=0;
+      info.kms.forEach(function(km){ info.porKm[km].forEach(function(r){
+        nDatas+=Object.keys(r.datas).length; nVols+=Object.keys(r.vols||{}).length; }); });
       var kmOk=info.kms.length-info.kmSemLote.length;
       var svcOpts='<option value="">— ignorar —</option>'+SERV.map(function(s){return '<option value="'+s.id+'">'+escAttr(s.n)+'</option>';}).join('');
       var linhasDe=info.servSemPar.map(function(s){
@@ -4777,7 +4833,9 @@
         '<div class="note" style="margin-top:6px"><b>'+(info.servCols.length-info.servSemPar.length)+'</b> de '+info.servCols.length+' serviços casaram automaticamente (por código da EAP ou nome).</div>'+
         (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços sem par no app</div>'+
           '<div class="tbl-wrap"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>':'')+
-        '<div class="note" style="margin-top:12px">As espessuras de camada não entram nesta versão — elas só servem pra calcular quantidade, que ainda não existe na tela.</div>'+
+        '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto calculados (corte/rebaixo/aterro das colunas de volume; camadas por largura × espessura × espaçamento).</div>'+
+        '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
+        'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
           '<button class="btn" id="estImpCancel">Cancelar</button>'+
           '<button class="btn primary" id="estImpOk">Importar</button></div></div>';

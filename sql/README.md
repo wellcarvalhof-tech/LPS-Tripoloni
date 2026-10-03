@@ -33,6 +33,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `27_restricoes_pacote_local.sql` | Campos livres `pacote` e `local` nas restrições — o que a planilha da obra já traz e não cabia em serviço/lote | ⚠️ novo — rodar pra importar a planilha de restrições |
 | `28_restricoes_data_impacto.sql` | Separa `data_impacto` (quando atrapalha a obra, base do prazo e do IRR) da `data_prazo` (previsão de remoção, revisável) | ⚠️ novo — rodar junto com a 26 e a 27 |
 | `29_estacas_geometria.sql` | Largura, volumes de projeto e espessura por estaca, "não se aplica" e código/EAP do serviço — base da importação do controle de produção | ⚠️ novo — rodar pra importar os informes de produção |
+| `30_estaca_volume_projeto.sql` | `volume_projeto` na estaca — o escopo da obra toda, separado da `quantidade` que é o saldo planejado | ⚠️ novo — rodar junto com a 29 |
 
 Pra saber **o que já rodou neste banco**, cole `CHECK_migracoes.sql` no SQL Editor do Supabase: ele lista cada migração com rodou/falta, sem alterar nada.
 
