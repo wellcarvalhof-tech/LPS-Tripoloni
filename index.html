@@ -846,14 +846,20 @@
     await sbRequireSession();
     var res=await Promise.all([
       SB.from('lote_estacas').select('*').eq('lote_id',loteId).order('numero',{ascending:true}),
-      SB.from('estaca_quantidades').select('estaca_id,servico_id,quantidade').eq('lote_id',loteId),
+      SB.from('estaca_quantidades').select('estaca_id,servico_id,quantidade,volume_projeto,volume_realizado').eq('lote_id',loteId),
       SB.from('estaca_apontamentos').select('estaca_id,servico_id,data_inicio,data_fim,producao_diaria_id').eq('lote_id',loteId)
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
     var est=res[0].data||[], qty=res[1].data||[], ap=res[2].data||[];
     ESTACAS[loteId]=est.map(function(r){return {id:r.id,numero:r.numero,dist:Number(r.distancia_m)||0};});
-    var qtyMap={}; qty.forEach(function(r){qtyMap[r.estaca_id+'::'+r.servico_id]=Number(r.quantidade)||0;});
-    ESTACA_QTY[loteId]=qtyMap;
+    var qtyMap={}, volMap={};
+    qty.forEach(function(r){
+      var k=r.estaca_id+'::'+r.servico_id;
+      qtyMap[k]=Number(r.quantidade)||0;
+      volMap[k]={proj:r.volume_projeto!=null?Number(r.volume_projeto):null,
+                 real:r.volume_realizado!=null?Number(r.volume_realizado):null};
+    });
+    ESTACA_QTY[loteId]=qtyMap; ESTACA_VOL[loteId]=volMap;
     var apMap={}; ap.forEach(function(r){apMap[r.estaca_id+'::'+r.servico_id]={inicio:r.data_inicio||'',fim:r.data_fim||'',prodId:r.producao_diaria_id||null};});
     ESTACA_AVANCO[loteId]=apMap;
   }
@@ -998,7 +1004,7 @@
     APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
-    ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; EST_OPEN={};
+    ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; ESTACA_VOL={}; EST_OPEN={};
     REC_DIRTY={}; REALIZADO_DIRTY={}; APOIO_DIRTY={}; APOIO_SELECTED={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
     LB=null; LB_DIRTY=false; // estudo de linha de balanço desta obra (recarrega do banco)
@@ -1364,6 +1370,7 @@
   var ESTACA_QTY={}; // {loteId: {"estacaId::servicoId": quantidade}}
   var ESTACA_QTY_DIRTY={}; // {"estacaId::servicoId": quantidade} — pendente de salvar na tela de Quantidades por estaca
   var ESTACA_AVANCO={}; // {loteId: {"estacaId::servicoId": {inicio,fim,prodId}}}
+  var ESTACA_VOL={}; // {loteId: {"estacaId::servicoId": {proj,real}}} — escopo da obra toda (planilha)
   var RECURSOS=[]; // catálogo de recursos (funções/equipamentos) da obra: {id,n,tipo,u}
   var APOIO=[]; // Apoio Administrativo — mão de obra/recursos indiretos em 3 níveis: {id,n1,n2,n3,cfg:{crew:[{resourceId,qtyPerTeam}]}}
   var APOIO_DIRTY={}, APOIO_SELECTED={};
@@ -4682,6 +4689,18 @@
         grupo:(hGrupo.length?achaAcima(hGrupo):'')});
     }
     if(!servCols.length){ alert('Não achei nenhum serviço com o par INÍCIO / TÉRMINO.'); return; }
+    // Depois do bloco de datas a planilha repete o nome do item numa coluna com o REALIZADO
+    // daquela estaca. É de lá que sai o avanço volumétrico — ele não é derivável das datas,
+    // porque uma estaca pode estar 95% cortada sem ter término.
+    var ehServ={}; servCols.forEach(function(x){ ehServ[x.c]=1; ehServ[x.c+1]=1; });
+    var realCol={};
+    servCols.forEach(function(sv){
+      var alvo=estNorm(sv.nome);
+      for(var j=0;j<hItens.length;j++){
+        if(j===sv.c||ehServ[j])continue;
+        if(hItens[j]===alvo){ realCol[sv.c]=j; break; }
+      }
+    });
 
     // 3) linhas de dados agrupadas por KM
     var porKm={}, semKm=0, linhasOk=0;
@@ -4708,7 +4727,7 @@
         corte:cCorte>=0?Number(row[cCorte])||null:null,
         rebaixo:cReb>=0?Number(row[cReb])||null:null,
         aterro:cAter>=0?Number(row[cAter])||null:null,
-        vols:{}, datas:{}};
+        vols:{}, reals:{}, datas:{}};
       servCols.forEach(function(sv){
         var nm=estNorm(sv.nome), v=null;
         if(/CORTE REBAIXO/.test(nm))v=reg.rebaixo;
@@ -4725,6 +4744,8 @@
           if(achou)v=soma;
         }
         if(v!=null&&isFinite(v)&&v>0)reg.vols[sv.c]=v;
+        var cr=realCol[sv.c];
+        if(cr!=null){ var vr=Number(row[cr]); if(isFinite(vr)&&vr>0)reg.reals[sv.c]=vr; }
       });
       servCols.forEach(function(s){
         var a=excelDateToIso(row[s.c]), b=excelDateToIso(row[s.c+1]);
@@ -4738,8 +4759,16 @@
 
     // 4) de-para: KM -> lote existente, e serviço da planilha -> serviço do app
     var loteDe={}, kmSemLote=[];
-    var porNome={}; (window._LOTIDS||[]).forEach(function(id,i){ porNome[estNorm(LOTS[i])]=id; });
-    kms.forEach(function(km){ var id=porNome[estNorm(km)]; if(id)loteDe[km]=id; else kmSemLote.push(km); });
+    var porNome={}, porNum={};
+    (window._LOTIDS||[]).forEach(function(id,i){
+      porNome[estNorm(LOTS[i])]=id;
+      var m=/(\d+)/.exec(LOTS[i]||''); if(m&&!porNum[m[1]])porNum[m[1]]=id;   // "KM 248" / "Lote 248" -> 248
+    });
+    kms.forEach(function(km){
+      var id=porNome[estNorm(km)];
+      if(!id&&!/[A-Z]/.test(estNorm(km))){ var m2=/(\d+)/.exec(km); if(m2)id=porNum[m2[1]]; }
+      if(id)loteDe[km]=id; else kmSemLote.push(km);
+    });
     var servDe={}, servSemPar=[];
     var svcPorCodigo={}, svcPorNome={};
     SERV.forEach(function(s){ if(s.codigo)svcPorCodigo[estNorm(s.codigo)]=s.id; svcPorNome[estNorm(s.n)]=s.id; });
@@ -4786,11 +4815,13 @@
             aps.push({id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,estaca_id:eid,servico_id:sid,
                       data_inicio:r.datas[c].inicio||null,data_fim:r.datas[c].fim||null});
           });
-          Object.keys(r.vols).forEach(function(c){
+          var cs={}; Object.keys(r.vols).forEach(function(c){cs[c]=1;}); Object.keys(r.reals).forEach(function(c){cs[c]=1;});
+          Object.keys(cs).forEach(function(c){
             var sid=servDe[c]; if(!sid)return;
-            // volume_projeto só: quantidade e lote_servico são do planejamento do saldo
+            // projeto e realizado só: quantidade e lote_servico são do planejamento do saldo
             vols.push({id:newUuid(),obra_id:selectedObra.id,lote_id:loteId,estaca_id:eid,servico_id:sid,
-                       volume_projeto:r.vols[c]});
+                       volume_projeto:r.vols[c]!=null?r.vols[c]:null,
+                       volume_realizado:r.reals[c]!=null?r.reals[c]:null});
           });
         });
         for(var ai=0;ai<aps.length;ai+=400){
@@ -4809,16 +4840,17 @@
       return;
     }
     renderProd();
-    alert(novasEst+' estaca(s) criadas, '+novosAp+' apontamento(s) e '+novosVol+' volume(s) de projeto gravados.'+
+    alert(novasEst+' estaca(s) criadas, '+novosAp+' apontamento(s) e '+novosVol+' linha(s) de volume gravadas.'+
       (pulados?'\n\n'+pulados+' linha(s) ficaram de fora: o KM não tem lote correspondente no app.':''));
   }
   /** Resumo antes de gravar: o que casou, o que não casou e o de-para dos serviços que faltam. */
   function estDialogoImport(info){
     return new Promise(function(resolve){
       var back=document.createElement('div'); back.className='segmenu-backdrop';
-      var nDatas=0,nVols=0;
+      var nDatas=0,nVols=0,nReal=0;
       info.kms.forEach(function(km){ info.porKm[km].forEach(function(r){
-        nDatas+=Object.keys(r.datas).length; nVols+=Object.keys(r.vols||{}).length; }); });
+        nDatas+=Object.keys(r.datas).length; nVols+=Object.keys(r.vols||{}).length;
+        nReal+=Object.keys(r.reals||{}).length; }); });
       var kmOk=info.kms.length-info.kmSemLote.length;
       var svcOpts='<option value="">— ignorar —</option>'+SERV.map(function(s){return '<option value="'+s.id+'">'+escAttr(s.n)+'</option>';}).join('');
       var linhasDe=info.servSemPar.map(function(s){
@@ -4833,7 +4865,7 @@
         '<div class="note" style="margin-top:6px"><b>'+(info.servCols.length-info.servSemPar.length)+'</b> de '+info.servCols.length+' serviços casaram automaticamente (por código da EAP ou nome).</div>'+
         (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços sem par no app</div>'+
           '<div class="tbl-wrap"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>':'')+
-        '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto calculados (corte/rebaixo/aterro das colunas de volume; camadas por largura × espessura × espaçamento).</div>'+
+        '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto e <b>'+nReal+'</b> volumes realizados.</div>'+
         '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
         'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
@@ -4851,6 +4883,72 @@
     });
   }
 
+  /* ---------- Resumo de produção por serviço ----------
+   * Duas leituras, lado a lado, porque elas respondem perguntas diferentes e uma não substitui
+   * a outra:
+   *   EXTENSÃO  — estacas com término ÷ estacas onde o serviço se aplica. É o que casa com o
+   *               cronograma, porque estaca é estaca nos dois lados.
+   *   VOLUME    — realizado ÷ projeto, da planilha de controle. Mede o esforço de verdade, mas
+   *               é do escopo da obra toda, então NÃO se compara com a quantidade planejada.
+   * Onde a seção é constante (camadas de pavimento) as duas dão o mesmo número; na terraplanagem
+   * elas divergem, e é justamente aí que o resumo vale. */
+  var EST_RES_CARREGANDO=false;
+  async function estCarregarTudo(){
+    if(EST_RES_CARREGANDO)return;
+    EST_RES_CARREGANDO=true; renderProd();
+    try{
+      var ids=(window._LOTIDS||[]);
+      for(var i=0;i<ids.length;i++){ if(!ESTACAS[ids[i]])await sbLoadEstacas(ids[i]); }
+    }catch(e){ toast('Falha ao carregar: '+((e&&e.message)||e)); }
+    EST_RES_CARREGANDO=false; renderProd();
+  }
+  function estResumoHTML(){
+    var ids=(window._LOTIDS||[]), carregados=ids.filter(function(id){return !!ESTACAS[id];});
+    var cab='<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">'+
+      '<div><div class="eyebrow" style="margin:0">Resumo de produção</div>'+
+      '<div class="note">Extensão sai das datas; volume sai do que foi lançado como executado. Os dois são registros independentes.</div></div>'+
+      (carregados.length<ids.length
+        ? '<button class="btn" id="estCarregaTudo"'+(EST_RES_CARREGANDO?' disabled':'')+'>'+(EST_RES_CARREGANDO?'Carregando…':('Carregar os '+ids.length+' lotes'))+'</button>'
+        : '<span class="note">'+ids.length+' lote(s) carregados</span>')+'</div>';
+    if(!carregados.length)return '<div class="card" style="margin-bottom:10px">'+cab+
+      '<div class="note" style="margin-top:10px">Abra um lote abaixo, ou carregue todos, pra ver o resumo.</div></div>';
+    var espac=LOTE_ESPAC[0]||20;
+    var linhas=SERV.map(function(sv){
+      var nTot=0,nFim=0,proj=0,real=0;
+      carregados.forEach(function(loteId){
+        var vol=ESTACA_VOL[loteId]||{}, ap=ESTACA_AVANCO[loteId]||{};
+        (ESTACAS[loteId]||[]).forEach(function(e){
+          var k=e.id+'::'+sv.id, v=vol[k];
+          var aplica=!!(v&&((v.proj||0)>0||(v.real||0)>0));
+          if(!aplica)return;              // sem volume de projeto = o serviço não existe nesta estaca
+          nTot++; proj+=v.proj||0; real+=v.real||0;
+          if((ap[k]||{}).fim)nFim++;
+        });
+      });
+      if(!nTot)return '';
+      var pl=nTot?100*nFim/nTot:0, pv=proj?100*real/proj:0;
+      var div=Math.abs(pl-pv)>=5;
+      return '<tr><td>'+escAttr(sv.n)+'</td>'+
+        '<td class="r mono">'+fmtBR(nTot*espac)+' m</td>'+
+        '<td class="r mono">'+fmtBR(nFim*espac)+' m</td>'+
+        '<td class="r mono" style="font-weight:700">'+pl.toFixed(1)+'%</td>'+
+        '<td class="r mono">'+fmtBR(proj)+'</td>'+
+        '<td class="r mono">'+fmtBR(real)+'</td>'+
+        '<td class="r mono" style="font-weight:700'+(div?';color:var(--warn)':'')+'">'+pv.toFixed(1)+'%</td>'+
+        '<td class="r mono">'+fmtBR(proj-real)+'</td></tr>';
+    }).filter(Boolean).join('');
+    if(!linhas)return '<div class="card" style="margin-bottom:10px">'+cab+
+      '<div class="note" style="margin-top:10px">Nenhuma estaca com volume de projeto. Importe os informes de produção.</div></div>';
+    return '<div class="card" style="margin-bottom:10px">'+cab+
+      '<div class="tbl-wrap" style="margin-top:10px"><table class="edtbl" style="font-size:12.5px">'+
+      '<thead><tr><th rowspan="2">Serviço</th><th colspan="3" class="r">Extensão (das datas)</th>'+
+      '<th colspan="4" class="r">Volume (do executado)</th></tr>'+
+      '<tr><th class="r">Aplicável</th><th class="r">Concluída</th><th class="r">%</th>'+
+      '<th class="r">Projeto</th><th class="r">Realizado</th><th class="r">%</th><th class="r">Saldo</th></tr></thead>'+
+      '<tbody>'+linhas+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:8px">O <b>Saldo</b> é projeto − realizado: é ele que deveria bater com a quantidade cadastrada no planejamento. '+
+      'Em amarelo, os serviços onde extensão e volume contam histórias diferentes.</div></div>';
+  }
   function estacasHTML(){
     if(!LOTS.length)return '<div class="card"><div class="note">Nenhum lote cadastrado ainda. Cadastre em "Lotes & Quantidades".</div></div>';
     var dirtyN=Object.keys(ESTACA_QTY_DIRTY).length;
@@ -4862,7 +4960,7 @@
         '<button class="btn" id="estInformesBtn">↥ Importar informes de produção</button>'+
         '<button class="btn primary" id="estSaveQtd"'+(dirtyN?'':' disabled')+'>💾 Salvar quantidades'+(dirtyN?' ('+dirtyN+')':'')+'</button>'+
       '</div></div></div>';
-    return toolbar+LOTS.map(function(l,li){return estLoteGroupHTML(li);}).join('');
+    return toolbar+estResumoHTML()+LOTS.map(function(l,li){return estLoteGroupHTML(li);}).join('');
   }
   function estLoteGroupHTML(li){
     var loteId=(window._LOTIDS||[])[li];
@@ -5236,6 +5334,8 @@
       if(saveQtdBtn)saveQtdBtn.addEventListener('click',saveEstacaQtdAll);
       var modeloBtn=document.getElementById('estModeloBtn');
       if(modeloBtn)modeloBtn.addEventListener('click',exportEstacasModelo);
+      var ctBtn=document.getElementById('estCarregaTudo');
+      if(ctBtn)ctBtn.addEventListener('click',estCarregarTudo);
       var infBtn=document.getElementById('estInformesBtn');
       if(infBtn)infBtn.addEventListener('click',importarInformesArquivo);
       var importBtn=document.getElementById('estImportBtn');
