@@ -4862,10 +4862,21 @@
         nDatas+=Object.keys(r.datas).length; nVols+=Object.keys(r.vols||{}).length;
         nReal+=Object.keys(r.reals||{}).length; }); });
       var kmOk=info.kms.length-info.kmSemLote.length;
-      var svcOpts='<option value="">— ignorar —</option>'+SERV.map(function(s){return '<option value="'+s.id+'">'+escAttr(s.n)+'</option>';}).join('');
-      var linhasDe=info.servSemPar.map(function(s){
-        return '<tr><td>'+escAttr(s.nome)+(s.codigo?' <span class="note">'+escAttr(s.codigo)+'</span>':'')+'</td>'+
-          '<td><select class="esel" data-estdepara="'+s.c+'" style="max-width:260px">'+svcOpts+'</select></td></tr>';
+      // A lista traz TODOS os serviços da planilha, não só os que ficaram sem par: ver só os
+      // pendentes dava a impressão de que os outros tinham sido pulados. Quem já casou vem com
+      // o serviço do app selecionado e marcado com ✓ — e dá pra corrigir ali mesmo se o
+      // casamento automático errou.
+      var opt=function(sel){
+        return '<option value="">— ignorar —</option>'+SERV.map(function(s){
+          return '<option value="'+s.id+'"'+(s.id===sel?' selected':'')+'>'+escAttr(s.n)+'</option>';
+        }).join('');
+      };
+      var linhasDe=info.servCols.map(function(s){
+        var alvo=info.servDe[s.c]||'';
+        return '<tr'+(alvo?'':' style="background:var(--warn-bg)"')+'>'+
+          '<td style="white-space:nowrap">'+(alvo?'<span style="color:var(--good)">✓</span> ':'<span style="color:var(--warn)">•</span> ')+
+            escAttr(s.nome)+(s.codigo?' <span class="note">'+escAttr(s.codigo)+'</span>':'')+'</td>'+
+          '<td><select class="esel" data-estdepara="'+s.c+'" style="max-width:260px">'+opt(alvo)+'</select></td></tr>';
       }).join('');
       back.innerHTML='<div class="segmenu-panel card" style="max-width:680px;max-height:86vh;overflow:auto">'+
         '<div class="eyebrow" style="margin-bottom:2px">Importar informes de produção</div>'+
@@ -4873,8 +4884,8 @@
         '<div class="note"><b>'+kmOk+'</b> de '+info.kms.length+' KMs têm lote correspondente no app.'+
           (info.kmSemLote.length?' Sem lote (ficam de fora): <b>'+escAttr(info.kmSemLote.join(', '))+'</b> — crie esses lotes antes se quiser importá-los.':'')+'</div>'+
         '<div class="note" style="margin-top:6px"><b>'+(info.servCols.length-info.servSemPar.length)+'</b> de '+info.servCols.length+' serviços casaram automaticamente (por código da EAP ou nome).</div>'+
-        (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços sem par no app</div>'+
-          '<div class="tbl-wrap"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>':'')+
+        (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços da planilha ('+info.servCols.length+') — <span class="note">✓ já casou · • precisa escolher</span></div>'+
+          '<div class="tbl-wrap" style="max-height:290px;overflow:auto"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>':'')+
         '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto e <b>'+nReal+'</b> volumes realizados.</div>'+
         '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
         'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
