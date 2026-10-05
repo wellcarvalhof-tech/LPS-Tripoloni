@@ -8985,13 +8985,40 @@
       porNome[estNorm(nm)]=id;
       var m=/(\d+)/.exec(nm||''); if(m&&!porNum[m[1]])porNum[m[1]]=id;
     });
-    var deLote={}, semLote={};
+    var idxReg={}; reg.forEach(function(r){ if(r.id)idxReg[r.id]=r; });
+    var acha=function(txt){
+      if(!txt)return null;
+      var id=porNome[estNorm(txt)];
+      if(id)return id;
+      var m=/(\d{3,})\s*$/.exec(String(txt).trim());   // "NEW JERSEY - 249" -> 249
+      if(m&&porNum[m[1]])return porNum[m[1]];
+      m=/(\d+)/.exec(String(txt));
+      return (m&&porNum[m[1]])||null;
+    };
+    /* O "local" da coluna B nem sempre é um lote: CONTENÇÕES e OUTROS SERVIÇOS são tipos de
+     * serviço, e o KM deles está dentro da estrutura — em CONTENÇÕES como um nível da
+     * hierarquia ("5.1 → 249"), em OUTROS no fim do nome ("NEW JERSEY - 249"). Então o lote é
+     * procurado em três lugares, nesta ordem: a coluna B, os ancestrais e o próprio nome. */
+    var deLote={}, semLote={}, loteDe={}, nomeLimpo={};
     elementos.forEach(function(r){
-      if(deLote[r.lote]!==undefined)return;
-      var id=porNome[estNorm(r.lote)];
-      if(!id){ var m=/(\d+)/.exec(r.lote||''); if(m)id=porNum[m[1]]; }
-      if(id)deLote[r.lote]=id; else { deLote[r.lote]=null; semLote[r.lote]=1; }
+      var id=acha(r.lote);
+      if(!id&&r.id){                                   // sobe a hierarquia atrás de um KM
+        for(var k=r.id.length-1;k>=1&&!id;k--){
+          var pai=idxReg[r.id.slice(0,k)];
+          if(pai)id=acha(pai.nome);
+        }
+      }
+      var limpo=r.nome.trim();
+      if(!id){                                         // último recurso: o KM no próprio nome
+        id=acha(r.nome);
+        if(id)limpo=limpo.replace(/\s*[-–]\s*\d{3,}\s*$/,'').trim()||limpo;
+      }
+      loteDe[r.id||r.nome]=id||null;
+      nomeLimpo[r.id||r.nome]=limpo;
+      if(id)deLote[r.lote]=deLote[r.lote]||id; else semLote[r.lote]=1;
     });
+    var loteEl=function(r){ return loteDe[r.id||r.nome]||null; };
+    var nomeEl=function(r){ return nomeLimpo[r.id||r.nome]||r.nome.trim(); };
 
     // 5) janela: dia 0 = segunda da semana do projeto onde cai a tarefa mais antiga.
     //    A tabela segunda->semana é montada UMA vez: lbDataParaDia varre o calendário a cada
@@ -9028,9 +9055,11 @@
       }
       return (w-semIni)*DIAS_SEM+Math.max(0,dow);
     };
-    var usados=Object.keys(deLote).filter(function(k){return deLote[k];});
+    var usadosIds=[]; elementos.forEach(function(r){ var l=loteEl(r); if(l&&usadosIds.indexOf(l)<0)usadosIds.push(l); });
+    var usados=usadosIds;
     var escolha=await lbDialogoImport({aba:aba,elementos:elementos,reg:reg,deLote:deLote,
-      semLote:Object.keys(semLote),semIni:semIni,lotesOk:usados.length,concluidas:concluidas});
+      semLote:Object.keys(semLote),semIni:semIni,lotesOk:usados.length,concluidas:concluidas,
+      loteEl:loteEl,nomeEl:nomeEl});
     if(!escolha)return;
 
     // 6) monta o estudo: uma etapa por nome, com início fixo e duração por lote
@@ -9047,17 +9076,17 @@
     };
     var vezes={};
     elementos.forEach(function(r){
-      if(!deLote[r.lote])return;
-      var k=r.lote+'||'+lbChaveNome(r.nome);
+      var lid=loteEl(r); if(!lid)return;
+      var k=lid+'||'+lbChaveNome(nomeEl(r));
       vezes[k]=(vezes[k]||0)+1;
     });
     var repete={};
     Object.keys(vezes).forEach(function(k){ if(vezes[k]>1)repete[k.split('||')[1]]=1; });
     var porChave={}, ordem=[];
     elementos.forEach(function(r){
-      if(!deLote[r.lote])return;
-      var base=lbChaveNome(r.nome), pai=paiDe(r);
-      var nome=(repete[base]&&pai)?(pai+' · '+r.nome.trim()):r.nome.trim();
+      if(!loteEl(r))return;
+      var base=lbChaveNome(nomeEl(r)), pai=paiDe(r);
+      var nome=(repete[base]&&pai&&!/^\d+$/.test(pai))?(pai+' · '+nomeEl(r)):nomeEl(r);
       var k=lbChaveNome(nome);
       if(!porChave[k]){ porChave[k]={nome:nome,itens:[]}; ordem.push(k); }
       porChave[k].itens.push(r);
@@ -9067,7 +9096,7 @@
       var durs=g.itens.map(function(r){ var a=diaDe(r.ini,false),b=diaDe(r.fim,true); return (a==null||b==null)?1:Math.max(1,b-a+1); });
       var aj={};
       g.itens.forEach(function(r){
-        var lid=deLote[r.lote]; if(!lid)return;
+        var lid=loteEl(r); if(!lid)return;
         var d0=diaDe(r.ini,false), d1=diaDe(r.fim,true);
         if(d0==null||d1==null||d0<0)return;
         aj[lid]={ini:d0,dur:Math.max(1,d1-d0+1)};
@@ -9075,13 +9104,13 @@
       // Lote onde a etapa não aparece no cronograma é marcado como "não ocorre". Sem isso ela
       // seria posicionada pela sequência e apareceria uma barra fantasma — com 27 etapas em 6
       // lotes isso dava 162 barras pra 66 tarefas reais, e esticava o estudo meses a mais.
-      usados.forEach(function(k){ var lid=deLote[k]; if(lid&&!aj[lid])aj[lid]={pula:true}; });
+      usados.forEach(function(lid){ if(lid&&!aj[lid])aj[lid]={pula:true}; });
       return {id:'imp'+i+'_'+Date.now().toString(36),nome:g.nome,
         sigla:lbSiglaAuto(g.nome),cor:PAL[i%PAL.length],
         dias:Math.round(durs.reduce(function(a,b){return a+b;},0)/durs.length)||1,
         equipes:1,offset:0,aj:aj,x:60+(i%6)*170,y:70+Math.floor(i/6)*110};
     });
-    var lotesIds=usados.map(function(k){return deLote[k];});
+    var lotesIds=usados.slice();
     var setas=lbSetasPelasDatas(etapas,lotesIds);
     lbArrumaMacroFluxo(etapas,setas);
     c.inicio=semIni;
@@ -9189,12 +9218,18 @@
   function lbDialogoImport(info){
     return new Promise(function(resolve){
       var back=document.createElement('div'); back.className='segmenu-backdrop';
-      var porLote={}; info.elementos.forEach(function(r){ porLote[r.lote]=(porLote[r.lote]||0)+1; });
-      var nomes={}; info.elementos.forEach(function(r){ if(info.deLote[r.lote])nomes[lbChaveNome(r.nome)]=1; });
+      var porLote={}, alvos={}, nomes={};
+      info.elementos.forEach(function(r){
+        porLote[r.lote]=(porLote[r.lote]||0)+1;
+        var l=info.loteEl(r);
+        if(l){ (alvos[r.lote]||(alvos[r.lote]={}))[l]=1; nomes[lbChaveNome(info.nomeEl(r))]=1; }
+      });
       var linhas=Object.keys(porLote).sort().map(function(k){
-        var id=info.deLote[k];
-        return '<tr><td>'+escAttr(k)+'</td><td class="r mono">'+porLote[k]+'</td>'+
-          '<td>'+(id?('<span style="color:var(--good)">✓</span> '+escAttr(lbNomeLote(id))):'<span style="color:var(--warn)">• sem lote no app</span>')+'</td></tr>';
+        var ls=Object.keys(alvos[k]||{});
+        var txt=!ls.length?'<span style="color:var(--warn)">• sem lote no app</span>'
+          :('<span style="color:var(--good)">✓</span> '+escAttr(ls.map(lbNomeLote).join(', '))+
+            (ls.length>1?' <span class="note">(o KM vem de dentro da estrutura)</span>':''));
+        return '<tr><td>'+escAttr(k)+'</td><td class="r mono">'+porLote[k]+'</td><td>'+txt+'</td></tr>';
       }).join('');
       back.innerHTML='<div class="segmenu-panel card" style="max-width:620px;max-height:86vh;overflow:auto">'+
         '<div class="eyebrow" style="margin-bottom:2px">Importar cronograma para a linha de balanço</div>'+
