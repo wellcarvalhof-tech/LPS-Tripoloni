@@ -8683,6 +8683,7 @@
   var MF_MODE='mover', MF_SEL=null;
   var LB_TAB='lb';        // aba interna: lb | ajuste | gantt | curva
   var LB_VIEW='linhas';   // desenho da linha de balanço: linhas (faixas) | quadros (blocos)
+  var LB_CONEX=false;     // mostra as ligações do macro-fluxo dentro de cada lote
   var LB_GANTT_FONTE='lb';// gantt: lb | tc
   var LB_GANTT_VISTA='grafico'; // gantt: grafico | cronograma
   var MF_W=1200, MF_H=460, MF_NW=136, MF_NH=44; // caixas compactas: cabem mais etapas
@@ -9080,15 +9081,101 @@
         dias:Math.round(durs.reduce(function(a,b){return a+b;},0)/durs.length)||1,
         equipes:1,offset:0,aj:aj,x:60+(i%6)*170,y:70+Math.floor(i/6)*110};
     });
+    var lotesIds=usados.map(function(k){return deLote[k];});
+    var setas=lbSetasPelasDatas(etapas,lotesIds);
+    lbArrumaMacroFluxo(etapas,setas);
     c.inicio=semIni;
-    c.lotes=usados.map(function(k){return deLote[k];});
+    c.lotes=lotesIds;
     c.etapas=etapas;
-    c.setas=[];      // o cronograma já traz as datas; ligação viraria recálculo por cima delas
+    c.setas=setas;
     LB_DIRTY=true; LB_TAB='lb';
     go('cr-lb');
-    alert(etapas.length+' etapa(s) em '+c.lotes.length+' lote(s), a partir da semana '+semIni+'.'+
-      '\n\nAs datas vieram fixas do cronograma. Pra voltar ao cálculo automático de uma etapa, apague o início fixo dela no Ajuste manual.'+
+    alert(etapas.length+' etapa(s) em '+c.lotes.length+' lote(s) e '+setas.length+' ligação(ões), a partir da semana '+semIni+'.'+
+      '\n\nAs datas vieram fixas do cronograma — as setas mostram a sequência observada e não movem as barras.'+
       '\n\nNada foi gravado ainda — use "Salvar linha de balanço".');
+  }
+  /** Liga, dentro de cada lote, o fim de uma etapa ao início da seguinte, seguindo as setas do
+   *  macro-fluxo. Fica em cotovelo (sai na horizontal, desce/sobe, entra na horizontal) porque
+   *  reta diagonal cruzando cinco faixas não se lê. Ligação que aponta pra trás no tempo ganha
+   *  cor de alerta: é onde a sequência do processo não está sendo respeitada. */
+  function lbConexoesSVG(calc,c,xx,yy){
+    if(!c.setas||!c.setas.length)return '';
+    var porLoteEtapa={};
+    calc.itens.forEach(function(it){ porLoteEtapa[it.lote+'||'+it.eid]=it; });
+    var out='';
+    calc.lotes.forEach(function(lid){
+      c.setas.forEach(function(st){
+        var A=porLoteEtapa[lid+'||'+st.de], B=porLoteEtapa[lid+'||'+st.para];
+        if(!A||!B)return;
+        var x1=xx(A.fim), y1=yy(A.j,A.faixa), x2=xx(B.ini), y2=yy(B.j,B.faixa);
+        // Sobreposição é comum em obra (frentes em paralelo), então ela ganha destaque e não
+        // alarme: fica amarela pra chamar atenção sem parecer erro.
+        var sobre=Math.round(A.fim-B.ini);
+        var cor=(sobre>0)?'var(--warn)':'var(--ink-2)';
+        var mx=(sobre>0)?(x1+8):((x1+x2)/2);
+        out+='<path d="M'+x1.toFixed(1)+','+y1.toFixed(1)+' H'+mx.toFixed(1)+' V'+y2.toFixed(1)+' H'+x2.toFixed(1)+'" '+
+          'fill="none" stroke="'+cor+'" stroke-width="1.1" opacity="'+((sobre>0)?'.75':'.45')+'">'+
+          '<title>'+escAttr(lbNomeEtapa(c,st.de))+' \u2192 '+escAttr(lbNomeEtapa(c,st.para))+'\n'+escAttr(lbNomeLote(lid))+
+          ((sobre>0)?('\nsobrep\u00f5em '+sobre+' dia(s)'):('\nfolga de '+Math.round(B.ini-A.fim)+' dia(s)'))+'</title></path>'+
+          '<circle cx="'+x2.toFixed(1)+'" cy="'+y2.toFixed(1)+'" r="1.9" fill="'+cor+'" opacity="'+((sobre>0)?'.8':'.5')+'"/>';
+      });
+    });
+    return out;
+  }
+  function lbNomeEtapa(c,id){ var e=(c.etapas||[]).filter(function(x){return x.id===id;})[0]; return e?e.nome:'?'; }
+  /** Sequência do macro-fluxo deduzida das próprias datas: em cada lote, etapas em ordem de
+   *  início viram pares "uma depois da outra", e a latência é a folga típica (mediana) entre o
+   *  fim de uma e o início da seguinte.
+   *
+   *  As setas aqui são DESCRITIVAS: como cada etapa tem início fixo vindo do cronograma, elas
+   *  não empurram nada — mostram o encadeamento que já existe. */
+  function lbSetasPelasDatas(etapas,lotes){
+    var ini={}, cont={};
+    etapas.forEach(function(e){
+      var vs=[]; Object.keys(e.aj||{}).forEach(function(l){ var a=e.aj[l]; if(a&&a.ini!=null)vs.push(a.ini); });
+      ini[e.id]=vs.length?vs.reduce(function(x,y){return x+y;},0)/vs.length:1e9;
+    });
+    var ordem=etapas.slice().sort(function(a,b){ return ini[a.id]-ini[b.id]; });
+    var pos={}; ordem.forEach(function(e,i){ pos[e.id]=i; });
+    lotes.forEach(function(lid){
+      var seq=etapas.filter(function(e){ var a=(e.aj||{})[lid]; return a&&a.ini!=null; })
+        .sort(function(a,b){ return a.aj[lid].ini-b.aj[lid].ini; });
+      for(var i=0;i+1<seq.length;i++){
+        var A=seq[i], B=seq[i+1];
+        if(pos[A.id]>=pos[B.id])continue;          // só pra frente: garante grafo sem ciclo
+        var k=A.id+'||'+B.id, g=(B.aj[lid].ini)-(A.aj[lid].ini+(A.aj[lid].dur||1));
+        (cont[k]||(cont[k]={n:0,gaps:[]})).n++;
+        cont[k].gaps.push(Math.max(0,Math.round(g)));
+      }
+    });
+    // Toda vizinhança observada vira ligação. Exigir que o par se repetisse em dois lotes
+    // parecia mais seguro, mas com as etapas qualificadas pelo pai quase nenhuma se repete:
+    // sobravam 3 setas pra 44 caixas e o macro-fluxo continuava uma grade solta.
+    return Object.keys(cont).map(function(k){
+      var p=k.split('||'), g=cont[k].gaps.slice().sort(function(a,b){return a-b;});
+      return {de:p[0],para:p[1],lat:g[Math.floor(g.length/2)]||0};
+    });
+  }
+  /** Espalha as caixas do macro-fluxo em colunas pela ordem do fluxo: quem não depende de
+   *  ninguém fica na primeira coluna, e cada etapa cai uma coluna à frente do seu predecessor
+   *  mais tardio. Sem isso as caixas ficam numa grade e as setas se cruzam sem sentido. */
+  function lbArrumaMacroFluxo(etapas,setas){
+    var preds={}; etapas.forEach(function(e){ preds[e.id]=[]; });
+    setas.forEach(function(st){ if(preds[st.para])preds[st.para].push(st.de); });
+    var nivel={}, visitando={};
+    var calc=function(id){
+      if(nivel[id]!=null)return nivel[id];
+      if(visitando[id])return 0;
+      visitando[id]=true;
+      var m=0; (preds[id]||[]).forEach(function(d){ m=Math.max(m,calc(d)+1); });
+      visitando[id]=false; nivel[id]=m; return m;
+    };
+    etapas.forEach(function(e){ calc(e.id); });
+    var porNivel={};
+    etapas.forEach(function(e){ var n=nivel[e.id]||0; (porNivel[n]||(porNivel[n]=[])).push(e); });
+    Object.keys(porNivel).forEach(function(n){
+      porNivel[n].forEach(function(e,i){ e.x=60+(+n)*215; e.y=70+i*95; });
+    });
   }
   /** Sigla curta a partir do nome, pra caber dentro do bloco na linha de balanço. */
   function lbSiglaAuto(nome){
@@ -9205,6 +9292,7 @@
         if(arrastavel&&larg>=8)s+='<rect class="lb-res" data-lbet-res="'+e.id+'" data-lblote-res="'+escAttr(x2.lote)+'" x="'+(x1+larg-4).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="5" height="'+alt.toFixed(1)+'" fill="#fff" opacity=".35"><title>Arraste pra mudar a duração nesta etapa/lote</title></rect>';
       });
     });
+    if(LB_CONEX)s+=lbConexoesSVG(calc,c,xx,yy);
     s+=lbLinhaHoje(c.inicio,xx,totDias,pt,ih);
     return '<svg class="chart"'+(arrastavel?' id="lbSvgDrag"':'')+' viewBox="0 0 '+W+' '+H+'" style="min-width:860px" data-totdias="'+totDias+'" data-iw="'+iw+'" data-w="'+W+'">'+s+'</svg>'+
       '<div class="legend" style="margin-top:6px">'+c.etapas.map(function(e){
@@ -9637,7 +9725,8 @@
     }).join('');
     var vistas=[['linhas','Linhas + quadros'],['so-linhas','Só linhas'],['quadros','Só quadros']].map(function(v){
       return '<button class="subtab'+(LB_VIEW===v[0]?' active':'')+'" data-lbview="'+v[0]+'">'+v[1]+'</button>';
-    }).join('');
+    }).join('')+
+    '<button class="subtab'+(LB_CONEX?' active':'')+'" data-lbconex="1" title="Liga o fim de uma etapa ao início da seguinte, dentro do mesmo lote">⇢ Conexões</button>';
     var cabec='<div class="card" style="margin-bottom:14px">'+
       '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
         '<span class="lab" style="margin:0">Serviço a detalhar</span>'+svcSel+
@@ -9817,6 +9906,9 @@
     if(save)save.addEventListener('click',lbSalvar);
     root.querySelectorAll('[data-lbtab]').forEach(function(b){
       b.addEventListener('click',function(){ LB_TAB=b.getAttribute('data-lbtab'); MF_SEL=null; go('cr-lb'); });
+    });
+    root.querySelectorAll('[data-lbconex]').forEach(function(b){
+      b.addEventListener('click',function(){ LB_CONEX=!LB_CONEX; go('cr-lb'); });
     });
     root.querySelectorAll('[data-lbview]').forEach(function(b){
       b.addEventListener('click',function(){ LB_VIEW=b.getAttribute('data-lbview'); go('cr-lb'); });
