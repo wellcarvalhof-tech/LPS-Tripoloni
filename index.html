@@ -4679,15 +4679,21 @@
         else if(/^ATERRO$/.test(hSub[k]))cAter=k;
       }
     }
-    // 2) serviços: todo item cujo par de colunas abaixo é INÍCIO/TÉRMINO
-    var servCols=[];
-    for(var j=0;j<hItens.length;j++){
+    // 2) serviços: o bloco CONTÍNUO de pares INÍCIO/TÉRMINO. Para no primeiro par que falha —
+    // depois do bloco a planilha repete nomes de item (volumes, comparativo) e traz um
+    // totalizador do grupo ("2. Terraplenagem", em vermelho) que também tem par de datas mas
+    // NÃO é serviço: contá-lo duplicaria o avanço da terraplanagem inteira.
+    var servCols=[], ini=-1;
+    for(var j0=0;j0<hSub.length;j0++){
+      if(/^INICIO$/.test(hSub[j0]||'')&&/^TERMINO$/.test(hSub[j0+1]||'')){ ini=j0; break; }
+    }
+    for(var j=ini;ini>=0&&j<hItens.length;j+=2){
+      if(!/^INICIO$/.test(hSub[j]||'')||!/^TERMINO$/.test(hSub[j+1]||''))break;
       if(!hItens[j])continue;
-      if(!/^INICIO$/.test(hSub[j]||'')||!/^TERMINO$/.test(hSub[j+1]||''))continue;
-      var achaAcima=function(linha){
-        for(var x=j;x>=Math.max(0,j-12);x--) if(linha[x])return linha[x];
+      var achaAcima=(function(jj){ return function(linha){
+        for(var x=jj;x>=Math.max(0,jj-12);x--) if(linha[x])return linha[x];
         return '';
-      };
+      };})(j);
       servCols.push({c:j,nome:String(aoa[hdr][j]).trim(),
         codigo:(hCod.length?achaAcima(hCod):'').replace(/^.*-->\s*/,''),
         grupo:(hGrupo.length?achaAcima(hGrupo):'')});
