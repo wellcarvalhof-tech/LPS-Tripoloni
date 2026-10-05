@@ -8936,7 +8936,9 @@
       qtd:  estAchaCol(h,[/^QTD\.?$/]),
       um:   estAchaCol(h,[/^U\.?M\.?$/]),
       ini:  estAchaCol(h,[/^INICIO PREV/,/^INICIO$/]),
-      fim:  estAchaCol(h,[/^FIM PREV/,/^FIM$/,/^TERMINO$/])
+      fim:  estAchaCol(h,[/^FIM PREV/,/^FIM$/,/^TERMINO$/]),
+      real: estAchaCol(h,[/^REALIZADO$/]),
+      stat: estAchaCol(h,[/^STATUS$/])
     };
     if(col.item<0||col.ini<0||col.fim<0){ alert('Faltou a coluna ITEM, de início ou de fim.'); return; }
 
@@ -8948,7 +8950,11 @@
       var di=excelDateToIso(row[col.ini]), df=excelDateToIso(row[col.fim]);
       if(!/^\d{4}-\d{2}-\d{2}$/.test(di)||!/^\d{4}-\d{2}-\d{2}$/.test(df))continue;
       var idTxt=col.id>=0?String(row[col.id]==null?'':row[col.id]).replace(/[.,]/g,'').trim():'';
+      var vr=col.real>=0?Number(row[col.real]):NaN;
+      var st=col.stat>=0?estNorm(row[col.stat]):'';
       reg.push({nome:nome,ini:di,fim:df,
+        pct:isFinite(vr)?vr:null, status:st,
+        concluida:(isFinite(vr)&&vr>=0.999)||/^CONCLU/.test(st),
         lote:col.lote>=0?String(row[col.lote]==null?'':row[col.lote]).trim():'',
         grupo:col.grupo>=0?String(row[col.grupo]==null?'':row[col.grupo]).trim():'',
         id:/^\d+$/.test(idTxt)?idTxt:'', folha:lbEhFolha(nome)});
@@ -8964,7 +8970,12 @@
       if(!filhos.length)return true;
       return filhos.some(function(x){ return x.folha&&x.id.length===r.id.length+1; });
     });
-    if(!elementos.length){ alert('Não consegui identificar as etapas no arquivo.'); return; }
+    // Etapa já concluída não entra: a linha de balanço aqui é pra enxergar o que falta executar.
+    // Vale tanto o rótulo "Concluído" quanto 100% de avanço — às vezes só um dos dois está
+    // preenchido, e quem está a 100% está pronto de qualquer jeito.
+    var concluidas=elementos.filter(function(r){ return r.concluida; }).length;
+    elementos=elementos.filter(function(r){ return !r.concluida; });
+    if(!elementos.length){ alert('Todas as etapas do arquivo já estão concluídas — não há o que trazer pra linha de balanço.'); return; }
 
     // 4) locais -> lotes da obra (casa pelo número, como no informe de produção)
     var ids=lbLoteIds(), porNome={}, porNum={};
@@ -9018,17 +9029,36 @@
     };
     var usados=Object.keys(deLote).filter(function(k){return deLote[k];});
     var escolha=await lbDialogoImport({aba:aba,elementos:elementos,reg:reg,deLote:deLote,
-      semLote:Object.keys(semLote),semIni:semIni,lotesOk:usados.length});
+      semLote:Object.keys(semLote),semIni:semIni,lotesOk:usados.length,concluidas:concluidas});
     if(!escolha)return;
 
     // 6) monta o estudo: uma etapa por nome, com início fixo e duração por lote
     var c=lbSvc(); if(!c)return;
     var PAL=['#3E7CB1','#5F9E6E','#C98A2B','#9A6DB0','#C0653F','#4FA3A8','#7B8CA6','#B5705F'];
+    // O mesmo nome aparece sob pais diferentes ("ENCONTRO 01" em SAPATAS e em TRAVESSAS, cada um
+    // com suas datas). Juntar tudo numa etapa só faria uma sobrescrever a outra, então quando o
+    // nome se repete dentro do mesmo lote ele passa a levar o pai junto.
+    var porId={}; reg.forEach(function(r){ if(r.id)porId[r.id]=r; });
+    var paiDe=function(r){
+      if(!r.id||r.id.length<2)return '';
+      var p=porId[r.id.slice(0,-1)];
+      return p?p.nome.trim():'';
+    };
+    var vezes={};
+    elementos.forEach(function(r){
+      if(!deLote[r.lote])return;
+      var k=r.lote+'||'+lbChaveNome(r.nome);
+      vezes[k]=(vezes[k]||0)+1;
+    });
+    var repete={};
+    Object.keys(vezes).forEach(function(k){ if(vezes[k]>1)repete[k.split('||')[1]]=1; });
     var porChave={}, ordem=[];
     elementos.forEach(function(r){
       if(!deLote[r.lote])return;
-      var k=lbChaveNome(r.nome);
-      if(!porChave[k]){ porChave[k]={nome:r.nome.trim(),itens:[]}; ordem.push(k); }
+      var base=lbChaveNome(r.nome), pai=paiDe(r);
+      var nome=(repete[base]&&pai)?(pai+' · '+r.nome.trim()):r.nome.trim();
+      var k=lbChaveNome(nome);
+      if(!porChave[k]){ porChave[k]={nome:nome,itens:[]}; ordem.push(k); }
       porChave[k].itens.push(r);
     });
     var etapas=ordem.map(function(k,i){
@@ -9041,6 +9071,10 @@
         if(d0==null||d1==null||d0<0)return;
         aj[lid]={ini:d0,dur:Math.max(1,d1-d0+1)};
       });
+      // Lote onde a etapa não aparece no cronograma é marcado como "não ocorre". Sem isso ela
+      // seria posicionada pela sequência e apareceria uma barra fantasma — com 27 etapas em 6
+      // lotes isso dava 162 barras pra 66 tarefas reais, e esticava o estudo meses a mais.
+      usados.forEach(function(k){ var lid=deLote[k]; if(lid&&!aj[lid])aj[lid]={pula:true}; });
       return {id:'imp'+i+'_'+Date.now().toString(36),nome:g.nome,
         sigla:lbSiglaAuto(g.nome),cor:PAL[i%PAL.length],
         dias:Math.round(durs.reduce(function(a,b){return a+b;},0)/durs.length)||1,
@@ -9077,7 +9111,8 @@
       }).join('');
       back.innerHTML='<div class="segmenu-panel card" style="max-width:620px;max-height:86vh;overflow:auto">'+
         '<div class="eyebrow" style="margin-bottom:2px">Importar cronograma para a linha de balanço</div>'+
-        '<div class="note" style="margin-bottom:12px">Aba <b>'+escAttr(info.aba)+'</b> · '+info.reg.length+' tarefas, das quais <b>'+info.elementos.length+'</b> são elementos (o nível logo acima de aço/fôrma/concreto).</div>'+
+        '<div class="note" style="margin-bottom:12px">Aba <b>'+escAttr(info.aba)+'</b> · '+info.reg.length+' tarefas. Entram <b>'+info.elementos.length+'</b> etapas — o nível logo acima de aço/fôrma/concreto, '+
+          'sem as <b>'+info.concluidas+'</b> já concluídas.</div>'+
         '<div class="tbl-wrap"><table class="edtbl" style="min-width:0"><thead><tr><th>Local na planilha</th><th class="r">Etapas</th><th>Lote do app</th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
         '<div class="note" style="margin-top:10px">Vão entrar <b>'+Object.keys(nomes).length+'</b> etapas distintas em <b>'+info.lotesOk+'</b> lote(s), começando na semana <b>'+info.semIni+'</b> do projeto.'+
         (info.semLote.length?' Sem lote correspondente (ficam de fora): <b>'+escAttr(info.semLote.join(', '))+'</b>.':'')+'</div>'+
