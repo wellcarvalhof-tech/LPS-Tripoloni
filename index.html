@@ -327,6 +327,10 @@
   .tcm-badge{position:absolute;top:0;right:0;display:flex;align-items:center;gap:2px;padding:0 3px;font-size:9px;font-weight:700;color:#fff;border-bottom-left-radius:4px}
   .tcm-team{position:absolute;bottom:0;left:2px;font-size:8px;font-weight:700;line-height:1;opacity:.75}
   .tcm-rain{font-size:9px;font-weight:600;color:var(--info);white-space:nowrap}
+  /* Linha de "hoje" na matriz: a borda marca o começo da semana corrente. As semanas descem
+     da mais nova pra mais antiga, então essa borda é literalmente a linha do tempo de agora. */
+  table.tcm tr.tcm-hoje > td{box-shadow:inset 0 2px 0 var(--accent)}
+  .tcm-hojetag{display:inline-block;margin-left:4px;padding:0 5px;border-radius:99px;background:var(--accent);color:#fff;font-size:8.5px;font-weight:700;vertical-align:middle}
   tr.tcm-holrow td{background:var(--elev);color:var(--muted)}
   table.tcm tr.tcm-holrow td.dt,table.tcm tr.tcm-holrow td.wk{background:var(--elev)}
   tr.tcm-rainrow td.dt,tr.tcm-rainrow td.wk,tr.tcm-rainrow td.cell{background:var(--accent-soft)}
@@ -6955,6 +6959,15 @@
     var hojeW=0; for(var i=1;i<=tw;i++){ if(calWeekDate(i)<=today)hojeW=i; else break; }
     return hojeW;
   }
+  /** A semana de calendário que contém hoje começa nesta segunda? Serve pra marcar "onde
+   *  estamos" na matriz e na linha de balanço. */
+  function ehSemanaDeHoje(d){
+    if(!d)return false;
+    var hoje=new Date(); hoje.setHours(0,0,0,0);
+    var ini=new Date(d.getTime()); ini.setHours(0,0,0,0);
+    var fim=new Date(ini.getTime()); fim.setDate(fim.getDate()+7);
+    return hoje>=ini&&hoje<fim;
+  }
   function hojeWeekNumber(tw){
     var today=new Date(); today.setHours(0,0,0,0);
     var hojeW=0; for(var i=1;i<=tw;i++){ if(mondayOf(i)<=today)hojeW=i; else break; }
@@ -8500,7 +8513,7 @@
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
       if(entry.isHoliday){
-        body+='<tr class="tcm-holrow"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td><td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
+        body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehSemanaDeHoje(d)?'<span class="tcm-hojetag">hoje</span>':'')+'</td><td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
         continue;
       }
       var w=entry.working, tds='';
@@ -8523,7 +8536,9 @@
         }).join('');
         tds+='<td class="cell" data-lot="'+li+'"><div class="tcm-row">'+inner+'</div></td>';
       }
-      body+='<tr'+(f<0.999?' class="tcm-rainrow"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+rainBadge+'</td>'+tds+'</tr>';
+      var ehHoje=ehSemanaDeHoje(d);
+      var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
+      body+='<tr'+(cls?' class="'+cls+'"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
     if(withSummary){
       body+=SERV.map(function(s,si){
@@ -8817,6 +8832,20 @@
     }
     return null;
   }
+  /** Linha vertical de "hoje" na linha de balanço e no Gantt. Vai por último no SVG pra ficar
+   *  por cima das barras — marcar o tempo e sumir atrás de uma etapa não serviria de nada.
+   *  Fora da janela do estudo (serviço que ainda não começou ou já terminou) não desenha. */
+  function lbLinhaHoje(inicioSem,xx,totDias,pt,ih){
+    var hoje=new Date(); hoje.setHours(0,0,0,0);
+    // Estudo que ainda não começou: lbDataParaDia devolveria 0 (ele empurra data anterior pra
+    // primeira semana útil) e a linha apareceria no dia 0, dizendo que hoje é o início. Não é.
+    if(hoje<mondayOf(inicioSem||1))return '';
+    var dia=lbDataParaDia(todayISO(),inicioSem||1);
+    if(dia==null||dia<0||dia>totDias)return '';
+    var x=xx(dia).toFixed(1);
+    return '<line x1="'+x+'" y1="'+(pt-4)+'" x2="'+x+'" y2="'+(pt+ih)+'" stroke="var(--crit)" stroke-width="1.6" stroke-dasharray="5 3" opacity=".95"><title>Hoje — '+fmtDate(new Date())+'</title></line>'+
+      '<text x="'+x+'" y="'+(pt-8)+'" text-anchor="middle" style="font-size:9px;font-weight:700;fill:var(--crit)">hoje</text>';
+  }
   function lbSVG(arrastavel){
     var calc=lbCalc(); if(!calc)return '';
     var c=calc.c;
@@ -8894,6 +8923,7 @@
         if(arrastavel&&larg>=8)s+='<rect class="lb-res" data-lbet-res="'+e.id+'" data-lblote-res="'+escAttr(x2.lote)+'" x="'+(x1+larg-4).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="5" height="'+alt.toFixed(1)+'" fill="#fff" opacity=".35"><title>Arraste pra mudar a duração nesta etapa/lote</title></rect>';
       });
     });
+    s+=lbLinhaHoje(c.inicio,xx,totDias,pt,ih);
     return '<svg class="chart"'+(arrastavel?' id="lbSvgDrag"':'')+' viewBox="0 0 '+W+' '+H+'" style="min-width:860px" data-totdias="'+totDias+'" data-iw="'+iw+'" data-w="'+W+'">'+s+'</svg>'+
       '<div class="legend" style="margin-top:6px">'+c.etapas.map(function(e){
         return '<span><span class="swatch" style="background:'+(e.cor||'#888')+'"></span><b>'+escAttr(lbSigla(e))+'</b> · '+escAttr(e.nome)+'</span>';
@@ -8956,6 +8986,7 @@
         escAttr(compacto?(lbSigla(L.e)+' · '+L.e.nome):L.e.nome)+'</text>';
       s+='<rect x="'+xx(L.it.ini).toFixed(1)+'" y="'+(y+rowH*0.18).toFixed(1)+'" width="'+Math.max(2,xx(L.it.fim)-xx(L.it.ini)).toFixed(1)+'" height="'+(rowH*0.64).toFixed(1)+'" rx="3" fill="'+(L.e.cor||'#888')+'"><title>'+escAttr(L.e.nome)+' · '+escAttr(lbNomeLote(L.lote))+'\ndia '+Math.round(L.it.ini)+' → '+Math.round(L.it.fim)+'</title></rect>';
     });
+    s+=lbLinhaHoje(c.inicio,xx,totDias,pt,ih);
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'"'+(compacto?' preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto"':' style="min-width:1100px"')+'>'+s+'</svg>';
   }
   /** Visão "cronograma" (estilo MS Project): tabela agrupada por lote, com início, término e
