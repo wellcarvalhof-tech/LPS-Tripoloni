@@ -8708,7 +8708,7 @@
     if(!e.aj)e.aj={};
     var a=e.aj[loteId]||{};
     Object.keys(patch).forEach(function(k){ a[k]=patch[k]; });
-    if(!(a.off>0)&&!(a.dur>0)&&!a.pula)delete e.aj[loteId]; else e.aj[loteId]=a;
+    if(!(a.off>0)&&!(a.dur>0)&&!a.pula&&!(a.ini!=null&&a.ini>=0))delete e.aj[loteId]; else e.aj[loteId]=a;
   }
   function lbSvcId(si){ var s=SERV[si]; return (s&&s.id)||('s'+si); }
   function lbSvcIdx(id){ for(var i=0;i<SERV.length;i++){ if(lbSvcId(i)===id)return i; } return -1; }
@@ -8817,7 +8817,10 @@
         ini+=Math.max(0,+e.offset||0);   // folga da etapa inteira
         var base=ini;                     // mais cedo possível neste lote (sem o ajuste do lote)
         var aj=lbAjuste(e,lid);
-        if(aj&&aj.off>0)ini+=aj.off;      // atraso só deste lote em diante
+        // Início FIXO: cronograma importado chega com a data decidida. Quando existe, ele manda —
+        // senão a continuidade de equipe empurraria a etapa e a data planejada se perderia.
+        if(aj&&aj.ini!=null&&aj.ini>=0)ini=+aj.ini;
+        else if(aj&&aj.off>0)ini+=aj.off; // atraso só deste lote em diante
         var dur=Math.max(0.5,(aj&&aj.dur>0)?aj.dur:(+e.dias||1)), fim=ini+dur;
         fimNoLote[eid]=fim; livres[kEq]=fim;
         itens.push({eid:eid,lote:lid,j:j,ini:ini,fim:fim,base:base,dur:dur,eq:kEq+1,nEq:livres.length});
@@ -8863,6 +8866,233 @@
     return '<line x1="'+x+'" y1="'+(pt-4)+'" x2="'+x+'" y2="'+(pt+ih)+'" stroke="var(--crit)" stroke-width="1.6" stroke-dasharray="5 3" opacity=".95"><title>Hoje — '+fmtDate(new Date())+'</title></line>'+
       '<text x="'+x+'" y="'+(pt-8)+'" text-anchor="middle" style="font-size:9px;font-weight:700;fill:var(--crit)">hoje</text>';
   }
+  /* ---------- Importar cronograma (Gantt do Excel) para a linha de balanço ----------
+   * O cronograma que a obra recebe vem no template Vertex42: uma linha por tarefa, com a
+   * hierarquia num código de ID (1 → 1.1 → 1.11 → 1.111 → 1.1111) e as datas já decididas.
+   *
+   * Níveis encontrados nesse arquivo: 1 local · 2 grupo (infra/meso/super) · 3 conjunto ·
+   * 4 elemento · 5 folha (aço/fôrma/concreto). O que vira ETAPA é o elemento — o nível que
+   * de fato se executa, logo acima das folhas.
+   *
+   * Como o cronograma chega com data marcada, cada par etapa × lote entra com INÍCIO FIXO
+   * (aj.ini). A linha de balanço deixa de calcular a posição dessas e passa a mostrar o que
+   * foi planejado — que é o ponto de transportar um cronograma pra cá. */
+  function lbNormNome(v){
+    var s=String(v==null?'':v).replace(/\s+/g,' ').trim().toUpperCase();
+    // "ENCONTRO 1" e "ENCONTRO 01" são a mesma etapa em lotes diferentes; sem isso viram duas
+    s=s.replace(/\b(ENCONTRO|ENC|V|VT|APOIO)\s*0*(\d)\b/g,function(_,p,n){ return p+' 0'+n; });
+    s=s.replace(/^LAJE DE APROXIMACAO$/,'LAJES DE APROXIMACAO');
+    s=s.replace(/^GABIAO - (.+)$/,'$1 - GABIAO');
+    return s;
+  }
+  function lbSemAcento(v){ return String(v==null?'':v).normalize('NFD').replace(/[̀-ͯ]/g,''); }
+  function lbChaveNome(v){ return lbNormNome(lbSemAcento(v)); }
+  function lbEhFolha(nome){ return /^(ACO|FORMA|CONCRETO)\b/.test(lbChaveNome(nome)); }
+
+  function importarCronogramaArquivo(){
+    if(!selectedObra){ alert('Abra uma obra antes de importar.'); return; }
+    if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
+    if(!lbSvc()){ alert('Escolha primeiro o serviço que esta linha de balanço detalha.'); return; }
+    pickExcelFile(function(file){
+      lerCronograma(file).then(importarCronogramaWorkbook).catch(function(e){
+        alert('Não consegui ler o arquivo: '+((e&&e.message)||e));
+      });
+    });
+  }
+  /** Lê SÓ a aba do cronograma. A pasta de origem mistura físico e financeiro em dezenas de
+   *  abas pesadas e abrir a pasta inteira passa de um minuto no navegador. Então primeiro pega
+   *  só a lista de nomes (rápido), escolhe a candidata pelo nome e converte apenas aquela aba. */
+  async function lerCronograma(file){
+    if(typeof XLSX==='undefined')throw new Error('Biblioteca de planilha não carregou.');
+    var buf=await file.arrayBuffer();
+    var so=XLSX.read(buf,{type:'array',bookSheets:true});
+    var nomes=(so.SheetNames||[]).slice().sort(function(a,b){
+      var pa=/FISIC|REPLANEJ|CRONOGRAM|GANTT/.test(estNorm(a))?0:1;
+      var pb=/FISIC|REPLANEJ|CRONOGRAM|GANTT/.test(estNorm(b))?0:1;
+      return pa-pb;
+    });
+    for(var i=0;i<nomes.length;i++){
+      var wb=XLSX.read(buf,{type:'array',sheets:[nomes[i]],cellStyles:false,cellNF:false,cellHTML:false});
+      var ws=wb.Sheets[nomes[i]];
+      if(ws){
+        var linhas=sheetRows(ws);
+        for(var k=0;k<Math.min(linhas.length,20);k++){
+          var h=(linhas[k]||[]).map(estNorm);
+          if(h.indexOf('ITEM')>=0&&h.some(function(x){return /^INICIO/.test(x);}))return {aoa:linhas,hdr:k,aba:nomes[i]};
+        }
+      }
+      if(i>=5)break;   // já olhou as candidatas pelo nome e mais algumas; não varre a pasta toda
+    }
+    throw new Error('Não achei uma aba com a coluna ITEM e as colunas de início e fim.');
+  }
+  async function importarCronogramaWorkbook(src){
+    var aoa=src.aoa, hdr=src.hdr, aba=src.aba;
+    var h=(aoa[hdr]||[]).map(estNorm);
+    var col={
+      lote: estAchaCol(h,[/^COLUNA1$/,/^LOCAL$/,/^KM$/]),
+      id:   estAchaCol(h,[/^ID$/]),
+      grupo:estAchaCol(h,[/^COLUNA2$/,/^GRUPO$/]),
+      item: estAchaCol(h,[/^ITEM$/]),
+      qtd:  estAchaCol(h,[/^QTD\.?$/]),
+      um:   estAchaCol(h,[/^U\.?M\.?$/]),
+      ini:  estAchaCol(h,[/^INICIO PREV/,/^INICIO$/]),
+      fim:  estAchaCol(h,[/^FIM PREV/,/^FIM$/,/^TERMINO$/])
+    };
+    if(col.item<0||col.ini<0||col.fim<0){ alert('Faltou a coluna ITEM, de início ou de fim.'); return; }
+
+    // 2) linhas com data + a profundidade pelo ID
+    var reg=[];
+    for(var L=hdr+1;L<aoa.length;L++){
+      var row=aoa[L]||[];
+      var nome=String(row[col.item]==null?'':row[col.item]).trim(); if(!nome)continue;
+      var di=excelDateToIso(row[col.ini]), df=excelDateToIso(row[col.fim]);
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(di)||!/^\d{4}-\d{2}-\d{2}$/.test(df))continue;
+      var idTxt=col.id>=0?String(row[col.id]==null?'':row[col.id]).replace(/[.,]/g,'').trim():'';
+      reg.push({nome:nome,ini:di,fim:df,
+        lote:col.lote>=0?String(row[col.lote]==null?'':row[col.lote]).trim():'',
+        grupo:col.grupo>=0?String(row[col.grupo]==null?'':row[col.grupo]).trim():'',
+        id:/^\d+$/.test(idTxt)?idTxt:'', folha:lbEhFolha(nome)});
+    }
+    if(!reg.length){ alert('Nenhuma tarefa com início e fim preenchidos.'); return; }
+
+    // 3) elemento = quem tem folha por filha, ou quem não tem filho nenhum (e não é folha).
+    //    É o nível que se executa; acima dele são agrupamentos e abaixo é aço/fôrma/concreto.
+    var elementos=reg.filter(function(r,i){
+      if(r.folha)return false;
+      if(!r.id)return true;
+      var filhos=reg.filter(function(x){ return x.id&&x.id!==r.id&&x.id.indexOf(r.id)===0; });
+      if(!filhos.length)return true;
+      return filhos.some(function(x){ return x.folha&&x.id.length===r.id.length+1; });
+    });
+    if(!elementos.length){ alert('Não consegui identificar as etapas no arquivo.'); return; }
+
+    // 4) locais -> lotes da obra (casa pelo número, como no informe de produção)
+    var ids=lbLoteIds(), porNome={}, porNum={};
+    ids.forEach(function(id){
+      var nm=lbNomeLote(id);
+      porNome[estNorm(nm)]=id;
+      var m=/(\d+)/.exec(nm||''); if(m&&!porNum[m[1]])porNum[m[1]]=id;
+    });
+    var deLote={}, semLote={};
+    elementos.forEach(function(r){
+      if(deLote[r.lote]!==undefined)return;
+      var id=porNome[estNorm(r.lote)];
+      if(!id){ var m=/(\d+)/.exec(r.lote||''); if(m)id=porNum[m[1]]; }
+      if(id)deLote[r.lote]=id; else { deLote[r.lote]=null; semLote[r.lote]=1; }
+    });
+
+    // 5) janela: dia 0 = segunda da semana do projeto onde cai a tarefa mais antiga.
+    //    A tabela segunda->semana é montada UMA vez: lbDataParaDia varre o calendário a cada
+    //    chamada, e com centenas de tarefas (duas conversões cada) isso não termina.
+    var semDeSegunda={}, maisCedo=elementos.map(function(r){return r.ini;}).sort()[0], semIni=1;
+    (function(){
+      // Mesma regra do mondayOf (pula semana parada), mas numa passada só: chamar mondayOf 600
+      // vezes refaz a lista de feriados em cada chamada e leva dezenas de segundos.
+      var fer={}; calHolidays().forEach(function(f){ fer[mondayOfIso(f)]=true; });
+      var d=new Date(TC_START()+'T00:00:00');
+      var dw=d.getDay(); d.setDate(d.getDate()+(dw===0?-6:1-dw));
+      var w=0;
+      for(var k=0;k<900;k++){
+        var iso=d.toISOString().slice(0,10);
+        if(!fer[iso]){ w++; semDeSegunda[iso]=w; if(iso<=maisCedo)semIni=w; }
+        d.setDate(d.getDate()+7);
+      }
+    })();
+    // O cronograma do Excel conta dias corridos; a linha de balanço conta dias úteis. Data que
+    // cai no fim de semana é trazida pro dia útil que faz sentido: um INÍCIO vai pra segunda
+    // seguinte (ninguém começa no domingo) e um TÉRMINO volta pra sexta anterior.
+    var diaDe=function(iso,ehFim){
+      var seg=mondayOfIso(iso), w=semDeSegunda[seg];
+      if(w==null)return null;                    // semana parada no calendário da obra
+      var dow=Math.round((new Date(iso+'T00:00:00')-new Date(seg+'T00:00:00'))/864e5);
+      if(dow>DIAS_SEM-1){
+        if(ehFim)dow=DIAS_SEM-1;                 // término no fds -> sexta da mesma semana
+        else {                                   // início no fds -> segunda seguinte
+          var d2=new Date(seg+'T00:00:00'); d2.setDate(d2.getDate()+7);
+          var prox=semDeSegunda[d2.toISOString().slice(0,10)];
+          if(prox==null)return null;
+          w=prox; dow=0;
+        }
+      }
+      return (w-semIni)*DIAS_SEM+Math.max(0,dow);
+    };
+    var usados=Object.keys(deLote).filter(function(k){return deLote[k];});
+    var escolha=await lbDialogoImport({aba:aba,elementos:elementos,reg:reg,deLote:deLote,
+      semLote:Object.keys(semLote),semIni:semIni,lotesOk:usados.length});
+    if(!escolha)return;
+
+    // 6) monta o estudo: uma etapa por nome, com início fixo e duração por lote
+    var c=lbSvc(); if(!c)return;
+    var PAL=['#3E7CB1','#5F9E6E','#C98A2B','#9A6DB0','#C0653F','#4FA3A8','#7B8CA6','#B5705F'];
+    var porChave={}, ordem=[];
+    elementos.forEach(function(r){
+      if(!deLote[r.lote])return;
+      var k=lbChaveNome(r.nome);
+      if(!porChave[k]){ porChave[k]={nome:r.nome.trim(),itens:[]}; ordem.push(k); }
+      porChave[k].itens.push(r);
+    });
+    var etapas=ordem.map(function(k,i){
+      var g=porChave[k];
+      var durs=g.itens.map(function(r){ var a=diaDe(r.ini,false),b=diaDe(r.fim,true); return (a==null||b==null)?1:Math.max(1,b-a+1); });
+      var aj={};
+      g.itens.forEach(function(r){
+        var lid=deLote[r.lote]; if(!lid)return;
+        var d0=diaDe(r.ini,false), d1=diaDe(r.fim,true);
+        if(d0==null||d1==null||d0<0)return;
+        aj[lid]={ini:d0,dur:Math.max(1,d1-d0+1)};
+      });
+      return {id:'imp'+i+'_'+Date.now().toString(36),nome:g.nome,
+        sigla:lbSiglaAuto(g.nome),cor:PAL[i%PAL.length],
+        dias:Math.round(durs.reduce(function(a,b){return a+b;},0)/durs.length)||1,
+        equipes:1,offset:0,aj:aj,x:60+(i%6)*170,y:70+Math.floor(i/6)*110};
+    });
+    c.inicio=semIni;
+    c.lotes=usados.map(function(k){return deLote[k];});
+    c.etapas=etapas;
+    c.setas=[];      // o cronograma já traz as datas; ligação viraria recálculo por cima delas
+    LB_DIRTY=true; LB_TAB='lb';
+    go('cr-lb');
+    alert(etapas.length+' etapa(s) em '+c.lotes.length+' lote(s), a partir da semana '+semIni+'.'+
+      '\n\nAs datas vieram fixas do cronograma. Pra voltar ao cálculo automático de uma etapa, apague o início fixo dela no Ajuste manual.'+
+      '\n\nNada foi gravado ainda — use "Salvar linha de balanço".');
+  }
+  /** Sigla curta a partir do nome, pra caber dentro do bloco na linha de balanço. */
+  function lbSiglaAuto(nome){
+    var s=lbChaveNome(nome).replace(/[^A-Z0-9 ]/g,' ').trim();
+    var p=s.split(/\s+/).filter(Boolean);
+    if(!p.length)return '??';
+    if(p.length===1)return p[0].slice(0,4);
+    if(/^\d+$/.test(p[p.length-1]))return (p[0].slice(0,3)+p[p.length-1]);
+    return p.map(function(x){return x[0];}).join('').slice(0,4);
+  }
+  function lbDialogoImport(info){
+    return new Promise(function(resolve){
+      var back=document.createElement('div'); back.className='segmenu-backdrop';
+      var porLote={}; info.elementos.forEach(function(r){ porLote[r.lote]=(porLote[r.lote]||0)+1; });
+      var nomes={}; info.elementos.forEach(function(r){ if(info.deLote[r.lote])nomes[lbChaveNome(r.nome)]=1; });
+      var linhas=Object.keys(porLote).sort().map(function(k){
+        var id=info.deLote[k];
+        return '<tr><td>'+escAttr(k)+'</td><td class="r mono">'+porLote[k]+'</td>'+
+          '<td>'+(id?('<span style="color:var(--good)">✓</span> '+escAttr(lbNomeLote(id))):'<span style="color:var(--warn)">• sem lote no app</span>')+'</td></tr>';
+      }).join('');
+      back.innerHTML='<div class="segmenu-panel card" style="max-width:620px;max-height:86vh;overflow:auto">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Importar cronograma para a linha de balanço</div>'+
+        '<div class="note" style="margin-bottom:12px">Aba <b>'+escAttr(info.aba)+'</b> · '+info.reg.length+' tarefas, das quais <b>'+info.elementos.length+'</b> são elementos (o nível logo acima de aço/fôrma/concreto).</div>'+
+        '<div class="tbl-wrap"><table class="edtbl" style="min-width:0"><thead><tr><th>Local na planilha</th><th class="r">Etapas</th><th>Lote do app</th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
+        '<div class="note" style="margin-top:10px">Vão entrar <b>'+Object.keys(nomes).length+'</b> etapas distintas em <b>'+info.lotesOk+'</b> lote(s), começando na semana <b>'+info.semIni+'</b> do projeto.'+
+        (info.semLote.length?' Sem lote correspondente (ficam de fora): <b>'+escAttr(info.semLote.join(', '))+'</b>.':'')+'</div>'+
+        '<div class="banner" style="margin-top:12px">Isto <b>substitui</b> o estudo atual do serviço selecionado. As datas entram fixas, como no cronograma — a linha de balanço passa a mostrar o que foi planejado em vez de recalcular.</div>'+
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
+          '<button class="btn" id="lbImpCancel">Cancelar</button>'+
+          '<button class="btn primary" id="lbImpOk">Importar</button></div></div>';
+      document.body.appendChild(back);
+      function fim(v){ back.remove(); resolve(v); }
+      back.addEventListener('pointerdown',function(e){ if(e.target===back)fim(null); });
+      back.querySelector('#lbImpCancel').addEventListener('click',function(){ fim(null); });
+      back.querySelector('#lbImpOk').addEventListener('click',function(){ fim({ok:true}); });
+    });
+  }
+
   function lbSVG(arrastavel){
     var calc=lbCalc(); if(!calc)return '';
     var c=calc.c;
@@ -9493,6 +9723,7 @@
       '</div>';
     }
     return head('Linha de Balanço','Detalhamento do Tempo-Caminho por serviço.',
+        '<button class="btn" id="lbImportar">↥ Importar cronograma</button>'+
         '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
       '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+abas+'</div>'+
       cabec+corpo;
@@ -9545,6 +9776,8 @@
     root.querySelectorAll('[data-lbligdel]').forEach(function(b){
       b.addEventListener('click',function(){ cfg.setas.splice(+b.getAttribute('data-lbligdel'),1); lbMarkDirty(); go('cr-lb'); });
     });
+    var imp=document.getElementById('lbImportar');
+    if(imp)imp.addEventListener('click',importarCronogramaArquivo);
     var save=document.getElementById('lbSave');
     if(save)save.addEventListener('click',lbSalvar);
     root.querySelectorAll('[data-lbtab]').forEach(function(b){
