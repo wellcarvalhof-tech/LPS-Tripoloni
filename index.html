@@ -8263,21 +8263,54 @@
   /** Lotes + quantidades — uma sheet só: Lote, [Pacote,] Ordem, <serviço1>, <serviço2>...
    * ("Pacote" é opcional — arquivos exportados antes dessa coluna existir continuam funcionando.)
    * Casa as quantidades pelo nome do serviço já cadastrado na obra (precisa dos Serviços prontos). */
+  /** Número vindo de planilha: aceita 1234.5, "1.234,56" e "1,234.56". Célula numérica do Excel
+   *  já vem como number; o que chega como texto é que precisa de tradução — e antes virava NaN
+   *  e a quantidade era descartada em silêncio. */
+  function numPlanilha(v){
+    if(typeof v==='number')return isFinite(v)?v:null;
+    var t=String(v==null?'':v).trim(); if(!t)return null;
+    t=t.replace(/\s/g,'').replace(/[R$%]/g,'');
+    var ip=t.lastIndexOf('.'), iv=t.lastIndexOf(',');
+    if(ip>=0&&iv>=0){
+      // tem os dois: o que vem por último é o decimal (1.234,56 é BR; 1,234.56 é EN)
+      if(iv>ip)t=t.replace(/\./g,'').replace(',','.');
+      else t=t.replace(/,/g,'');
+    } else if(iv>=0){
+      t=t.replace(',','.');
+    } else if(/^-?\d{1,3}(\.\d{3})+$/.test(t)){
+      // só pontos, em grupos de três: separador de milhar ("2.000" é dois mil, não dois)
+      t=t.replace(/\./g,'');
+    }
+    var n=Number(t);
+    return isFinite(n)?n:null;
+  }
   async function importLotesSection(wsLot){
-    var createdLot=0, qtyCount=0;
-    if(!wsLot)return {createdLot:0,qtyCount:0};
+    var createdLot=0, qtyCount=0, semServico=[], naoNumero=0;
+    if(!wsLot)return {createdLot:0,qtyCount:0,semServico:[],naoNumero:0};
     var lotAoa=sheetRows(wsLot);
-    if(lotAoa.length<=1)return {createdLot:0,qtyCount:0};
+    if(lotAoa.length<=1)return {createdLot:0,qtyCount:0,semServico:[],naoNumero:0};
     var header=lotAoa[0];
-    var hasPacoteCol=String(header[1]||'').trim().toLowerCase()==='pacote';
-    var qtyOffset=hasPacoteCol?3:2;
-    var svcCols=header.slice(qtyOffset).map(function(n){return String(n||'').trim();});
+    // As colunas de quantidade são as que têm nome de serviço CADASTRADO, onde quer que estejam.
+    // Antes a posição era fixa (pula 2 ou 3 colunas conforme houvesse "Pacote"), e numa planilha
+    // montada à mão isso desalinhava tudo ou comia o primeiro serviço sem avisar.
+    var svcIdxByName0={}; SERV.forEach(function(sv,si){ svcIdxByName0[sv.n.trim().toLowerCase()]=si; });
+    var META={lote:1,pacote:1,ordem:1,'pacote contratual':1,comprimento:1,'espaçamento':1,espacamento:1};
+    var colServ=[], iPacote=-1;
+    header.forEach(function(hv,c){
+      var nome=String(hv==null?'':hv).trim(), low=nome.toLowerCase();
+      if(c===0)return;
+      if(low==='pacote'||low==='pacote contratual'){ iPacote=c; return; }
+      var si=svcIdxByName0[low];
+      if(si!=null){ colServ.push({c:c,si:si}); return; }
+      if(nome&&!META[low])semServico.push(nome);
+    });
+    var hasPacoteCol=iPacote>=0;
     var lotByName={}; LOTS.forEach(function(l,li){lotByName[l.trim().toLowerCase()]=li;});
     var rows=[];
     for(var j=1;j<lotAoa.length;j++){
       var row=lotAoa[j]; if(!row||row[0]==null||row[0]==='')continue;
       var lname=String(row[0]).trim(); if(!lname)continue;
-      var pacoteVal=hasPacoteCol&&row[1]!=null?String(row[1]).trim():null;
+      var pacoteVal=(hasPacoteCol&&row[iPacote]!=null)?String(row[iPacote]).trim():null;
       if(!lotByName.hasOwnProperty(lname.toLowerCase())){
         await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1,pacote_contratual:pacoteVal||null});
         createdLot++;
@@ -8286,12 +8319,17 @@
     }
     if(createdLot>0)await sbLoadCadastro(selectedObra.id);
     var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
+    // os serviços podem ter mudado de índice se a importação criou lotes e recarregou o cadastro
     var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+    colServ=colServ.map(function(x){
+      var nome=String(header[x.c]||'').trim().toLowerCase();
+      return {c:x.c,si:svcIdxByName[nome]};
+    }).filter(function(x){ return x.si!=null; });
     if(hasPacoteCol){
       for(var pk=0;pk<rows.length;pk++){
         var prow=rows[pk];
         var pli=lotIdxByName[String(prow[0]).trim().toLowerCase()]; if(pli==null)continue;
-        var pval=prow[1]!=null?String(prow[1]).trim():'';
+        var pval=prow[iPacote]!=null?String(prow[iPacote]).trim():'';
         if((LOTE_PACOTE[pli]||'')!==pval){
           await sbUpdateLote(window._LOTIDS[pli],{pacote_contratual:pval||null});
           LOTE_PACOTE[pli]=pval;
@@ -8301,15 +8339,30 @@
     for(var k=0;k<rows.length;k++){
       var qrow=rows[k];
       var li2=lotIdxByName[String(qrow[0]).trim().toLowerCase()]; if(li2==null)continue;
-      for(var c2=0;c2<svcCols.length;c2++){
-        var si2=svcIdxByName[svcCols[c2].toLowerCase()]; if(si2==null)continue;
-        var val=Number(qrow[c2+qtyOffset]); if(!isFinite(val))continue;
+      for(var c2=0;c2<colServ.length;c2++){
+        var cel=qrow[colServ[c2].c];
+        if(cel==null||cel==='')continue;
+        var val=numPlanilha(cel);
+        if(val==null){ naoNumero++; continue; }
+        var si2=colServ[c2].si;
         await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
         qtyCount++;
       }
     }
     await sbLoadCadastro(selectedObra.id);
-    return {createdLot:createdLot,qtyCount:qtyCount};
+    var unicos={}; semServico.forEach(function(n){unicos[n]=1;});
+    return {createdLot:createdLot,qtyCount:qtyCount,semServico:Object.keys(unicos),naoNumero:naoNumero};
+  }
+  /** Explica por que uma importação de lotes trouxe menos quantidade do que o esperado. Sem isso
+   *  a coluna que não casa com nenhum serviço é ignorada em silêncio e parece que "não carregou". */
+  function avisoQuantidades(r){
+    var p=[];
+    if(r.semServico&&r.semServico.length)
+      p.push(r.semServico.length+' coluna(s) não batem com nenhum serviço desta obra e foram ignoradas: '+
+        r.semServico.slice(0,8).join(', ')+(r.semServico.length>8?' e mais '+(r.semServico.length-8):'')+
+        '.\n\nO nome da coluna tem que ser igual ao nome do serviço cadastrado em Tempo Caminho → Serviços.');
+    if(r.naoNumero)p.push(r.naoNumero+' célula(s) não eram número e foram ignoradas.');
+    return p.length?('\n\n'+p.join('\n\n')):'';
   }
 
   /** Calendário — linha "Início" (data), "Paralisação" (início,fim) e "Chuva" (desc,início,fim,%prod,%dias). */
@@ -8408,7 +8461,9 @@
     var adjApplied=importAjustesSection(wb);
 
     go(current);
-    toast('Importado: '+rServ.createdServ+' serviço(s) novo(s), '+rServ.updatedServ+' atualizado(s), '+rLot.createdLot+' lote(s) novo(s), '+rLot.qtyCount+' quantidade(s)'+(rCal.calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar ajustes" no Ajuste Manual pra confirmar':'')+'.');
+    var resumo='Importado: '+rServ.createdServ+' serviço(s) novo(s), '+rServ.updatedServ+' atualizado(s), '+rLot.createdLot+' lote(s) novo(s), '+rLot.qtyCount+' quantidade(s)'+(rCal.calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar ajustes" no Ajuste Manual pra confirmar':'')+'.';
+    var avisoQ=avisoQuantidades(rLot);
+    if(avisoQ)alert(resumo+avisoQ); else toast(resumo);
   }
 
   async function importOnlyServicos(wb){
@@ -8428,7 +8483,9 @@
     if(!confirm('Importar só os LOTES e quantidades dessa planilha? Serviços, calendário e ajustes manuais não são tocados — as quantidades são casadas pelo nome dos serviços já cadastrados nesta obra. Lotes com o mesmo nome são atualizados; nomes novos criam lotes novos.'))return;
     var r=await importLotesSection(wsLot);
     go(current);
-    toast('Importado: '+r.createdLot+' lote(s) novo(s), '+r.qtyCount+' quantidade(s).');
+    var aviso=avisoQuantidades(r);
+    if(aviso)alert('Importado: '+r.createdLot+' lote(s) novo(s), '+r.qtyCount+' quantidade(s).'+aviso);
+    else toast('Importado: '+r.createdLot+' lote(s) novo(s), '+r.qtyCount+' quantidade(s).');
   }
 
   async function importOnlyCalendario(wb){
