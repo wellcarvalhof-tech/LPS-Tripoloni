@@ -8385,16 +8385,35 @@
     try{ await sbUpsertQuantidades(selectedObra.id,pendentes); qtyCount=pendentes.length; }
     catch(e){ erro=(e&&e.message)||String(e); }
     await sbLoadCadastro(selectedObra.id);
+    // Confere o que REALMENTE ficou gravado. Sem isso, uma escrita recusada pelo banco (RLS,
+    // permissão) passava por sucesso e a tela aparecia zerada sem nenhuma explicação.
+    var naoPersistiu=0;
+    if(!erro){
+      var idxLote={}; (window._LOTIDS||[]).forEach(function(id,i){ idxLote[id]=i; });
+      var idxServ={}; SERV.forEach(function(sv,i){ idxServ[sv.id]=i; });
+      pendentes.forEach(function(q){
+        var li=idxLote[q.loteId], si=idxServ[q.servicoId];
+        if(li==null||si==null)return;
+        if(Math.abs((+((QTY[li]||[])[si])||0)-(+q.quantidade||0))>0.005)naoPersistiu++;
+      });
+    }
     var unicos={}; semServico.forEach(function(n){unicos[n]=1;});
     var unicosL={}; semLote.forEach(function(n){unicosL[n]=1;});
     return {createdLot:createdLot,qtyCount:qtyCount,semServico:Object.keys(unicos),
-            naoNumero:naoNumero,semLote:Object.keys(unicosL),erro:erro};
+            naoNumero:naoNumero,semLote:Object.keys(unicosL),erro:erro,
+            enviadas:pendentes.length,naoPersistiu:naoPersistiu};
   }
   /** Explica por que uma importação de lotes trouxe menos quantidade do que o esperado. Sem isso
    *  a coluna que não casa com nenhum serviço é ignorada em silêncio e parece que "não carregou". */
   function avisoQuantidades(r){
+    var NL=String.fromCharCode(10);
     var p=[];
     if(r.erro)p.push('A gravação das quantidades falhou: '+r.erro+'\n\nNada (ou quase nada) foi salvo. Confira a conexão e tente de novo.');
+    if(!r.erro&&r.naoPersistiu)
+      p.push(r.naoPersistiu+' de '+r.enviadas+' quantidades foram enviadas mas NÃO ficaram gravadas no banco.'+
+        NL+NL+'O banco aceitou a chamada e devolveu os valores antigos — quase sempre é permissão (RLS) na tabela lote_servico, ou o seu perfil nesta obra não permite editar.');
+    if(!r.erro&&!r.enviadas&&!(r.semServico&&r.semServico.length))
+      p.push('Nenhuma célula de quantidade foi encontrada na planilha. Confira se as colunas de serviço têm valor e se a primeira linha é o cabeçalho.');
     if(r.semLote&&r.semLote.length)
       p.push(r.semLote.length+' linha(s) tinham lote que não existe nesta obra e foram ignoradas: '+
         r.semLote.slice(0,6).join(', ')+(r.semLote.length>6?' e mais '+(r.semLote.length-6):'')+'.');
