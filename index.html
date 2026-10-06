@@ -830,6 +830,19 @@
     var r=await SB.from('lote_servico').upsert({obra_id:obraId,lote_id:loteId,servico_id:servicoId,quantidade:quantidade,unidade:unidade||null},{onConflict:'lote_id,servico_id'});
     if(r.error)throw r.error;
   }
+  /** Grava muitas quantidades de uma vez. Uma a uma eram 1200 idas ao banco numa planilha
+   *  grande: lento e frágil — bastava uma falhar no meio pra importação morrer pela metade. */
+  async function sbUpsertQuantidades(obraId,lista){
+    if(!lista.length)return;
+    await sbRequireSession();
+    for(var i=0;i<lista.length;i+=400){
+      var bloco=lista.slice(i,i+400).map(function(q){
+        return {obra_id:obraId,lote_id:q.loteId,servico_id:q.servicoId,quantidade:q.quantidade,unidade:q.unidade||null};
+      });
+      var r=await SB.from('lote_servico').upsert(bloco,{onConflict:'lote_id,servico_id'});
+      if(r.error)throw r.error;
+    }
+  }
   async function sbSetLoteComprimento(id,comprimento,espacamento){
     await sbRequireSession();
     var r=await SB.from('lotes').update({comprimento_m:comprimento,espacamento_estaca_m:espacamento}).eq('id',id);
@@ -8353,27 +8366,38 @@
         }
       }
     }
+    var pendentes=[], semLote=[];
     for(var k=0;k<rows.length;k++){
       var qrow=rows[k];
-      var li2=lotIdxByName[String(qrow[0]).trim().toLowerCase()]; if(li2==null)continue;
+      var nomeL=String(qrow[0]).trim();
+      var li2=lotIdxByName[nomeL.toLowerCase()];
+      if(li2==null){ semLote.push(nomeL); continue; }
       for(var c2=0;c2<colServ.length;c2++){
         var cel=qrow[colServ[c2].c];
         if(cel==null||cel==='')continue;
         var val=numPlanilha(cel);
         if(val==null){ naoNumero++; continue; }
         var si2=colServ[c2].si;
-        await sbUpsertQuantidade(selectedObra.id,window._LOTIDS[li2],SERV[si2].id,val,SERV[si2].u);
-        qtyCount++;
+        pendentes.push({loteId:window._LOTIDS[li2],servicoId:SERV[si2].id,quantidade:val,unidade:SERV[si2].u});
       }
     }
+    var erro='';
+    try{ await sbUpsertQuantidades(selectedObra.id,pendentes); qtyCount=pendentes.length; }
+    catch(e){ erro=(e&&e.message)||String(e); }
     await sbLoadCadastro(selectedObra.id);
     var unicos={}; semServico.forEach(function(n){unicos[n]=1;});
-    return {createdLot:createdLot,qtyCount:qtyCount,semServico:Object.keys(unicos),naoNumero:naoNumero};
+    var unicosL={}; semLote.forEach(function(n){unicosL[n]=1;});
+    return {createdLot:createdLot,qtyCount:qtyCount,semServico:Object.keys(unicos),
+            naoNumero:naoNumero,semLote:Object.keys(unicosL),erro:erro};
   }
   /** Explica por que uma importação de lotes trouxe menos quantidade do que o esperado. Sem isso
    *  a coluna que não casa com nenhum serviço é ignorada em silêncio e parece que "não carregou". */
   function avisoQuantidades(r){
     var p=[];
+    if(r.erro)p.push('A gravação das quantidades falhou: '+r.erro+'\n\nNada (ou quase nada) foi salvo. Confira a conexão e tente de novo.');
+    if(r.semLote&&r.semLote.length)
+      p.push(r.semLote.length+' linha(s) tinham lote que não existe nesta obra e foram ignoradas: '+
+        r.semLote.slice(0,6).join(', ')+(r.semLote.length>6?' e mais '+(r.semLote.length-6):'')+'.');
     if(r.semServico&&r.semServico.length)
       p.push(r.semServico.length+' coluna(s) não batem com nenhum serviço desta obra e foram ignoradas: '+
         r.semServico.slice(0,8).join(', ')+(r.semServico.length>8?' e mais '+(r.semServico.length-8):'')+
