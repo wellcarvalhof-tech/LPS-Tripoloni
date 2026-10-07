@@ -7,7 +7,7 @@
  * Pra publicar uma versão nova: suba o VERSAO. O app avisa na tela e recarrega quando o usuário
  * mandar.
  */
-var VERSAO='lps-v3';
+var VERSAO='lps-v4';
 var SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
 
 self.addEventListener('install',function(e){
