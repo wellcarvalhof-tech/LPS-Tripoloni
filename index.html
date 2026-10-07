@@ -869,12 +869,30 @@
     var r=await SB.from('lote_estacas').delete().eq('id',id);
     if(r.error)throw r.error;
   }
+  /* O Supabase corta todo SELECT em 1000 linhas por padrão (Settings → API → Max rows) e NÃO
+   * avisa: devolve a primeira página como se fosse o resultado inteiro. Numa obra com 80 lotes
+   * × 14 serviços são 1120 quantidades — as que sobravam simplesmente não existiam pro app, a
+   * matriz vinha com buracos e a importação parecia não ter gravado nada. Lê em páginas até vir
+   * uma incompleta. A query é remontada a cada página porque o builder do supabase-js só pode
+   * ser executado uma vez, e precisa de ordem estável (id) senão o Postgres pode repetir ou
+   * pular linha entre as páginas. */
+  async function sbTudo(fazQuery,tamPagina){
+    var tam=tamPagina||1000, ini=0, out=[];
+    for(;;){
+      var r=await fazQuery().range(ini,ini+tam-1);
+      if(r.error)return {data:null,error:r.error};
+      var d=r.data||[];
+      out=out.length?out.concat(d):d;
+      if(d.length<tam)return {data:out,error:null};
+      ini+=tam;
+    }
+  }
   async function sbLoadEstacas(loteId){
     await sbRequireSession();
     var res=await Promise.all([
-      SB.from('lote_estacas').select('*').eq('lote_id',loteId).order('numero',{ascending:true}),
-      SB.from('estaca_quantidades').select('estaca_id,servico_id,quantidade,volume_projeto,volume_realizado').eq('lote_id',loteId),
-      SB.from('estaca_apontamentos').select('estaca_id,servico_id,data_inicio,data_fim,producao_diaria_id').eq('lote_id',loteId)
+      sbTudo(function(){return SB.from('lote_estacas').select('*').eq('lote_id',loteId).order('numero',{ascending:true}).order('id',{ascending:true});}),
+      sbTudo(function(){return SB.from('estaca_quantidades').select('estaca_id,servico_id,quantidade,volume_projeto,volume_realizado').eq('lote_id',loteId).order('id',{ascending:true});}),
+      sbTudo(function(){return SB.from('estaca_apontamentos').select('estaca_id,servico_id,data_inicio,data_fim,producao_diaria_id').eq('lote_id',loteId).order('id',{ascending:true});})
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
     var est=res[0].data||[], qty=res[1].data||[], ap=res[2].data||[];
@@ -984,10 +1002,10 @@
   /** Realizado do histograma. A coluna quantidade_terceiro (parcela de terceiro) veio na migração 19;
    *  se ela ainda não existir, o select inteiro falharia — então recua pro formato antigo. */
   async function sbSelectApontamentos(obraId){
-    var r=await SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade,quantidade_terceiro').eq('obra_id',obraId);
+    var r=await sbTudo(function(){return SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade,quantidade_terceiro').eq('obra_id',obraId).order('id',{ascending:true});});
     if(r.error&&/quantidade_terceiro/.test(r.error.message||'')){
       SEM_COL_TERCEIRO=true;
-      r=await SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId);
+      r=await sbTudo(function(){return SB.from('apontamento_recursos').select('recurso_id,data_semana,quantidade').eq('obra_id',obraId).order('id',{ascending:true});});
     }
     return r;
   }
@@ -999,11 +1017,11 @@
       SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
-      SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId),
+      sbTudo(function(){return SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId).order('id',{ascending:true});}),
       SB.from('recursos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       sbSelectApontamentos(obraId),
       SB.from('cenarios').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
-      SB.from('producao_diaria').select('*').eq('obra_id',obraId).order('data',{ascending:false}),
+      sbTudo(function(){return SB.from('producao_diaria').select('*').eq('obra_id',obraId).order('data',{ascending:false}).order('id',{ascending:true});}),
       SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true})
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
@@ -3415,8 +3433,10 @@
    * com o prazo vencido. Se fosse gravado, estaria errado no dia seguinte, porque ninguém
    * volta no sistema só pra mudar o rótulo. */
   async function sbMPListar(obraId){
-    var r=await SB.from('restricoes').select('id,codigo,descricao,servico_id,lote_id,pacote,local,categoria,setor,responsavel,data_identificacao,data_impacto,data_prazo,data_prazo_original,data_conclusao,status,semana,equipe,revisoes,observacao')
-      .eq('obra_id',obraId).order('created_at',{ascending:true});
+    var r=await sbTudo(function(){
+      return SB.from('restricoes').select('id,codigo,descricao,servico_id,lote_id,pacote,local,categoria,setor,responsavel,data_identificacao,data_impacto,data_prazo,data_prazo_original,data_conclusao,status,semana,equipe,revisoes,observacao')
+        .eq('obra_id',obraId).order('created_at',{ascending:true}).order('id',{ascending:true});
+    });
     if(r.error)throw r.error; return r.data||[];
   }
   async function sbMPCriar(obraId,p){
@@ -8336,11 +8356,11 @@
     // As colunas de quantidade são as que têm nome de serviço CADASTRADO, onde quer que estejam.
     // Antes a posição era fixa (pula 2 ou 3 colunas conforme houvesse "Pacote"), e numa planilha
     // montada à mão isso desalinhava tudo ou comia o primeiro serviço sem avisar.
-    var svcIdxByName0={}; SERV.forEach(function(sv,si){ svcIdxByName0[sv.n.trim().toLowerCase()]=si; });
-    var META={lote:1,pacote:1,ordem:1,'pacote contratual':1,comprimento:1,'espaçamento':1,espacamento:1};
+    var svcIdxByName0={}; SERV.forEach(function(sv,si){ svcIdxByName0[chaveNomeServ(sv.n)]=si; });
+    var META={lote:1,pacote:1,ordem:1,'pacote contratual':1,comprimento:1,espacamento:1};
     var colServ=[], iPacote=-1;
     header.forEach(function(hv,c){
-      var nome=String(hv==null?'':hv).trim(), low=nome.toLowerCase();
+      var nome=String(hv==null?'':hv).trim(), low=chaveNomeServ(nome);
       if(c===0)return;
       if(low==='pacote'||low==='pacote contratual'){ iPacote=c; return; }
       var si=svcIdxByName0[low];
@@ -8363,10 +8383,9 @@
     if(createdLot>0)await sbLoadCadastro(selectedObra.id);
     var lotIdxByName={}; LOTS.forEach(function(l,li){lotIdxByName[l.trim().toLowerCase()]=li;});
     // os serviços podem ter mudado de índice se a importação criou lotes e recarregou o cadastro
-    var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[s.n.trim().toLowerCase()]=si;});
+    var svcIdxByName={}; SERV.forEach(function(s,si){svcIdxByName[chaveNomeServ(s.n)]=si;});
     colServ=colServ.map(function(x){
-      var nome=String(header[x.c]||'').trim().toLowerCase();
-      return {c:x.c,si:svcIdxByName[nome]};
+      return {c:x.c,si:svcIdxByName[chaveNomeServ(header[x.c])]};
     }).filter(function(x){ return x.si!=null; });
     if(hasPacoteCol){
       for(var pk=0;pk<rows.length;pk++){
@@ -8418,6 +8437,43 @@
   }
   /** Explica por que uma importação de lotes trouxe menos quantidade do que o esperado. Sem isso
    *  a coluna que não casa com nenhum serviço é ignorada em silêncio e parece que "não carregou". */
+  /** Nome sem acento, sem pontuação e sem caixa — pra comparar cabeçalho de planilha com nome
+   *  de serviço cadastrado sem tropecar em "Sub-Base" x "sub base". */
+  function chaveNomeServ(t){
+    return String(t==null?'':t).normalize('NFD').replace(/[̀-ͯ]/g,'')
+      .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  }
+  /** Distância de edição, só pra sugerir o serviço mais parecido quando a coluna não casa.
+   *  Erro de digitação no cabeçalho ("Conteções" por "Contenções") é o motivo mais comum de uma
+   *  coluna inteira ser ignorada, e sem a sugestão fica por conta do usuário caçar a diferença. */
+  function distEdicao(a,b){
+    var m=a.length,n=b.length,i,j,ant,tmp,lin=[];
+    if(!m)return n; if(!n)return m;
+    for(j=0;j<=n;j++)lin[j]=j;
+    for(i=1;i<=m;i++){
+      ant=lin[0]; lin[0]=i;
+      for(j=1;j<=n;j++){
+        tmp=lin[j];
+        lin[j]=Math.min(lin[j]+1,lin[j-1]+1,ant+(a.charAt(i-1)===b.charAt(j-1)?0:1));
+        ant=tmp;
+      }
+    }
+    return lin[n];
+  }
+  function servicoParecido(nome){
+    // Tolerancia proporcional ao MENOR dos dois nomes: com um limite fixo, nome curto vira
+    // sugestao sem sentido ("Base" virava "OAE", que esta a 2 edicoes de distancia).
+    var k=chaveNomeServ(nome); if(k.length<4)return '';
+    var melhor='', md=1e9, empate=false;
+    SERV.forEach(function(sv){
+      var c=chaveNomeServ(sv.n); if(!c)return;
+      var lim=Math.max(1,Math.floor(Math.min(k.length,c.length)*0.25));
+      var d=distEdicao(k,c);
+      if(d>lim)return;
+      if(d<md){ md=d; melhor=sv.n; empate=false; } else if(d===md){ empate=true; }
+    });
+    return empate?'':melhor;
+  }
   function avisoQuantidades(r){
     var NL=String.fromCharCode(10);
     var p=[];
@@ -8431,9 +8487,12 @@
       p.push(r.semLote.length+' linha(s) tinham lote que não existe nesta obra e foram ignoradas: '+
         r.semLote.slice(0,6).join(', ')+(r.semLote.length>6?' e mais '+(r.semLote.length-6):'')+'.');
     if(r.semServico&&r.semServico.length)
-      p.push(r.semServico.length+' coluna(s) não batem com nenhum serviço desta obra e foram ignoradas: '+
-        r.semServico.slice(0,8).join(', ')+(r.semServico.length>8?' e mais '+(r.semServico.length-8):'')+
-        '.\n\nO nome da coluna tem que ser igual ao nome do serviço cadastrado em Tempo Caminho → Serviços.');
+      p.push(r.semServico.length+' coluna(s) não batem com nenhum serviço desta obra e foram ignoradas:'+NL+
+        r.semServico.slice(0,8).map(function(n){
+          var sug=servicoParecido(n);
+          return '• '+n+(sug?('   →   talvez seja "'+sug+'"'):'');
+        }).join(NL)+(r.semServico.length>8?(NL+'• e mais '+(r.semServico.length-8)):'')+
+        NL+NL+'O nome da coluna tem que ser igual ao nome do serviço cadastrado em Tempo Caminho → Serviços.');
     if(r.naoNumero)p.push(r.naoNumero+' célula(s) não eram número e foram ignoradas.');
     return p.length?('\n\n'+p.join('\n\n')):'';
   }
