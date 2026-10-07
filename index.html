@@ -1463,15 +1463,28 @@
     var legend='<div class="legend" style="margin-top:6px">'+SERV.map(function(sv){return '<span><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</span>';}).join('')+'</div>';
     var mini='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Tempo-caminho resumido — lotes × semanas (cores = serviços)</div>'+miniMatrixSVG({cell:cell},lotIdxs,tw,null,{all:true,W:900})+legend+'</div>';
     // 3) quadro de produtividade
+    // Semanas em que o serviço de fato produziu. A duração vai do início ao fim no cronograma e
+    // engloba espera entre lotes, paralisação e semana de praticabilidade zero — dividir a
+    // quantidade por ela achata a média e esconde o ritmo real da equipe em campo.
+    var semProd=SERV.map(function(){return 0;}), vistaProd=SERV.map(function(){return {};});
+    segs.forEach(function(sg){
+      for(var i=0;i<sg.dur;i++){
+        if(!(sg.wq[i]>0))continue;
+        var w=sg.start+i;
+        if(vistaProd[sg.si][w])continue;
+        vistaProd[sg.si][w]=1; semProd[sg.si]++;
+      }
+    });
     var prodRows=SERV.map(function(sv,si){
       var perTeam=pnum(sv.p), semanal=perTeam*(sv.eq||0), span=sp[si], dur=span.e>0?(span.e-span.s+1):0;
       return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</td><td>'+sv.u+'</td><td class="r mono">'+sv.eq+'</td><td class="r mono">'+fmtBR(perTeam)+'</td><td class="r mono">'+fmtBR(semanal)+'</td>'+
         '<td class="r mono">'+(totalByServ[si]>0?fmtBR(totalByServ[si]):'—')+'</td><td class="mono">'+(span.s?('S'+isoWeek(mondayOf(span.s))+' · '+fmtDate(mondayOf(span.s))):'—')+'</td><td class="mono">'+(span.e?('S'+isoWeek(mondayOf(span.e))+' · '+fmtDate(mondayOf(span.e))):'—')+'</td><td class="r mono">'+(dur||'—')+'</td>'+
-        '<td class="r mono">'+(dur>0&&totalByServ[si]>0?fmtBR(totalByServ[si]/dur):'—')+'</td></tr>';
+        '<td class="r mono">'+(semProd[si]||'—')+'</td>'+
+        '<td class="r mono">'+(semProd[si]>0&&totalByServ[si]>0?fmtBR(totalByServ[si]/semProd[si]):'—')+'</td></tr>';
     }).join('');
     var prod='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Quadro resumo de produtividade dos serviços</div><div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
-      '<th>Serviço</th><th>Un.</th><th class="r">Equipes</th><th class="r">Prod. cadastrada<br>por equipe/sem</th><th class="r">Prod. total<br>por semana</th><th class="r">Quantidade</th><th>Início</th><th>Término</th><th class="r">Duração<br>(sem)</th><th class="r">Média efetiva<br>por semana</th></tr></thead><tbody>'+prodRows+'</tbody></table></div>'+
-      '<div class="note" style="margin-top:6px">Prod. total = cadastrada × nº de equipes. Média efetiva = quantidade ÷ duração no cronograma (já considera praticabilidade, paralisações e esperas entre lotes).</div></div>';
+      '<th>Serviço</th><th>Un.</th><th class="r">Equipes</th><th class="r">Prod. cadastrada<br>por equipe/sem</th><th class="r">Prod. total<br>por semana</th><th class="r">Quantidade</th><th>Início</th><th>Término</th><th class="r">Duração<br>(sem)</th><th class="r">Semanas<br>com produção</th><th class="r">Média efetiva<br>por semana</th></tr></thead><tbody>'+prodRows+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:6px">Prod. total = cadastrada × nº de equipes. Duração = do início ao fim no cronograma. Semanas com produção = só as que têm quantidade prevista — a diferença entre as duas é espera entre lotes, paralisação ou praticabilidade zero. Média efetiva = quantidade ÷ semanas com produção, ou seja, o ritmo da equipe quando ela está produzindo.</div></div>';
     // 4) distribuição semanal por serviço (desenhada depois do render)
     var dist='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:6px">Distribuição semanal da produção por serviço (quantidade prevista por semana)</div><div class="exec-grid">'+
       SERV.map(function(sv,si){ if(!(totalByServ[si]>0))return ''; return '<div class="card"><div style="font-size:12px;font-weight:600;margin-bottom:2px"><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+sv.u+')</span></div><svg class="chart" data-execbar="'+si+'" viewBox="0 0 900 240"></svg></div>'; }).join('')+
