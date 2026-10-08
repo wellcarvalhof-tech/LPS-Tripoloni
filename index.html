@@ -506,6 +506,7 @@
        inputs, e com a borda em volta a folha fica ilegível. */
     body.printing-report #execRep input{border:none!important;background:transparent!important;padding:0!important;height:auto!important;width:auto!important;font-size:inherit}
     body.printing-report #convBox{display:none!important}
+    body.printing-report #execRep input[type=checkbox]{display:none!important}
     body.printing-report #execRep .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none}
     body.printing-report #execRep .exec-grid{grid-template-columns:1fr 1fr}
     body.printing-report #execRep .tc-wrap{max-height:none!important;overflow:visible!important}
@@ -1556,24 +1557,49 @@
     });
     return pior;
   }
-  function prodHoraHTML(){
-    var hDia=relHorasDia(), hSem=hDia*DIAS_SEM, ro=isReadOnly();
+  /* Quais serviços entram no relatório exportado. Guardado por ID, não por índice: reordenar ou
+   * cadastrar serviço não pode bagunçar a seleção. Ausente = marcado, pra começar com todos. */
+  var PROD_SEL={};
+  function prodMarcado(sv){ return PROD_SEL[sv.id]!==0; }
+  /** O cálculo da calculadora como DADO. Tela e Excel saem daqui, então não há como um mostrar
+   *  um número e o outro mostrar outro. */
+  function prodHoraDados(){
+    var hDia=relHorasDia(), hSem=hDia*DIAS_SEM;
     var periods=calRainPeriods()||[], temChuva=periods.length>0;
     var comPrat=(REL_PRAT==='prat')&&temChuva;
     // buildSchedule é caro: só roda quando a praticabilidade está ligada e há chuva cadastrada.
     var segs=comPrat?viewSegs(buildSchedule()):null, cacheF={};
-    var faltaSecao=0;
     var linhas=SERV.map(function(sv,si){
       var sec=svcSecao(sv), semEq=pnum(sv.p), totSem=semEq*(sv.eq||0);
       var f=comPrat?svcPratFator(si,segs,cacheF,periods):1;
       var cEq=relConv(semEq/hSem*f,sv), cTot=relConv(totSem/hSem*f,sv),
           cDia=relConv(totSem/DIAS_SEM*f,sv), cSem=relConv(totSem*f,sv);
+      return {si:si,sv:sv,sec:sec,cadSem:semEq,fator:f,un:cTot.u,okConv:cTot.ok,
+              eqHora:cEq.v,totHora:cTot.v,totDia:cDia.v,totSem:cSem.v};
+    });
+    return {hDia:hDia,hSem:hSem,comPrat:comPrat,temChuva:temChuva,linhas:linhas};
+  }
+  function prodModoTxt(d){
+    return d.comPrat?'Com praticabilidade':'Produtividade completa';
+  }
+  function prodUnidTxt(){
+    return REL_UNID==='cad'?'a cadastrada de cada serviço':(REL_UNID==='m'?'metros':M3);
+  }
+  function prodHoraHTML(){
+    var ro=isReadOnly();
+    var D=prodHoraDados();
+    var hDia=D.hDia, hSem=D.hSem, temChuva=D.temChuva, comPrat=D.comPrat;
+    var faltaSecao=0, marcados=0;
+    var linhas=D.linhas.map(function(L){
+      var sv=L.sv, si=L.si, sec=L.sec, f=L.fator;
+      var cEq={v:L.eqHora}, cTot={v:L.totHora,u:L.un,ok:L.okConv}, cDia={v:L.totDia}, cSem={v:L.totSem};
       if(!cTot.ok)faltaSecao++;
+      if(prodMarcado(sv))marcados++;
       var inp=function(attr,val){
         return '<input class="einp" '+attr+' value="'+(val?String(val).replace('.',','):'')+'" '+
           'inputmode="decimal" style="width:62px;text-align:right;height:26px;font-size:12px"'+(ro?' disabled':'')+'>';
       };
-      return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</td>'+
+      return '<tr><td style="white-space:nowrap"><input type="checkbox" data-prodsel="'+si+'"'+(prodMarcado(sv)?' checked':'')+' title="Incluir este serviço no Excel" style="margin-right:7px;vertical-align:-1px"><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</td>'+
         '<td class="mono">'+escAttr(cTot.u)+(cTot.ok?'':' <span style="color:var(--warn)" title="Falta a seção transversal deste serviço">&#9888;</span>')+'</td>'+
         '<td class="r">'+inp('data-secl="'+si+'"',sec.larg)+'</td>'+
         '<td class="r">'+inp('data-sece="'+si+'"',sec.esp)+'</td>'+
@@ -1617,9 +1643,10 @@
         '<div class="eyebrow">Produtividade por hora</div>'+
         '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
           '<label style="font-size:12px;color:var(--muted)">Jornada <input class="einp" id="relHoras" inputmode="decimal" value="'+String(hDia).replace('.',',')+'" style="width:62px;text-align:right;height:26px;font-size:12px"'+(ro?' disabled':'')+'> h/dia</label>'+
-          '<div>'+modos+'</div><div>'+opcoes+'</div></div></div>'+
+          '<div>'+modos+'</div><div>'+opcoes+'</div>'+
+          '<button class="btn" id="prodXls" title="Gera um Excel com os serviços marcados, no modo e na unidade escolhidos aqui">⤓ Excel ('+marcados+')</button></div></div>'+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px;min-width:0"><thead><tr>'+
-        '<th rowspan="2" style="text-align:left">Serviço</th><th rowspan="2">Un.</th>'+
+        '<th rowspan="2" style="text-align:left"><input type="checkbox" id="prodSelAll"'+(marcados===SERV.length?' checked':'')+(marcados&&marcados<SERV.length?' data-meio="1"':'')+' title="Marcar ou desmarcar todos" style="margin-right:7px;vertical-align:-1px">Serviço</th><th rowspan="2">Un.</th>'+
         '<th colspan="3">Seção transversal</th><th rowspan="2" class="r">Equipes</th>'+
         (comPrat?'<th rowspan="2" class="r" title="Fator médio das semanas em que o serviço produz">Pratic.</th>':'')+
         '<th colspan="2">Por hora</th><th rowspan="2" class="r">Dia<br>(total)</th><th rowspan="2" class="r">Semana<br>(total)</th></tr>'+
@@ -1643,6 +1670,25 @@
     document.querySelectorAll('[data-relprat]').forEach(function(b){
       b.addEventListener('click',function(){ REL_PRAT=b.getAttribute('data-relprat'); go(current); });
     });
+    document.querySelectorAll('[data-prodsel]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var sv=SERV[+cb.getAttribute('data-prodsel')]; if(!sv)return;
+        if(cb.checked)delete PROD_SEL[sv.id]; else PROD_SEL[sv.id]=0;
+        go(current);
+      });
+    });
+    var todos=document.getElementById('prodSelAll');
+    if(todos){
+      // "Alguns marcados" vira o tracinho do meio: sem isso o cabeçalho mostra desmarcado e
+      // parece que nada foi selecionado.
+      if(todos.getAttribute('data-meio'))todos.indeterminate=true;
+      todos.addEventListener('change',function(){
+        SERV.forEach(function(sv){ if(todos.checked)delete PROD_SEL[sv.id]; else PROD_SEL[sv.id]=0; });
+        go(current);
+      });
+    }
+    var xls=document.getElementById('prodXls');
+    if(xls)xls.addEventListener('click',function(){ comCarga(exportProdutividade); });
     var hz=document.getElementById('relHoras');
     if(hz)hz.addEventListener('change',async function(){
       var h=relNum(hz.value);
@@ -1816,6 +1862,60 @@
     }
   }
 
+  /** Excel da calculadora: só os serviços marcados, no modo e na unidade escolhidos na tela.
+   *  Os números vão como número (não texto) pra planilha poder somar e comparar em cima deles. */
+  async function exportProdutividade(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
+    var D=prodHoraDados();
+    var sel=D.linhas.filter(function(L){ return prodMarcado(L.sv); });
+    if(!sel.length){ toast('Marque pelo menos um serviço pra exportar.'); return; }
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var wb=new ExcelJS.Workbook();
+    var ws=wb.addWorksheet('Produtividade',{views:[{state:'frozen',ySplit:8}],
+      pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0}});
+    ws.columns=[{width:36},{width:9},{width:13},{width:14},{width:11},{width:9},{width:12},
+                {width:14},{width:16},{width:14},{width:14},{width:16}];
+    var titulo=ws.addRow(['Produtividade — '+nome]); titulo.font={bold:true,size:14};
+    ws.addRow(['Gerado em '+fmtDate(new Date())]).font={color:{argb:'FF777777'}};
+    ws.addRow(['Jornada: '+fmtDec(D.hDia,1)+' h/dia x '+DIAS_SEM+' dias = '+fmtDec(D.hSem,1)+' h por semana']);
+    ws.addRow(['Modo: '+prodModoTxt(D)+(D.comPrat?' — fator por serviço, média das semanas em que ele produz no cronograma':' — sem desconto de chuva ou paralisação')]);
+    ws.addRow(['Unidade: '+prodUnidTxt()+(REL_UNID==='cad'?'':' (serviço sem seção cadastrada fica na unidade dele, marcado na coluna Convertido)')]);
+    ws.addRow([sel.length+' de '+SERV.length+' serviço(s)']);
+    ws.addRow([]);
+    var cab=['Serviço','Unidade','Largura (m)','Espessura (m)',M3+'/m','Equipes','Cadastrada/sem (equipe)'];
+    if(D.comPrat)cab.push('Praticabilidade');
+    cab=cab.concat(['Por equipe/hora','Todas as equipes/hora','Dia (total)','Semana (total)','Convertido']);
+    var hr=ws.addRow(cab);
+    hr.font={bold:true};
+    hr.alignment={vertical:'middle',wrapText:true};
+    hr.eachCell(function(c){
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEEEEEE'}};
+      c.border={bottom:{style:'thin',color:{argb:'FFBBBBBB'}}};
+    });
+    sel.forEach(function(L){
+      var v=[L.sv.n,L.un,L.sec.larg||null,L.sec.esp||null,L.sec.area||null,L.sv.eq||0,L.cadSem];
+      if(D.comPrat)v.push(L.fator);
+      v=v.concat([L.eqHora,L.totHora,L.totDia,L.totSem,(REL_UNID==='cad'?'—':(L.okConv?'sim':'sem seção'))]);
+      var r=ws.addRow(v);
+      r.getCell(1).font={color:{argb:argb(svcColor(L.sv))},bold:true};
+      // Praticabilidade e a coluna 8 e empurra tudo que vem depois em uma casa.
+      var d=D.comPrat?1:0;
+      if(D.comPrat)r.getCell(8).numFmt='0%';
+      [3,4,5].forEach(function(i){ r.getCell(i).numFmt='#,##0.000'; });
+      r.getCell(7).numFmt='#,##0.##';
+      [8+d,9+d].forEach(function(i){ r.getCell(i).numFmt='#,##0.00'; });
+      [10+d,11+d].forEach(function(i){ r.getCell(i).numFmt='#,##0.##'; });
+      if(!L.okConv&&REL_UNID!=='cad')r.getCell(12+d).font={color:{argb:'FFB45309'}};
+    });
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download=(nome.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'_produtividade.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast(sel.length+' serviço(s) exportado(s).');
+  }
   /* A mesma calculadora do relatório, agora como aba de trabalho do Tempo Caminho: é aqui que se
    * cadastra a seção de cada serviço e se compara o ritmo cheio com o ritmo que a chuva deixa. */
   VIEWS['cr-prod']=function(){
