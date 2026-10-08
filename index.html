@@ -1971,6 +1971,24 @@
   function ofiQtdDaEquipe(li,si,times,team){
     return ofiRateio(li,si,times)[team];
   }
+  /** Primeira folga da equipe a partir de uma posição, respeitando buracos na agenda dela.
+   *  Carregar só "até onde a equipe chegou" bastaria se o cronograma fosse montado em ordem,
+   *  mas aqui a ordem é livre: quem colocou a semana 20 primeiro precisa poder voltar e
+   *  preencher a 3. A duração é recalculada a cada tentativa porque ela depende de onde começa
+   *  (semana de chuva rende menos). */
+  function ofiEncaixa(ocupados,pos,qty,prod,periods,cache){
+    var guard=0, pk;
+    while(guard++<500){
+      pk=packSegment(pos,qty/prod,prod,qty,periods,cache);
+      var bate=null;
+      for(var i=0;i<ocupados.length;i++){
+        if(pos<ocupados[i].b-1e-9&&pk.endPos>ocupados[i].a+1e-9){ bate=ocupados[i]; break; }
+      }
+      if(!bate)break;
+      pos=bate.b;
+    }
+    return {pos:pos,pk:pk};
+  }
   /** Produtividade da equipe: a específica dela, se cadastrada; senão a do serviço. */
   function ofiProd(s,team){
     var tp=(s.cfg&&s.cfg.teamProductivities)||[];
@@ -1983,15 +2001,23 @@
     var times={}; lista.forEach(function(x){ var k=x.li+'::'+x.si; (times[k]||(times[k]=[])).push(x.team); });
     var rateios={};
     Object.keys(times).forEach(function(k){ var pr=k.split('::'); rateios[k]=ofiRateio(+pr[0],+pr[1],times[k]); });
-    return lista.map(function(it){
+    // A equipe começa onde ela própria parou, inclusive no MEIO de uma semana. Sem isso, cada
+    // lote pequeno consumia uma semana inteira de capacidade: um CFT de 4.500/sem com lotes de
+    // 1.000 fazia um lote por semana em vez de quatro e meio, e a produtividade virava enfeite.
+    // É a mesma conta do motor ao vivo (startPos = max(pronto, posição da equipe)).
+    var ordem=lista.slice().sort(function(a,b){ return (a.ini-b.ini)||(a.id-b.id); });
+    var posEquipe={};   // si::team -> intervalos [a,b) que a equipe já ocupa, em posição fracionária
+    return ordem.map(function(it){
       var s=SERV[it.si]; if(!s)return null;
-      var k=it.li+'::'+it.si;
+      var k=it.li+'::'+it.si, ke=it.si+'::'+it.team;
       var prod=ofiProd(s,it.team), qty=(rateios[k]||{})[it.team]||0;
       if(!(prod>0)||!(qty>0))return null;
-      var pk=packSegment(it.ini-1,qty/prod,prod,qty,periods,cache);
-      return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,
-              start:pk.start,dur:pk.duration,wq:pk.wq,color:svcColor(s),name:s.n,
-              divididoEm:times[k].length};
+      var ocup=posEquipe[ke]||(posEquipe[ke]=[]);
+      var r=ofiEncaixa(ocup,it.ini-1,qty,prod,periods,cache);
+      ocup.push({a:r.pos,b:r.pk.endPos}); ocup.sort(function(x,y){ return x.a-y.a; });
+      return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,pedida:it.ini,
+              startPos:r.pos,start:r.pk.start,dur:r.pk.duration,endPos:r.pk.endPos,wq:r.pk.wq,
+              color:svcColor(s),name:s.n,divididoEm:times[k].length};
     }).filter(Boolean);
   }
   /** Primeira semana >= desejada em que dá pra começar: predecessoras concluídas NESTE lote e a
@@ -2016,25 +2042,16 @@
     var prod=ofiProd(s,team);
     var qty=(qtdEquipe!=null)?qtdEquipe
       :ofiQtdDaEquipe(li,si,ofiEquipesNoLote(li,si,ignoraId).concat([team]),team);
-    var w=Math.max(desejada,minW), porEquipe=false, guard=0;
-    if(!(prod>0)||!(qty>0))return {semana:w,minPred:minW,predNomes:nomes,porEquipe:false,impossivel:true};
-    while(guard++<1000){
-      var pk=packSegment(w-1,qty/prod,prod,qty,periods,cache);
-      var meu={start:pk.start,dur:pk.duration}, bate=null;
-      for(var i=0;i<segs.length;i++){
-        var g=segs[i];
-        if(g.si!==si||g.team!==team)continue;
-        // Sobreposição ESTRITA, diferente da matriz. Lá o lote seguinte começa numa posição
-        // fracionária e consome só o resto da semana de transição; aqui toda colocação começa em
-        // semana cheia, então deixar as duas dividirem a semana daria à equipe mais de uma semana
-        // de capacidade — era por isso que a mesma equipe aparecia fazendo 9.000 numa semana de
-        // 6.000.
-        if(!((meu.start+meu.dur-1)<g.start||meu.start>(g.start+g.dur-1))){ bate=g; break; }
-      }
-      if(!bate)return {semana:w,minPred:minW,predNomes:nomes,porEquipe:porEquipe};
-      w=bate.start+bate.dur; porEquipe=true;
-    }
-    return {semana:w,minPred:minW,predNomes:nomes,porEquipe:porEquipe};
+    if(!(prod>0)||!(qty>0))return {semana:Math.max(desejada,minW),minPred:minW,predNomes:nomes,porEquipe:false,impossivel:true};
+    // A equipe pode entrar em qualquer folga da agenda dela, inclusive no resto de uma semana já
+    // começada — é assim que um serviço de 4.500/semana cobre vários lotes de 1.000 na mesma.
+    var ocup=[];
+    segs.forEach(function(g){ if(g.si===si&&g.team===team)ocup.push({a:g.startPos,b:g.endPos}); });
+    ocup.sort(function(x,y){ return x.a-y.a; });
+    var pedida=Math.max(desejada,minW);
+    var enc=ofiEncaixa(ocup,pedida-1,qty,prod,periods,cache);
+    var w=Math.floor(enc.pos+1e-9)+1;
+    return {semana:w,minPred:minW,predNomes:nomes,porEquipe:(w>pedida)};
   }
   /** O que está fora de ordem AGORA. A sugestão na hora de colocar só enxerga o que já existe:
    *  quem coloca o CFT antes do Corte não viola nada naquele instante, e passa a violar quando o
@@ -2062,9 +2079,19 @@
     for(var i=0;i<segs.length;i++)for(var j=i+1;j<segs.length;j++){
       var a=segs[i], b=segs[j];
       if(a.si!==b.si||a.team!==b.team)continue;
-      if(!((a.start+a.dur-1)<b.start||a.start>(b.start+b.dur-1)))
-        out.push({id:b.id,txt:teamLabel(a.name,a.team)+' de '+a.name+' estaria em '+LOTS[a.li]+' e '+LOTS[b.li]+' na mesma semana.'});
+      // Dividir a semana de transição entre dois lotes é trabalho normal da equipe; o que não
+      // pode é ela produzir, somando tudo, mais do que faz numa semana — e disso cuida a
+      // invariante de capacidade logo abaixo.
+      if(segsGenuinelyOverlap(a,b))
+        out.push({id:b.id,txt:teamLabel(a.name,a.team)+' de '+a.name+' estaria em '+LOTS[a.li]+' e '+LOTS[b.li]+' ao mesmo tempo.'});
     }
+    // A colocação nasce numa semana válida, mas remover ou colocar algo antes pode empurrar quem
+    // já estava lá. Melhor dizer do que deixar o bloco aparecer calado em outro lugar.
+    segs.forEach(function(g){
+      if(g.pedida&&g.start>g.pedida)
+        out.push({id:g.id,txt:g.name+' em '+LOTS[g.li]+' foi empurrado da S'+isoWeek(mondayOf(g.pedida))+
+          ' para a S'+isoWeek(mondayOf(g.start))+' porque '+teamLabel(g.name,g.team)+' está ocupada antes.'});
+    });
     // Invariante: numa semana, uma equipe não produz mais do que a produtividade dela (reduzida
     // pela praticabilidade). Vale a checagem porque o estouro nasce da SOMA de dois segmentos da
     // mesma equipe, e cada um isolado parece certo.
