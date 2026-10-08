@@ -502,6 +502,10 @@
     body.printing-lb #lbPrint .tbl-wrap{overflow:visible}
     body.printing-report #content>*:not(#repCard):not(#execRep){display:none!important}
     body.printing-report #execRep select,body.printing-report #execRep button,body.printing-report #execRep .subtab{display:none!important}
+    /* Na folha os campos editáveis viram texto: a tabela de produtividade por hora é feita de
+       inputs, e com a borda em volta a folha fica ilegível. */
+    body.printing-report #execRep input{border:none!important;background:transparent!important;padding:0!important;height:auto!important;width:auto!important;font-size:inherit}
+    body.printing-report #convBox{display:none!important}
     body.printing-report #execRep .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none}
     body.printing-report #execRep .exec-grid{grid-template-columns:1fr 1fr}
     body.printing-report #execRep .tc-wrap{max-height:none!important;overflow:visible!important}
@@ -1455,6 +1459,209 @@
    * serviços por lote × semana), quadro de produtividade, distribuição semanal por serviço, Gantt,
    * histograma previsto e Curva S prevista. Tudo vem do cronograma atual (previsto) e respeita o
    * filtro global de lotes. */
+  /* ================= Produtividade por hora + conversão de unidades =================
+   * A produtividade é cadastrada por equipe e por SEMANA, mas em campo a conversa é por hora.
+   * Aqui a mesma produtividade aparece dividida pela jornada, e com a opção de ler tudo em metro
+   * linear ou em m3 — o que depende da seção de cada serviço (largura x espessura). Seção e
+   * jornada ficam na config do próprio serviço, que já vai pro banco: nenhuma coluna nova. */
+  var REL_UNID='cad';                     // unidade de exibição: cad | m | m3
+  var SUP2=String.fromCharCode(178);      // o "2" sobrescrito de m2
+  var SUP3=String.fromCharCode(179);      // o "3" sobrescrito de m3
+  var M3=('m'+SUP3);
+  function fmtDec(n,c){
+    if(n==null||!isFinite(n))return '—';
+    c=(c==null)?2:c;
+    return Number(n).toLocaleString('pt-BR',{minimumFractionDigits:c,maximumFractionDigits:c});
+  }
+  /** Casas decimais conforme a ordem de grandeza: 0,42 e 1.280 na mesma coluna, ambos legíveis. */
+  function fmtAuto(n){
+    if(n==null||!isFinite(n))return '—';
+    var a=Math.abs(n);
+    return fmtDec(n, a>=100?0 : (a>=10?1:2));
+  }
+  /** Jornada em horas por dia. Guardada igual em todos os serviços porque é a única forma de
+   *  gravar um ajuste da obra inteira sem coluna nova — quem lê pega o primeiro que tiver. */
+  function relHorasDia(){
+    for(var i=0;i<SERV.length;i++){ var h=+((SERV[i].cfg||{}).horas_dia); if(h>0)return h; }
+    return 8.8;                           // 44h semanais / 5 dias úteis
+  }
+  /** Seção transversal: largura x espessura = quantos m3 cabem em 1 metro linear do serviço. */
+  function svcSecao(sv){
+    var c=sv.cfg||{}, l=+c.largura_m||0, e=+c.espessura_m||0;
+    return {larg:l,esp:e,area:(l>0&&e>0)?(l*e):0};
+  }
+  /** Só dá pra converter entre linear e volume; m2, un, t e afins ficam como estão. */
+  function tipoUnid(u){
+    // O expoente vira digito ANTES de limpar: sem isso "m2" sobrava como "m" e area entrava na
+    // conversao como se fosse metro linear.
+    var k=String(u==null?'':u).toLowerCase().split(SUP3).join('3').split(SUP2).join('2').replace(/[^a-z0-9]/g,'');
+    if(k==='m3'||k==='mc')return 'volume';
+    if(k==='m'||k==='ml')return 'linear';
+    return 'outra';
+  }
+  /** Valor da unidade cadastrada do serviço para a unidade escolhida no relatório.
+   *  ok=false quer dizer que falta a seção: devolve o valor original em vez de inventar número. */
+  function relConv(v,sv){
+    var t=tipoUnid(sv.u);
+    if(REL_UNID==='cad'||t==='outra')return {v:v,u:sv.u,ok:true};
+    var a=svcSecao(sv).area;
+    if(REL_UNID==='m3'){
+      if(t==='volume')return {v:v,u:M3,ok:true};
+      if(!a)return {v:v,u:sv.u,ok:false};
+      return {v:v*a,u:M3,ok:true};
+    }
+    if(t==='linear')return {v:v,u:'m',ok:true};
+    if(!a)return {v:v,u:sv.u,ok:false};
+    return {v:v/a,u:'m',ok:true};
+  }
+  /** Número digitado em campo brasileiro ("0,25"). Vazio vira null pra poder apagar a medida. */
+  function relNum(t){
+    var x=String(t==null?'':t).trim(); if(!x)return null;
+    var n=Number(x.replace(/\./g,'').replace(',','.'));
+    return (isFinite(n)&&n>0)?n:null;
+  }
+  async function relSalvarCfg(si,patch){
+    var sv=SERV[si]; if(!sv)return;
+    sv.cfg=sv.cfg||{};
+    Object.keys(patch).forEach(function(k){ if(patch[k]==null)delete sv.cfg[k]; else sv.cfg[k]=patch[k]; });
+    await comCarga(function(){ return sbUpdateServico(sv.id,{config:sv.cfg}); });
+  }
+  async function relSalvarJornada(h){
+    await comCarga(async function(){
+      for(var i=0;i<SERV.length;i++){
+        SERV[i].cfg=SERV[i].cfg||{}; SERV[i].cfg.horas_dia=h;
+        await sbUpdateServico(SERV[i].id,{config:SERV[i].cfg});
+      }
+    });
+  }
+  function prodHoraHTML(){
+    var hDia=relHorasDia(), hSem=hDia*DIAS_SEM, ro=isReadOnly();
+    var faltaSecao=0;
+    var linhas=SERV.map(function(sv,si){
+      var sec=svcSecao(sv), semEq=pnum(sv.p), totSem=semEq*(sv.eq||0);
+      var cEq=relConv(semEq/hSem,sv), cTot=relConv(totSem/hSem,sv),
+          cDia=relConv(totSem/DIAS_SEM,sv), cSem=relConv(totSem,sv);
+      if(!cTot.ok)faltaSecao++;
+      var inp=function(attr,val){
+        return '<input class="einp" '+attr+' value="'+(val?String(val).replace('.',','):'')+'" '+
+          'inputmode="decimal" style="width:62px;text-align:right;height:26px;font-size:12px"'+(ro?' disabled':'')+'>';
+      };
+      return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</td>'+
+        '<td class="mono">'+escAttr(cTot.u)+(cTot.ok?'':' <span style="color:var(--warn)" title="Falta a seção transversal deste serviço">&#9888;</span>')+'</td>'+
+        '<td class="r">'+inp('data-secl="'+si+'"',sec.larg)+'</td>'+
+        '<td class="r">'+inp('data-sece="'+si+'"',sec.esp)+'</td>'+
+        '<td class="r mono">'+(sec.area?fmtDec(sec.area,3):'—')+'</td>'+
+        '<td class="r mono">'+(sv.eq||0)+'</td>'+
+        '<td class="r mono"><b>'+fmtAuto(cEq.v)+'</b></td>'+
+        '<td class="r mono"><b>'+fmtAuto(cTot.v)+'</b></td>'+
+        '<td class="r mono">'+fmtAuto(cDia.v)+'</td>'+
+        '<td class="r mono">'+fmtAuto(cSem.v)+'</td></tr>';
+    }).join('');
+    var opcoes=[['cad','Unidade cadastrada'],['m','Tudo em metros'],['m3','Tudo em '+M3]].map(function(o){
+      return '<button class="subtab'+(REL_UNID===o[0]?' active':'')+'" data-relunid="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+    var svcOpts='<option value="">medidas manuais</option>'+SERV.map(function(sv,si){
+      var sc=svcSecao(sv);
+      return '<option value="'+si+'">'+escAttr(sv.n)+(sc.area?'':' (sem seção)')+'</option>';
+    }).join('');
+    var conv='<div class="card" id="convBox" style="margin-top:10px">'+
+      '<div class="eyebrow" style="margin-bottom:6px">Conversor metro &harr; '+M3+'</div>'+
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">'+
+        '<label style="font-size:12px;color:var(--muted)">Seção de<br><select class="esel" id="convSvc" style="min-width:190px">'+svcOpts+'</select></label>'+
+        '<label style="font-size:12px;color:var(--muted)">Largura (m)<br><input class="einp" id="convL" inputmode="decimal" style="width:90px;text-align:right"></label>'+
+        '<div style="padding-bottom:7px;font-weight:700">&times;</div>'+
+        '<label style="font-size:12px;color:var(--muted)">Espessura (m)<br><input class="einp" id="convE" inputmode="decimal" style="width:90px;text-align:right"></label>'+
+        '<div style="padding-bottom:6px">= <b class="mono" id="convA">—</b> <span class="note">'+M3+' por metro</span></div>'+
+      '</div>'+
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">'+
+        '<label style="font-size:12px;color:var(--muted)">Metros<br><input class="einp" id="convM" inputmode="decimal" style="width:130px;text-align:right"></label>'+
+        '<div style="padding-bottom:7px;font-weight:700">&hArr;</div>'+
+        '<label style="font-size:12px;color:var(--muted)">'+M3+'<br><input class="einp" id="convV" inputmode="decimal" style="width:130px;text-align:right"></label>'+
+        '<div class="note" style="padding-bottom:7px">Digite de um lado; o outro acompanha.</div>'+
+      '</div></div>';
+    return '<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:8px">'+
+        '<div class="eyebrow">Produtividade por hora</div>'+
+        '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+          '<label style="font-size:12px;color:var(--muted)">Jornada <input class="einp" id="relHoras" inputmode="decimal" value="'+String(hDia).replace('.',',')+'" style="width:62px;text-align:right;height:26px;font-size:12px"'+(ro?' disabled':'')+'> h/dia</label>'+
+          '<div>'+opcoes+'</div></div></div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px;min-width:0"><thead><tr>'+
+        '<th rowspan="2" style="text-align:left">Serviço</th><th rowspan="2">Un.</th>'+
+        '<th colspan="3">Seção transversal</th><th rowspan="2" class="r">Equipes</th>'+
+        '<th colspan="2">Por hora</th><th rowspan="2" class="r">Dia<br>(total)</th><th rowspan="2" class="r">Semana<br>(total)</th></tr>'+
+        '<tr><th class="r">Largura (m)</th><th class="r">Espessura (m)</th><th class="r">'+M3+'/m</th>'+
+        '<th class="r">Por equipe</th><th class="r">Todas as equipes</th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:6px">Jornada de '+fmtDec(hDia,1)+' h/dia &times; '+DIAS_SEM+' dias = '+fmtDec(hDia*DIAS_SEM,1)+' h por semana. '+
+        'Hora = produtividade cadastrada &divide; jornada &mdash; ritmo de trabalho, sem desconto de chuva ou paralisação. '+
+        'Unidade em exibição: '+(REL_UNID==='cad'?'a cadastrada de cada serviço':(REL_UNID==='m'?'metros':M3))+'. '+
+        'A conversão usa largura &times; espessura; serviço sem essas medidas fica na unidade cadastrada, marcado com &#9888;'+
+        (faltaSecao?(' ('+faltaSecao+' hoje)'):'')+'. Serviço medido em m2, t ou un nunca é convertido.</div>'+
+      conv+'</div>';
+  }
+  /** Liga os campos do card de produtividade por hora. Separado do desenho porque o relatório
+   *  inteiro é remontado a cada troca de unidade. */
+  function prodHoraDraw(){
+    document.querySelectorAll('[data-relunid]').forEach(function(b){
+      b.addEventListener('click',function(){ REL_UNID=b.getAttribute('data-relunid'); go('torre-rel'); });
+    });
+    var hz=document.getElementById('relHoras');
+    if(hz)hz.addEventListener('change',async function(){
+      var h=relNum(hz.value);
+      if(!h||h>24){ toast('Jornada tem que ser um número de horas entre 0 e 24.'); hz.value=String(relHorasDia()).replace('.',','); return; }
+      try{ await relSalvarJornada(h); go('torre-rel'); }
+      catch(e){ toast('Não deu pra salvar a jornada: '+((e&&e.message)||e)); }
+    });
+    var liga=function(sel,campo,attr){
+      document.querySelectorAll(sel).forEach(function(inp){
+        inp.addEventListener('change',async function(){
+          var si=+inp.getAttribute(attr);
+          var patch={}; patch[campo]=relNum(inp.value);
+          try{
+            await relSalvarCfg(si,patch);
+            // O relatorio inteiro e remontado, entao sem isso o cursor some do campo a cada
+            // medida digitada e preencher 30 servicos vira um exercicio de paciencia.
+            window._relFoco=attr+'="'+si+'"';
+            go('torre-rel');
+          }
+          catch(e){ toast('Não deu pra salvar a medida: '+((e&&e.message)||e)); }
+        });
+      });
+    };
+    liga('[data-secl]','largura_m','data-secl'); liga('[data-sece]','espessura_m','data-sece');
+    if(window._relFoco){
+      var alvo=document.querySelector('['+window._relFoco+']');
+      window._relFoco=null;
+      if(alvo){ alvo.focus(); try{ alvo.setSelectionRange(alvo.value.length,alvo.value.length); }catch(e){} }
+    }
+    var cL=document.getElementById('convL'), cE=document.getElementById('convE'),
+        cA=document.getElementById('convA'), cM=document.getElementById('convM'),
+        cV=document.getElementById('convV'), cS=document.getElementById('convSvc');
+    if(!cL)return;
+    var area=function(){ var l=relNum(cL.value), e=relNum(cE.value); return (l&&e)?(l*e):0; };
+    var mostraArea=function(){ var a=area(); cA.textContent=a?fmtDec(a,3):'—'; return a; };
+    // Sem casa decimal fixa: 1.000 m vira "2.400", nao "2.400,000".
+    var fmtConv=function(n){ return Number(n).toLocaleString('pt-BR',{maximumFractionDigits:3}); };
+    var recalc=function(de){
+      var a=mostraArea();
+      if(!a){ if(de!=='m')cM.value=''; if(de!=='v')cV.value=''; return; }
+      if(de==='m'){ var m=relNum(cM.value); cV.value=(m==null)?'':fmtConv(m*a); }
+      else if(de==='v'){ var v=relNum(cV.value); cM.value=(v==null)?'':fmtConv(v/a); }
+      else { var m2=relNum(cM.value); if(m2!=null)cV.value=fmtConv(m2*a); }
+    };
+    cL.addEventListener('input',function(){ recalc('secao'); });
+    cE.addEventListener('input',function(){ recalc('secao'); });
+    cM.addEventListener('input',function(){ recalc('m'); });
+    cV.addEventListener('input',function(){ recalc('v'); });
+    cS.addEventListener('change',function(){
+      var si=cS.value===''?null:+cS.value;
+      if(si==null)return;
+      var sc=svcSecao(SERV[si]);
+      cL.value=sc.larg?String(sc.larg).replace('.',','):'';
+      cE.value=sc.esp?String(sc.esp).replace('.',','):'';
+      recalc('secao');
+    });
+    mostraArea();
+  }
   VIEWS['torre-rel']=function(){
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
     var top='<div class="page-head-mini" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="execBack">← Voltar</button><button class="btn primary" id="execPrint">🖨 Imprimir / PDF</button></div>';
@@ -1515,7 +1722,7 @@
     // 7) curva S prevista
     var curva='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Curva S prevista — avanço físico acumulado (%)</div><svg class="chart" id="execCurva" viewBox="0 0 900 290" style="max-height:44vh"></svg>'+
       '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--warn)"></span>Previsto executivo (cronograma atual)</span>'+(baseline?'<span><span class="swatch" style="background:var(--crit)"></span>Linha de base '+baseline.revisao+' (tracejado)</span>':'')+'</div></div>';
-    return top+'<div id="execRep">'+cab+mini+prod+dist+gantt+hist+curva+'</div>';
+    return top+'<div id="execRep">'+cab+mini+prod+prodHoraHTML()+dist+gantt+hist+curva+'</div>';
   };
   /** Barras por semana (uma ou mais séries lado a lado) com eixo de semanas + meses. opts.dateFn
    *  diz qual calendário: mondayOf (cronograma, pula recesso) ou calWeekDate (histograma). */
@@ -1546,6 +1753,7 @@
       window.print();
     });
     if(!document.getElementById('execRep'))return;
+    prodHoraDraw();
     // distribuição semanal por serviço
     var wq=weeklyQtyBySvc();
     document.querySelectorAll('[data-execbar]').forEach(function(el){
