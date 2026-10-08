@@ -1953,13 +1953,23 @@
     return ofiInit().plano.filter(function(x){ return x.li===li&&x.si===si&&x.id!==ignoraId; })
       .map(function(x){ return x.team; });
   }
-  /** Quanto cabe a cada equipe quando mais de uma ataca o mesmo serviço no mesmo lote: a
-   *  quantidade do lote dividida em partes iguais. Duas equipes no mesmo lote não podem cada uma
-   *  carregar o total — isso dobraria o serviço e faria a obra parecer o dobro do tamanho. */
-  function ofiQtdPorEquipe(li,si,quantas){
-    var tot=(QTY[li]||[])[si]||0;
-    var n=Math.max(1,quantas||1);
-    return tot/n;
+  /** Quanto cabe a cada equipe quando mais de uma ataca o mesmo serviço no mesmo lote.
+   *  O rateio é PROPORCIONAL à produtividade de cada equipe, pra todas terminarem na mesma
+   *  semana. Em partes iguais, a equipe rápida acaba antes e deixa a lenta sozinha no fim: o
+   *  lote passa a terminar na data da mais lenta e juntar equipe chega a ATRASAR o lote — com
+   *  16.000 m3, uma equipe de 6.000/sem leva 3 semanas, e somar uma de 2.000/sem em partes
+   *  iguais levava a 4. Proporcional, as duas terminam em 2. */
+  function ofiRateio(li,si,times){
+    var sv=SERV[si], tot=(QTY[li]||[])[si]||0, soma=0, out={};
+    times.forEach(function(t){ soma+=ofiProd(sv,t); });
+    times.forEach(function(t){
+      out[t]=(soma>0)?(tot*ofiProd(sv,t)/soma):(tot/Math.max(1,times.length));
+    });
+    return out;
+  }
+  /** Parte de uma equipe específica, considerando quem mais está no lote. */
+  function ofiQtdDaEquipe(li,si,times,team){
+    return ofiRateio(li,si,times)[team];
   }
   /** Produtividade da equipe: a específica dela, se cadastrada; senão a do serviço. */
   function ofiProd(s,team){
@@ -1970,15 +1980,18 @@
   function ofiCalc(plano){
     var periods=calRainPeriods(), cache={};
     var lista=plano||ofiInit().plano;
-    var quantas={}; lista.forEach(function(x){ var k=x.li+'::'+x.si; quantas[k]=(quantas[k]||0)+1; });
+    var times={}; lista.forEach(function(x){ var k=x.li+'::'+x.si; (times[k]||(times[k]=[])).push(x.team); });
+    var rateios={};
+    Object.keys(times).forEach(function(k){ var pr=k.split('::'); rateios[k]=ofiRateio(+pr[0],+pr[1],times[k]); });
     return lista.map(function(it){
       var s=SERV[it.si]; if(!s)return null;
-      var prod=ofiProd(s,it.team), qty=ofiQtdPorEquipe(it.li,it.si,quantas[it.li+'::'+it.si]);
+      var k=it.li+'::'+it.si;
+      var prod=ofiProd(s,it.team), qty=(rateios[k]||{})[it.team]||0;
       if(!(prod>0)||!(qty>0))return null;
       var pk=packSegment(it.ini-1,qty/prod,prod,qty,periods,cache);
       return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,
               start:pk.start,dur:pk.duration,wq:pk.wq,color:svcColor(s),name:s.n,
-              divididoEm:quantas[it.li+'::'+it.si]};
+              divididoEm:times[k].length};
     }).filter(Boolean);
   }
   /** Primeira semana >= desejada em que dá pra começar: predecessoras concluídas NESTE lote e a
@@ -2001,7 +2014,8 @@
       });
     });
     var prod=ofiProd(s,team);
-    var qty=(qtdEquipe!=null)?qtdEquipe:ofiQtdPorEquipe(li,si,ofiEquipesNoLote(li,si,ignoraId).length+1);
+    var qty=(qtdEquipe!=null)?qtdEquipe
+      :ofiQtdDaEquipe(li,si,ofiEquipesNoLote(li,si,ignoraId).concat([team]),team);
     var w=Math.max(desejada,minW), porEquipe=false, guard=0;
     if(!(prod>0)||!(qty>0))return {semana:w,minPred:minW,predNomes:nomes,porEquipe:false,impossivel:true};
     while(guard++<1000){
@@ -2010,9 +2024,12 @@
       for(var i=0;i<segs.length;i++){
         var g=segs[i];
         if(g.si!==si||g.team!==team)continue;
-        // mesma regra de conflito da matriz: dividir a semana de transição entre dois lotes é
-        // trabalho normal da equipe, não sobreposição.
-        if(segsGenuinelyOverlap(meu,g)){ bate=g; break; }
+        // Sobreposição ESTRITA, diferente da matriz. Lá o lote seguinte começa numa posição
+        // fracionária e consome só o resto da semana de transição; aqui toda colocação começa em
+        // semana cheia, então deixar as duas dividirem a semana daria à equipe mais de uma semana
+        // de capacidade — era por isso que a mesma equipe aparecia fazendo 9.000 numa semana de
+        // 6.000.
+        if(!((meu.start+meu.dur-1)<g.start||meu.start>(g.start+g.dur-1))){ bate=g; break; }
       }
       if(!bate)return {semana:w,minPred:minW,predNomes:nomes,porEquipe:porEquipe};
       w=bate.start+bate.dur; porEquipe=true;
@@ -2045,9 +2062,27 @@
     for(var i=0;i<segs.length;i++)for(var j=i+1;j<segs.length;j++){
       var a=segs[i], b=segs[j];
       if(a.si!==b.si||a.team!==b.team)continue;
-      if(segsGenuinelyOverlap(a,b))
-        out.push({id:b.id,txt:teamLabel(a.name,a.team)+' de '+a.name+' estaria em '+LOTS[a.li]+' e '+LOTS[b.li]+' ao mesmo tempo.'});
+      if(!((a.start+a.dur-1)<b.start||a.start>(b.start+b.dur-1)))
+        out.push({id:b.id,txt:teamLabel(a.name,a.team)+' de '+a.name+' estaria em '+LOTS[a.li]+' e '+LOTS[b.li]+' na mesma semana.'});
     }
+    // Invariante: numa semana, uma equipe não produz mais do que a produtividade dela (reduzida
+    // pela praticabilidade). Vale a checagem porque o estouro nasce da SOMA de dois segmentos da
+    // mesma equipe, e cada um isolado parece certo.
+    var periods=calRainPeriods(), cacheC={}, porEqSem={};
+    segs.forEach(function(g){
+      for(var i=0;i<g.dur;i++){
+        var k=g.si+'::'+g.team+'::'+(g.start+i);
+        porEqSem[k]=(porEqSem[k]||0)+(g.wq[i]||0);
+      }
+    });
+    Object.keys(porEqSem).forEach(function(k){
+      var pr=k.split('::'), si=+pr[0], team=+pr[1], w=+pr[2], sv=SERV[si];
+      if(!sv)return;
+      var teto=ofiProd(sv,team)*weekFactor(w,periods,cacheC);
+      if(porEqSem[k]>teto+0.5)
+        out.push({id:0,txt:teamLabel(sv.n,team)+' de '+sv.n+' produziria '+fmtBR(porEqSem[k])+' '+sv.u+
+          ' na S'+isoWeek(mondayOf(w))+', acima dos '+fmtBR(teto)+' que a equipe faz numa semana.'});
+    });
     return out;
   }
   /** Reaplica a sugestão em quem está fora de ordem, em passadas, até não sobrar nada que dê pra
@@ -2083,12 +2118,12 @@
       for(var t=1;t<=Math.max(1,sv.eq||1);t++)if(usadas.indexOf(t)<0)times.push(t);
       if(!times.length){ toast('Todas as equipes de '+sv.n+' já estão em '+LOTS[li]+'.'); return true; }
     }
-    var qtdCada=ofiQtdPorEquipe(li,si,usadas.length+1);
     var melhor=null;
     times.forEach(function(t){
-      var r=ofiPrimeiraValida(li,si,t,semana,null,qtdCada);
+      var q=ofiQtdDaEquipe(li,si,usadas.concat([t]),t);
+      var r=ofiPrimeiraValida(li,si,t,semana,null,q);
       if(r.impossivel)return;
-      if(!melhor||r.semana<melhor.r.semana)melhor={t:t,r:r};
+      if(!melhor||r.semana<melhor.r.semana)melhor={t:t,r:r,q:q};
     });
     if(!melhor){ toast('Não dá pra calcular '+sv.n+' em '+LOTS[li]+' — falta quantidade ou produtividade.'); return true; }
     OFI.plano.push({id:OFI.prox++,li:li,si:si,team:melhor.t,ini:melhor.r.semana});
@@ -2098,7 +2133,8 @@
       if(melhor.r.porEquipe)m.push(teamLabel(sv.n,melhor.t)+' já ocupada');
       toast(sv.n+' em '+LOTS[li]+' deslizou pra S'+isoWeek(mondayOf(melhor.r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
     } else if(usadas.length){
-      toast(sv.n+' em '+LOTS[li]+' agora com '+(usadas.length+1)+' equipes — '+fmtBR(qtdCada)+' '+sv.u+' pra cada.');
+      toast(sv.n+' em '+LOTS[li]+' agora com '+(usadas.length+1)+' equipes, rateadas pela produtividade — '+
+        fmtBR(melhor.q)+' '+sv.u+' pra '+teamLabel(sv.n,melhor.t)+'.');
     }
     go(current);
     return true;
@@ -2148,15 +2184,16 @@
     }
     function previa(){
       var si=+selSvc.value, team=+selTeam.value;
-      var nEq=ofiEquipesNoLote(li,si,editId).length+1;
-      var qty=ofiQtdPorEquipe(li,si,nEq);
+      var outras=ofiEquipesNoLote(li,si,editId);
+      var nEq=outras.length+1;
+      var qty=ofiQtdDaEquipe(li,si,outras.concat([team]),team);
       var r=ofiPrimeiraValida(li,si,team,semana,editId,qty);
       if(r.impossivel){ prev.innerHTML='<span style="color:var(--crit)">Sem quantidade neste lote ou sem produtividade cadastrada — não dá pra calcular a duração.</span>'; return r; }
       var sv=SERV[si], prod=ofiProd(sv,team);
       var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{});
       var fim=pk.start+pk.duration-1;
       var txt='<b>S'+isoWeek(mondayOf(pk.start))+'</b> até <b>S'+isoWeek(mondayOf(fim))+'</b> — '+pk.duration+' semana(s), '+fmtBR(qty)+' '+escAttr(sv.u)+
-        (nEq>1?(' <span style="color:var(--warn)">(de '+fmtBR((QTY[li]||[])[si]||0)+' — dividido entre '+nEq+' equipes)</span>'):'')+'.';
+        (nEq>1?(' <span style="color:var(--warn)">(de '+fmtBR((QTY[li]||[])[si]||0)+' — rateado entre '+nEq+' equipes pela produtividade de cada uma)</span>'):'')+'.';
       var motivos=[];
       if(r.semana>semana){
         if(r.predNomes.length)motivos.push('depende de '+r.predNomes.join(', ')+' neste lote');
@@ -2282,7 +2319,7 @@
       (sel?'<button class="ofi-tinta" data-ofitinta="" title="Voltar a abrir o diálogo a cada célula">\u2715 soltar</button>':'')+
       '</div>'+
       '<div class="note" style="margin:-4px 0 10px">'+(sel
-        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote divide a quantidade com a primeira. Pra mover ou remover um bloco, solte o pincel antes.'
+        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote rateia a quantidade com a primeira pela produtividade de cada uma. Pra mover ou remover um bloco, solte o pincel antes.'
         : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover.')+'</div>';
     var pend=ofiPendencias(segs);
     var listaPend=pend.length?('<div class="ofi-aviso" style="border-left-color:var(--crit)"><b>'+pend.length+' pendência(s)</b> — montar fora de ordem é permitido, mas o que ficou inconsistente aparece aqui:<ul style="margin:6px 0 0 16px;padding:0">'+
@@ -2296,7 +2333,7 @@
       '<div class="eyebrow">Oficina — montagem manual <span class="wip">◔ estudo</span></div>'+
       '<div class="ofi-aviso"><b>Nada aqui é gravado.</b> Este estudo não toca o cronograma ao vivo, nem um cenário, nem o banco — vive só nesta aba e some ao recarregar a página. '+
         'Serve pra testar uma montagem e comparar com o automático antes de decidir qualquer coisa.</div>'+
-      '<div class="note" style="margin-bottom:10px">Monte clicando nas células. Um lote aceita vários serviços na mesma semana (frentes em paralelo) e mais de uma equipe no mesmo serviço — nesse caso a quantidade do lote é dividida em partes iguais entre elas. '+
+      '<div class="note" style="margin-bottom:10px">Monte clicando nas células. Um lote aceita vários serviços na mesma semana (frentes em paralelo) e mais de uma equipe no mesmo serviço — nesse caso a quantidade do lote é rateada entre elas pela produtividade de cada uma, pra todas terminarem na mesma semana. '+
         'A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. '+
         'A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</div>'+
       paleta+acoes+listaPend+cmp+ofiMatrizHTML(segs,lotIdxs,totalWeeks)+'</div>';
