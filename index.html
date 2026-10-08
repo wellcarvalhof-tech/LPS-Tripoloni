@@ -355,6 +355,13 @@
   .ofi td.cell:hover{background:var(--accent-soft)}
   .ofi .tcm-seg{cursor:pointer}
   .ofi-aviso{border-left:3px solid var(--warn);padding-left:9px;margin:8px 0;font-size:12.5px;color:var(--ink-2)}
+  /* Paleta: o serviço escolhido fica na mão até trocar, igual pincel. */
+  .ofi-pal{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .ofi-tinta{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);
+    border-radius:999px;padding:4px 11px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+  .ofi-tinta .swatch{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .ofi-tinta.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
+  .ofi.pincel td.cell{cursor:crosshair}
   .segmenu-panel label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}
   .segmenu-panel .einp,.segmenu-panel .esel{width:100%;box-sizing:border-box}
   .apptoast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -1938,7 +1945,9 @@
    * Nada daqui vai pro banco, nem pro cronograma ao vivo, nem pra um cenário. Vive na memória
    * desta aba e some ao recarregar a página — é de propósito, pra poder experimentar sem medo. */
   var OFI=null;
-  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1}; return OFI; }
+  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null};
+    if(!OFI.pincel)OFI.pincel={si:null,team:0};
+    return OFI; }
   /** Produtividade da equipe: a específica dela, se cadastrada; senão a do serviço. */
   function ofiProd(s,team){
     var tp=(s.cfg&&s.cfg.teamProductivities)||[];
@@ -2039,6 +2048,36 @@
       });
       if(!mexeu)break;
     }
+  }
+  /** Uma pincelada: coloca o serviço que está na mão, sem diálogo, e avisa por toast se deslizou.
+   *  É o modo de desenhar — escolhe a tinta uma vez e sai aplicando lote a lote. */
+  function ofiPincela(li,semana){
+    var si=ofiInit().pincel.si; if(si==null)return false;
+    var sv=SERV[si]; if(!sv)return false;
+    if(!((QTY[li]||[])[si]>0)){ toast(sv.n+' não tem quantidade em '+LOTS[li]+'.'); return true; }
+    if(OFI.plano.some(function(x){ return x.li===li&&x.si===si; })){
+      toast(sv.n+' já está em '+LOTS[li]+' — clique no bloco pra mover ou remover.'); return true;
+    }
+    // Equipe fixa, ou "a que estiver livre": entre as equipes do serviço, a que consegue começar
+    // mais cedo. Empate fica com a de número menor, pra pincelada ser previsível.
+    var fixa=OFI.pincel.team, times=[];
+    if(fixa>0)times=[fixa]; else for(var t=1;t<=Math.max(1,sv.eq||1);t++)times.push(t);
+    var melhor=null;
+    times.forEach(function(t){
+      var r=ofiPrimeiraValida(li,si,t,semana,null);
+      if(r.impossivel)return;
+      if(!melhor||r.semana<melhor.r.semana)melhor={t:t,r:r};
+    });
+    if(!melhor){ toast('Não dá pra calcular '+sv.n+' em '+LOTS[li]+' — falta quantidade ou produtividade.'); return true; }
+    OFI.plano.push({id:OFI.prox++,li:li,si:si,team:melhor.t,ini:melhor.r.semana});
+    if(melhor.r.semana!==semana){
+      var m=[];
+      if(melhor.r.predNomes.length)m.push('depende de '+melhor.r.predNomes.join(', '));
+      if(melhor.r.porEquipe)m.push(teamLabel(sv.n,melhor.t)+' já ocupada');
+      toast(sv.n+' em '+LOTS[li]+' deslizou pra S'+isoWeek(mondayOf(melhor.r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
+    }
+    go(current);
+    return true;
   }
   /** Diálogo de colocar/mover um serviço numa célula (lote x semana). */
   function ofiDialogo(li,semana,editId){
@@ -2150,7 +2189,7 @@
       var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
       body+='<tr'+(cls?' class="'+cls+'"':'')+'><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
-    return '<div class="tc-wrap ofi"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    return '<div class="tc-wrap ofi'+(ofiInit().pincel.si!=null?' pincel':'')+'"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
   }
   VIEWS['cr-oficina']=function(){
     ofiInit();
@@ -2168,8 +2207,13 @@
       total++; if(!postos[li+'::'+si])faltam++;
     }); });
     // comparação com o automático: é pra isso que a oficina existe
-    var auto=buildSchedule(), fimAuto=0;
-    auto.forEach(function(g){ fimAuto=Math.max(fimAuto,g.start+g.dur-1); });
+    // O cronograma ao vivo não muda enquanto se desenha aqui, e buildSchedule() a cada pincelada
+    // deixaria o clique lento numa obra grande. Calcula uma vez por sessão da oficina.
+    if(OFI.fimAuto==null){
+      var fa=0; buildSchedule().forEach(function(g){ fa=Math.max(fa,g.start+g.dur-1); });
+      OFI.fimAuto=fa;
+    }
+    var fimAuto=OFI.fimAuto;
     var cmp='';
     if(fimEstudo>0){
       var dif=fimEstudo-fimAuto;
@@ -2185,6 +2229,28 @@
         kpi('warn','Colocações',(total-faltam)+' de '+total,faltam?(faltam+' ainda sem colocar'):'tudo colocado')+
       '</div>';
     }
+    // Paleta: só serviços com quantidade em algum lote à vista — o resto não tem o que desenhar.
+    var pincel=OFI.pincel, sel=(pincel.si!=null)?SERV[pincel.si]:null;
+    var tintas=SERV.map(function(sv,si){
+      var temQtd=lotIdxs.some(function(li){ return ((QTY[li]||[])[si]||0)>0; });
+      if(!temQtd)return '';
+      var on=(pincel.si===si);
+      return '<button class="ofi-tinta'+(on?' on':'')+'" data-ofitinta="'+si+'" title="'+(on?'Serviço na mão — clique pra soltar':'Escolher este serviço pra desenhar')+'">'+
+        '<span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</button>';
+    }).join('');
+    var equipeSel='';
+    if(sel){
+      var o='<option value="0"'+(pincel.team===0?' selected':'')+'>equipe que estiver livre</option>';
+      for(var t=1;t<=Math.max(1,sel.eq||1);t++)o+='<option value="'+t+'"'+(pincel.team===t?' selected':'')+'>'+escAttr(teamLabel(sel.n,t))+'</option>';
+      equipeSel='<select class="esel" id="ofiEquipe" style="height:28px;font-size:12px">'+o+'</select>';
+    }
+    var paleta='<div class="ofi-pal" style="margin-bottom:10px">'+
+      '<span class="note" style="margin-right:2px">Desenhar:</span>'+tintas+equipeSel+
+      (sel?'<button class="ofi-tinta" data-ofitinta="" title="Voltar a abrir o diálogo a cada célula">\u2715 soltar</button>':'')+
+      '</div>'+
+      '<div class="note" style="margin:-4px 0 10px">'+(sel
+        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço.'
+        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora.')+'</div>';
     var pend=ofiPendencias(segs);
     var listaPend=pend.length?('<div class="ofi-aviso" style="border-left-color:var(--crit)"><b>'+pend.length+' pendência(s)</b> — montar fora de ordem é permitido, mas o que ficou inconsistente aparece aqui:<ul style="margin:6px 0 0 16px;padding:0">'+
       pend.slice(0,12).map(function(x){ return '<li>'+escAttr(x.txt)+'</li>'; }).join('')+
@@ -2200,12 +2266,24 @@
       '<div class="note" style="margin-bottom:10px">Clique numa célula vazia pra colocar um serviço naquele lote a partir daquela semana; clique num bloco pra mover ou remover. '+
         'A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. '+
         'A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</div>'+
-      acoes+listaPend+cmp+ofiMatrizHTML(segs,lotIdxs,totalWeeks)+'</div>';
+      paleta+acoes+listaPend+cmp+ofiMatrizHTML(segs,lotIdxs,totalWeeks)+'</div>';
   };
   function ofiDraw(){
+    document.querySelectorAll('[data-ofitinta]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var v=b.getAttribute('data-ofitinta');
+        var si=(v==='')?null:+v;
+        OFI.pincel.si=(OFI.pincel.si===si)?null:si;   // clicar de novo no mesmo solta o pincel
+        OFI.pincel.team=0;
+        go(current);
+      });
+    });
+    var eqs=document.getElementById('ofiEquipe');
+    if(eqs)eqs.addEventListener('change',function(){ OFI.pincel.team=+eqs.value; });
     document.querySelectorAll('[data-ofinovo]').forEach(function(td){
       td.addEventListener('click',function(){
         var p=td.getAttribute('data-ofinovo').split('::');
+        if(ofiPincela(+p[0],+p[1]))return;
         ofiDialogo(+p[0],+p[1],null);
       });
     });
@@ -2221,7 +2299,7 @@
     var lim=document.getElementById('ofiLimpar');
     if(lim)lim.addEventListener('click',function(){
       if(!confirm('Apagar todas as colocações deste estudo? Nada mais é afetado.'))return;
-      OFI={plano:[],prox:1}; go(current);
+      OFI={plano:[],prox:1,pincel:OFI.pincel,fimAuto:OFI.fimAuto}; go(current);
     });
   }
   VIEWS['cr-matriz']=function(){
