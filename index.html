@@ -350,6 +350,11 @@
   .apptoast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(10px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:9px;font-size:13px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:210;box-shadow:0 8px 24px rgba(0,0,0,.32)}
   .segmenu-backdrop{position:fixed;inset:0;z-index:198;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px}
   .segmenu-panel{max-width:380px;width:100%;max-height:90vh;overflow-y:auto}
+  /* Oficina: célula vazia convida o clique, mas sem virar um tabuleiro xadrez que cansa a vista. */
+  .ofi td.cell{cursor:cell}
+  .ofi td.cell:hover{background:var(--accent-soft)}
+  .ofi .tcm-seg{cursor:pointer}
+  .ofi-aviso{border-left:3px solid var(--warn);padding-left:9px;margin:8px 0;font-size:12.5px;color:var(--ink-2)}
   .segmenu-panel label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:3px}
   .segmenu-panel .einp,.segmenu-panel .esel{width:100%;box-sizing:border-box}
   .apptoast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -1160,7 +1165,8 @@
       ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo'],['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
-      ['cad-equipes','Equipes'],['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários']]},
+      ['cad-equipes','Equipes'],['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
+      ['cr-oficina','Oficina (estudo)']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
@@ -1170,7 +1176,7 @@
     'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
-    'cr-prod':['Tempo Caminho','Produtividade'],
+    'cr-prod':['Tempo Caminho','Produtividade'],'cr-oficina':['Tempo Caminho','Oficina — montagem manual (estudo)'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
     'lp-medio':['Last Planner','Médio Prazo'],'lp-semana':['Last Planner','Programação Semanal'],'lp-ppc':['Last Planner','PPC & Causas']};
 
@@ -1922,6 +1928,302 @@
     if(!SERV.length)return '<div class="card"><div class="note">Nenhum serviço cadastrado ainda. Cadastre em Tempo Caminho &rarr; Serviços.</div></div>';
     return prodHoraHTML();
   };
+  /* ================= Oficina do Tempo-Caminho (estudo) =================
+   * Uma bancada: matriz em branco, e o cronograma nasce de clicar célula a célula em vez de ser
+   * calculado de ponta a ponta. O que muda em relação à Matriz é QUEM decide a ordem — aqui a
+   * sequência dos lotes é livre (pode ir de trás pra frente, pular, voltar), e o app só garante
+   * duas coisas: predecessora concluída no mesmo lote e equipe livre. A duração nunca é digitada:
+   * sai de packSegment, o mesmo do motor, com a chuva reduzindo semana a semana.
+   *
+   * Nada daqui vai pro banco, nem pro cronograma ao vivo, nem pra um cenário. Vive na memória
+   * desta aba e some ao recarregar a página — é de propósito, pra poder experimentar sem medo. */
+  var OFI=null;
+  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1}; return OFI; }
+  /** Produtividade da equipe: a específica dela, se cadastrada; senão a do serviço. */
+  function ofiProd(s,team){
+    var tp=(s.cfg&&s.cfg.teamProductivities)||[];
+    return (tp[team-1]>0)?Number(tp[team-1]):pnum(s.p);
+  }
+  /** O plano vira segmentos do mesmo formato da matriz — duração calculada, nunca digitada. */
+  function ofiCalc(plano){
+    var periods=calRainPeriods(), cache={};
+    return (plano||ofiInit().plano).map(function(it){
+      var s=SERV[it.si]; if(!s)return null;
+      var prod=ofiProd(s,it.team), qty=(QTY[it.li]||[])[it.si]||0;
+      if(!(prod>0)||!(qty>0))return null;
+      var pk=packSegment(it.ini-1,qty/prod,prod,qty,periods,cache);
+      return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,
+              start:pk.start,dur:pk.duration,wq:pk.wq,color:svcColor(s),name:s.n};
+    }).filter(Boolean);
+  }
+  /** Primeira semana >= desejada em que dá pra começar: predecessoras concluídas NESTE lote e a
+   *  equipe livre. A posição do lote na lista não entra na conta — é exatamente a amarra que a
+   *  oficina existe pra soltar. Devolve também o porquê, pra tela poder explicar o deslize. */
+  function ofiPrimeiraValida(li,si,team,desejada,ignoraId){
+    var s=SERV[si], periods=calRainPeriods(), cache={};
+    var segs=ofiCalc().filter(function(g){ return g.id!==ignoraId; });
+    var minW=1, nomes=[];
+    ((s.cfg&&s.cfg.predecessors)||[]).forEach(function(pid){
+      var psi=-1; SERV.forEach(function(x,i){ if(x.id===pid)psi=i; });
+      if(psi<0)return;
+      segs.forEach(function(g){
+        if(g.li!==li||g.si!==psi)return;
+        var alvo=(s.cfg&&s.cfg.parallelWithPredecessor)
+          ? (g.start+(s.lag||0))
+          : (g.start+g.dur+(s.lag||0));
+        if(alvo>minW){ minW=alvo; nomes=[SERV[psi].n]; }
+        else if(alvo===minW&&nomes.indexOf(SERV[psi].n)<0)nomes.push(SERV[psi].n);
+      });
+    });
+    var prod=ofiProd(s,team), qty=(QTY[li]||[])[si]||0;
+    var w=Math.max(desejada,minW), porEquipe=false, guard=0;
+    if(!(prod>0)||!(qty>0))return {semana:w,minPred:minW,predNomes:nomes,porEquipe:false,impossivel:true};
+    while(guard++<1000){
+      var pk=packSegment(w-1,qty/prod,prod,qty,periods,cache);
+      var meu={start:pk.start,dur:pk.duration}, bate=null;
+      for(var i=0;i<segs.length;i++){
+        var g=segs[i];
+        if(g.si!==si||g.team!==team)continue;
+        // mesma regra de conflito da matriz: dividir a semana de transição entre dois lotes é
+        // trabalho normal da equipe, não sobreposição.
+        if(segsGenuinelyOverlap(meu,g)){ bate=g; break; }
+      }
+      if(!bate)return {semana:w,minPred:minW,predNomes:nomes,porEquipe:porEquipe};
+      w=bate.start+bate.dur; porEquipe=true;
+    }
+    return {semana:w,minPred:minW,predNomes:nomes,porEquipe:porEquipe};
+  }
+  /** O que está fora de ordem AGORA. A sugestão na hora de colocar só enxerga o que já existe:
+   *  quem coloca o CFT antes do Corte não viola nada naquele instante, e passa a violar quando o
+   *  Corte entra. Sem esta lista a bancada mentiria sobre a própria regra. */
+  function ofiPendencias(segs){
+    var out=[], porLoteSvc={};
+    segs.forEach(function(g){ porLoteSvc[g.li+'::'+g.si]=g; });
+    segs.forEach(function(g){
+      var sv=SERV[g.si];
+      ((sv.cfg&&sv.cfg.predecessors)||[]).forEach(function(pid){
+        var psi=-1; SERV.forEach(function(x,i){ if(x.id===pid)psi=i; });
+        if(psi<0)return;
+        var pg=porLoteSvc[g.li+'::'+psi];
+        if(!pg){
+          if(((QTY[g.li]||[])[psi]||0)>0)
+            out.push({id:g.id,txt:SERV[psi].n+' ainda não foi colocado em '+LOTS[g.li]+', e vem antes de '+sv.n+'.'});
+          return;
+        }
+        var alvo=(sv.cfg&&sv.cfg.parallelWithPredecessor)?(pg.start+(sv.lag||0)):(pg.start+pg.dur+(sv.lag||0));
+        if(g.start<alvo)
+          out.push({id:g.id,txt:sv.n+' em '+LOTS[g.li]+' começa na S'+isoWeek(mondayOf(g.start))+
+            ', antes do que a predecessora '+SERV[psi].n+' permite (S'+isoWeek(mondayOf(alvo))+').'});
+      });
+    });
+    for(var i=0;i<segs.length;i++)for(var j=i+1;j<segs.length;j++){
+      var a=segs[i], b=segs[j];
+      if(a.si!==b.si||a.team!==b.team)continue;
+      if(segsGenuinelyOverlap(a,b))
+        out.push({id:b.id,txt:teamLabel(a.name,a.team)+' de '+a.name+' estaria em '+LOTS[a.li]+' e '+LOTS[b.li]+' ao mesmo tempo.'});
+    }
+    return out;
+  }
+  /** Reaplica a sugestão em quem está fora de ordem, em passadas, até não sobrar nada que dê pra
+   *  resolver deslizando. Não inventa colocação que falta — isso é decisão de quem monta. */
+  function ofiArrumar(){
+    for(var passo=0;passo<12;passo++){
+      var segs=ofiCalc(), pend=ofiPendencias(segs);
+      var mexeu=false;
+      var ids={}; pend.forEach(function(x){ ids[x.id]=1; });
+      OFI.plano.slice().sort(function(a,b){ return a.ini-b.ini; }).forEach(function(it){
+        if(!ids[it.id])return;
+        var r=ofiPrimeiraValida(it.li,it.si,it.team,1,it.id);
+        if(r.impossivel)return;
+        if(r.semana!==it.ini){ it.ini=r.semana; mexeu=true; }
+      });
+      if(!mexeu)break;
+    }
+  }
+  /** Diálogo de colocar/mover um serviço numa célula (lote x semana). */
+  function ofiDialogo(li,semana,editId){
+    var atual=editId?ofiInit().plano.filter(function(x){return x.id===editId;})[0]:null;
+    var usados={}; ofiInit().plano.forEach(function(x){ if(x.id!==editId)usados[x.li+'::'+x.si]=1; });
+    var cands=SERV.map(function(sv,si){ return {sv:sv,si:si,qty:(QTY[li]||[])[si]||0}; })
+      .filter(function(c){ return c.qty>0&&(!usados[li+'::'+c.si]||(atual&&atual.si===c.si)); });
+    if(!cands.length&&!atual){
+      alert('Nenhum serviço disponível para ' + LOTS[li] + '.' + String.fromCharCode(10) + String.fromCharCode(10) +
+        'Ou todos os serviços com quantidade neste lote já foram colocados, ou o lote não tem quantidade cadastrada em Lotes & Quantidades.');
+      return;
+    }
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    var svcOpts=cands.map(function(c){
+      return '<option value="'+c.si+'"'+(atual&&atual.si===c.si?' selected':'')+'>'+escAttr(c.sv.n)+' — '+fmtBR(c.qty)+' '+escAttr(c.sv.u)+'</option>';
+    }).join('');
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:460px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">'+(atual?'Mover':'Colocar')+' em '+escAttr(LOTS[li])+' · S'+isoWeek(mondayOf(semana))+'</div>'+
+      '<div class="note" style="margin-bottom:12px">A duração não se digita: sai da quantidade do lote dividida pela produtividade da equipe, com a chuva reduzindo semana a semana. Se a semana escolhida não servir, o app desliza pra primeira que serve e diz por quê.</div>'+
+      '<div style="display:flex;flex-direction:column;gap:10px">'+
+        '<label>Serviço<select class="esel" id="ofiSvc">'+svcOpts+'</select></label>'+
+        '<label>Equipe<select class="esel" id="ofiTeam"></select></label>'+
+        '<div class="note" id="ofiPrev" style="min-height:3.2em"></div>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
+        (atual?'<button class="btn" id="ofiDel">Remover</button>':'')+
+        '<button class="btn" id="ofiCancel">Cancelar</button>'+
+        '<button class="btn primary" id="ofiOk">'+(atual?'Mover':'Colocar')+'</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    var selSvc=back.querySelector('#ofiSvc'), selTeam=back.querySelector('#ofiTeam'), prev=back.querySelector('#ofiPrev');
+    function enchEquipes(){
+      var sv=SERV[+selSvc.value], n=Math.max(1,sv.eq||1), o='';
+      for(var t=1;t<=n;t++)o+='<option value="'+t+'"'+(atual&&atual.team===t?' selected':'')+'>'+escAttr(teamLabel(sv.n,t))+'</option>';
+      selTeam.innerHTML=o;
+    }
+    function previa(){
+      var si=+selSvc.value, team=+selTeam.value;
+      var r=ofiPrimeiraValida(li,si,team,semana,editId);
+      if(r.impossivel){ prev.innerHTML='<span style="color:var(--crit)">Sem quantidade neste lote ou sem produtividade cadastrada — não dá pra calcular a duração.</span>'; return r; }
+      var sv=SERV[si], prod=ofiProd(sv,team), qty=(QTY[li]||[])[si]||0;
+      var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{});
+      var fim=pk.start+pk.duration-1;
+      var txt='<b>S'+isoWeek(mondayOf(pk.start))+'</b> até <b>S'+isoWeek(mondayOf(fim))+'</b> — '+pk.duration+' semana(s), '+fmtBR(qty)+' '+escAttr(sv.u)+'.';
+      var motivos=[];
+      if(r.semana>semana){
+        if(r.predNomes.length)motivos.push('depende de '+r.predNomes.join(', ')+' neste lote');
+        if(r.porEquipe)motivos.push(escAttr(teamLabel(sv.n,team))+' já está ocupada antes');
+        txt+='<br><span style="color:var(--warn)">Deslizou da S'+isoWeek(mondayOf(semana))+' para a S'+isoWeek(mondayOf(r.semana))+
+          (motivos.length?' — '+motivos.join(' e '):'')+'.</span>';
+      }
+      prev.innerHTML=txt;
+      return r;
+    }
+    selSvc.addEventListener('change',function(){ enchEquipes(); previa(); });
+    selTeam.addEventListener('change',previa);
+    back.querySelector('#ofiCancel').addEventListener('click',fecha);
+    var del=back.querySelector('#ofiDel');
+    if(del)del.addEventListener('click',function(){
+      OFI.plano=OFI.plano.filter(function(x){ return x.id!==editId; });
+      fecha(); go(current);
+    });
+    back.querySelector('#ofiOk').addEventListener('click',function(){
+      var r=previa(); if(r.impossivel)return;
+      var si=+selSvc.value, team=+selTeam.value;
+      if(editId){
+        OFI.plano.forEach(function(x){ if(x.id===editId){ x.si=si; x.team=team; x.ini=r.semana; } });
+      } else {
+        OFI.plano.push({id:OFI.prox++,li:li,si:si,team:team,ini:r.semana});
+      }
+      fecha(); go(current);
+    });
+    enchEquipes(); previa();
+  }
+  function ofiMatrizHTML(segs,lotIdxs,totalWeeks){
+    var cell={};
+    segs.forEach(function(sg){
+      for(var i=0;i<sg.dur;i++){
+        var k=(sg.start+i)+'::'+sg.li;
+        (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i],isStart:i===0});
+      }
+    });
+    var th='<th>Segunda-feira</th><th>Semana</th>'+lotIdxs.map(function(li){return '<th class="lot">'+escAttr(LOTS[li])+'</th>';}).join('');
+    var periods=calRainPeriods(), cacheF={};
+    var calRows=buildCalendarRows(totalWeeks), body='';
+    for(var idx=calRows.length-1;idx>=0;idx--){
+      var entry=calRows[idx], d=entry.date;
+      if(entry.isHoliday){
+        body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td>'+
+          '<td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
+        continue;
+      }
+      var w=entry.working, f=weekFactor(w,periods,cacheF), tds='';
+      var rainBadge=f<0.999?' <span class="tcm-rain" title="Praticabilidade reduzida">🌧 '+Math.round(f*100)+'%</span>':'';
+      for(var lx=0;lx<lotIdxs.length;lx++){
+        var li=lotIdxs[lx];
+        var subs=(cell[w+'::'+li]||[]).filter(function(sc){ return sc.qty>0; });
+        if(!subs.length){ tds+='<td class="cell" data-ofinovo="'+li+'::'+w+'" title="Clique pra colocar um serviço aqui"></td>'; continue; }
+        var inner=subs.map(function(sc,i){
+          return '<div class="tcm-seg" data-ofiedit="'+sc.sg.id+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
+            (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+'" title="'+escAttr(sc.sg.name)+' — '+escAttr(teamLabel(sc.sg.name,sc.sg.team))+' · clique pra mover ou remover">'+
+            fmtBR(sc.qty)+(sc.isStart?'<span class="tcm-team">'+escAttr(teamLabel(sc.sg.name,sc.sg.team))+'</span>':'')+'</div>';
+        }).join('');
+        tds+='<td class="cell"><div class="tcm-row">'+inner+'</div></td>';
+      }
+      var ehHoje=ehSemanaDeHoje(d);
+      var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
+      body+='<tr'+(cls?' class="'+cls+'"':'')+'><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
+    }
+    return '<div class="tc-wrap ofi"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+  }
+  VIEWS['cr-oficina']=function(){
+    ofiInit();
+    if(!LOTS.length||!SERV.length)
+      return '<div class="card"><div class="note">A oficina parte dos lotes e serviços já cadastrados. Cadastre em Tempo Caminho &rarr; Serviços e Lotes &amp; Quantidades.</div></div>';
+    var lotIdxs=viewLotIdxs();
+    var segs=ofiCalc();
+    var fimEstudo=0; segs.forEach(function(g){ fimEstudo=Math.max(fimEstudo,g.start+g.dur-1); });
+    var totalWeeks=Math.max(fimEstudo+6,26);
+    // quantas colocações faltam: serviço com quantidade no lote e ainda não colocado
+    var postos={}; segs.forEach(function(g){ postos[g.li+'::'+g.si]=1; });
+    var faltam=0, total=0;
+    lotIdxs.forEach(function(li){ SERV.forEach(function(sv,si){
+      if(!((QTY[li]||[])[si]>0))return;
+      total++; if(!postos[li+'::'+si])faltam++;
+    }); });
+    // comparação com o automático: é pra isso que a oficina existe
+    var auto=buildSchedule(), fimAuto=0;
+    auto.forEach(function(g){ fimAuto=Math.max(fimAuto,g.start+g.dur-1); });
+    var cmp='';
+    if(fimEstudo>0){
+      var dif=fimEstudo-fimAuto;
+      cmp='<div class="grid g4" style="margin-bottom:12px">'+
+        kpi('accent','Seu estudo','S'+isoWeek(mondayOf(fimEstudo)),fimEstudo+' semanas de projeto')+
+        kpi('info','Cronograma automático','S'+isoWeek(mondayOf(fimAuto)),fimAuto+' semanas de projeto')+
+        // Comparar um estudo pela metade com o cronograma inteiro daria uma vitória falsa: falta
+        // serviço pra colocar, não é que o estudo seja mais rápido.
+        (faltam
+          ? kpi('warn','Diferença','—','estudo incompleto: faltam '+faltam+' colocação(ões)')
+          : kpi(dif>0?'crit':(dif<0?'good':'info'),'Diferença',(dif>0?'+':'')+dif+' sem',
+                dif>0?'o estudo termina depois':(dif<0?'o estudo termina antes':'empatam')))+
+        kpi('warn','Colocações',(total-faltam)+' de '+total,faltam?(faltam+' ainda sem colocar'):'tudo colocado')+
+      '</div>';
+    }
+    var pend=ofiPendencias(segs);
+    var listaPend=pend.length?('<div class="ofi-aviso" style="border-left-color:var(--crit)"><b>'+pend.length+' pendência(s)</b> — montar fora de ordem é permitido, mas o que ficou inconsistente aparece aqui:<ul style="margin:6px 0 0 16px;padding:0">'+
+      pend.slice(0,12).map(function(x){ return '<li>'+escAttr(x.txt)+'</li>'; }).join('')+
+      (pend.length>12?('<li>e mais '+(pend.length-12)+'</li>'):'')+'</ul></div>'):'';
+    var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<button class="btn" id="ofiLimpar"'+(segs.length?'':' disabled')+'>Limpar estudo</button>'+
+      '<button class="btn" id="ofiArrumar"'+(pend.length?'':' disabled')+' title="Desliza quem está fora de ordem para a primeira semana válida">Arrumar pendências</button>'+
+      '<span class="note" style="align-self:center">'+segs.length+' colocação(ões) · '+faltam+' serviço(s) com quantidade ainda fora da matriz</span></div>';
+    return '<div class="card">'+
+      '<div class="eyebrow">Oficina — montagem manual <span class="wip">◔ estudo</span></div>'+
+      '<div class="ofi-aviso"><b>Nada aqui é gravado.</b> Este estudo não toca o cronograma ao vivo, nem um cenário, nem o banco — vive só nesta aba e some ao recarregar a página. '+
+        'Serve pra testar uma montagem e comparar com o automático antes de decidir qualquer coisa.</div>'+
+      '<div class="note" style="margin-bottom:10px">Clique numa célula vazia pra colocar um serviço naquele lote a partir daquela semana; clique num bloco pra mover ou remover. '+
+        'A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. '+
+        'A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</div>'+
+      acoes+listaPend+cmp+ofiMatrizHTML(segs,lotIdxs,totalWeeks)+'</div>';
+  };
+  function ofiDraw(){
+    document.querySelectorAll('[data-ofinovo]').forEach(function(td){
+      td.addEventListener('click',function(){
+        var p=td.getAttribute('data-ofinovo').split('::');
+        ofiDialogo(+p[0],+p[1],null);
+      });
+    });
+    document.querySelectorAll('[data-ofiedit]').forEach(function(el){
+      el.addEventListener('click',function(){
+        var id=+el.getAttribute('data-ofiedit');
+        var it=ofiInit().plano.filter(function(x){ return x.id===id; })[0];
+        if(it)ofiDialogo(it.li,it.ini,id);
+      });
+    });
+    var arr=document.getElementById('ofiArrumar');
+    if(arr)arr.addEventListener('click',function(){ ofiArrumar(); go(current); });
+    var lim=document.getElementById('ofiLimpar');
+    if(lim)lim.addEventListener('click',function(){
+      if(!confirm('Apagar todas as colocações deste estudo? Nada mais é afetado.'))return;
+      OFI={plano:[],prox:1}; go(current);
+    });
+  }
   VIEWS['cr-matriz']=function(){
     var TB=[['modelo','Modelo','▤'],
       ['imp-xls','Importar Excel (tudo)','↥'],['imp-serv','Importar Serviços','↥'],['imp-lot','Importar Lotes','↥'],['imp-cal','Importar Calendário','↥'],
@@ -5862,6 +6164,7 @@
       });
     }
     if(view==='cr-prod'){prodHoraDraw();}
+    if(view==='cr-oficina'){ofiDraw();}
     if(view==='cr-matriz'){setupCrono();}
     if(view==='cr-cenarios'){
       cmpAll();
