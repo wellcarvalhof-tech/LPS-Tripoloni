@@ -357,6 +357,15 @@
   .ofi .tcm-seg:active{cursor:grabbing}
   .ofi .tcm-seg.ofi-indo{opacity:.3}
   .ofi td.cell.ofi-alvo{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-soft)}
+  .ofi-menu{position:fixed;z-index:260;background:var(--surface);border:1px solid var(--line);border-radius:9px;
+    box-shadow:var(--shadow);padding:5px;min-width:215px;max-height:62vh;overflow:auto}
+  .ofi-menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:0;
+    color:var(--ink);font-family:inherit;font-size:12.5px;padding:6px 9px;border-radius:6px;cursor:pointer}
+  .ofi-menu button:hover{background:var(--accent-soft)}
+  .ofi-menu button:disabled{opacity:.45;cursor:default;background:none}
+  .ofi-menu .sep{height:1px;background:var(--line);margin:4px 2px}
+  .ofi-menu .tit{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:6px 9px 3px}
+  .ofi-menu .swatch{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none}
   .ofi-ghost{position:fixed;pointer-events:none;z-index:250;opacity:.9;border-radius:5px;padding:3px 9px;
     font-size:11px;font-weight:700;font-family:"IBM Plex Mono",monospace;box-shadow:0 8px 20px rgba(0,0,0,.45)}
   .ofi-aviso{border-left:3px solid var(--warn);padding-left:9px;margin:8px 0;font-size:12.5px;color:var(--ink-2)}
@@ -1965,9 +1974,120 @@
     w.scrollLeft=sc.l;
     w.scrollTop=Math.max(0,w.scrollHeight-sc.b);
   }
-  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null,scroll:null};
+  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null,scroll:null,hist:[],refaz:[]};
     if(!OFI.pincel)OFI.pincel={si:null,team:0};
+    if(!OFI.hist)OFI.hist=[]; if(!OFI.refaz)OFI.refaz=[];
     return OFI; }
+  /* Desfazer. Guarda o plano inteiro serializado antes de cada mudança: ele é pequeno (uma linha
+   * por colocação) e assim não há risco de um desfazer parcial deixar o estudo meio arrumado.
+   * Toda mudança nova descarta o refazer, que é o que se espera de um histórico linear. */
+  function ofiSnapshot(){
+    var o=ofiInit();
+    o.hist.push(JSON.stringify(o.plano));
+    if(o.hist.length>60)o.hist.shift();
+    o.refaz.length=0;
+  }
+  function ofiDesfaz(){
+    var o=ofiInit(); if(!o.hist.length){ toast('Nada pra desfazer.'); return; }
+    o.refaz.push(JSON.stringify(o.plano));
+    o.plano=JSON.parse(o.hist.pop());
+    ofiRedesenha();
+  }
+  function ofiRefaz(){
+    var o=ofiInit(); if(!o.refaz.length){ toast('Nada pra refazer.'); return; }
+    o.hist.push(JSON.stringify(o.plano));
+    o.plano=JSON.parse(o.refaz.pop());
+    ofiRedesenha();
+  }
+  /* Ctrl+Z / Ctrl+Shift+Z valem só dentro da oficina e fora de campo de digitação — em cima de um
+   * input o desfazer é do navegador, e roubar isso seria pior que não ter atalho. Registrado uma
+   * vez só: ofiDraw roda a cada redesenho e empilharia um listener por vez. */
+  var OFI_TECLAS=false;
+  function ofiLigaTeclas(){
+    if(OFI_TECLAS)return; OFI_TECLAS=true;
+    document.addEventListener('keydown',function(e){
+      if(current!=='cr-oficina')return;
+      if(!(e.ctrlKey||e.metaKey))return;
+      var t=e.target, tag=t&&t.tagName;
+      if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable))return;
+      var k=String(e.key||'').toLowerCase();
+      if(k==='z'&&!e.shiftKey){ e.preventDefault(); ofiDesfaz(); }
+      else if((k==='z'&&e.shiftKey)||k==='y'){ e.preventDefault(); ofiRefaz(); }
+    });
+  }
+  /* Menu do botão direito. Flutuante em vez de diálogo: aqui ele é um atalho em cima da célula,
+   * e abrir uma caixa modal no meio da tela pra cada clique quebraria o ritmo de montar. */
+  var OFI_MENU=null;
+  function ofiFechaMenu(){ if(OFI_MENU){ OFI_MENU.remove(); OFI_MENU=null; } }
+  function ofiMenu(x,y,itens){
+    ofiFechaMenu();
+    var m=document.createElement('div');
+    m.className='ofi-menu';
+    m.innerHTML=itens.map(function(it,i){
+      if(it.sep)return '<div class="sep"></div>';
+      if(it.tit)return '<div class="tit">'+escAttr(it.tit)+'</div>';
+      return '<button data-i="'+i+'"'+(it.off?' disabled':'')+(it.dica?(' title="'+escAttr(it.dica)+'"'):'')+'>'+
+        (it.cor?('<span class="swatch" style="background:'+it.cor+'"></span>'):'')+escAttr(it.lab)+'</button>';
+    }).join('');
+    m.style.left='0px'; m.style.top='0px';
+    document.body.appendChild(m);
+    var r=m.getBoundingClientRect();
+    m.style.left=Math.max(6,Math.min(x,window.innerWidth-r.width-8))+'px';
+    m.style.top=Math.max(6,Math.min(y,window.innerHeight-r.height-8))+'px';
+    m.querySelectorAll('[data-i]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var it=itens[+b.getAttribute('data-i')];
+        ofiFechaMenu();
+        if(it&&it.fn)it.fn();
+      });
+    });
+    OFI_MENU=m;
+  }
+  function ofiLigaFechaMenu(){
+    if(window._ofiMenuLigado)return; window._ofiMenuLigado=true;
+    document.addEventListener('pointerdown',function(e){
+      if(OFI_MENU&&!OFI_MENU.contains(e.target))ofiFechaMenu();
+    },true);
+    document.addEventListener('keydown',function(e){ if(e.key==='Escape')ofiFechaMenu(); });
+    window.addEventListener('resize',ofiFechaMenu);
+  }
+  /** Opções do botão direito em cima de um bloco já colocado. */
+  function ofiMenuBloco(ev,id){
+    var it=ofiInit().plano.filter(function(x){ return x.id===id; })[0];
+    if(!it)return;
+    var sv=SERV[it.si];
+    var livres=[]; for(var t=1;t<=Math.max(1,sv.eq||1);t++)if(ofiEquipesNoLote(it.li,it.si,null).indexOf(t)<0)livres.push(t);
+    ofiMenu(ev.clientX,ev.clientY,[
+      {tit:sv.n+' · '+LOTS[it.li]+' · '+teamLabel(sv.n,it.team)},
+      {lab:'Editar / mover…',fn:function(){ ofiDialogo(it.li,it.ini,id); }},
+      {lab:'Remover',fn:function(){ ofiSnapshot(); OFI.plano=OFI.plano.filter(function(x){ return x.id!==id; }); ofiRedesenha(); }},
+      {sep:true},
+      {lab:'Somar '+(livres.length?teamLabel(sv.n,livres[0]):'equipe')+' neste lote',off:!livres.length,
+       dica:livres.length?'Rateia a quantidade do lote entre as equipes':'Todas as equipes deste serviço já estão no lote',
+       fn:function(){ if(!livres.length)return; OFI.pincel.si=it.si; OFI.pincel.team=livres[0]; ofiPincela(it.li,it.ini); }},
+      {lab:'Pegar '+sv.n+' no pincel',cor:svcColor(sv),
+       fn:function(){ OFI.pincel.si=it.si; OFI.pincel.team=0; ofiRedesenha(); }}
+    ]);
+  }
+  /** Opções do botão direito numa célula: os serviços que cabem ali, pra colocar sem diálogo. */
+  function ofiMenuCelula(ev,li,semana){
+    var postos={}; ofiInit().plano.forEach(function(x){ if(x.li===li)postos[x.si]=(postos[x.si]||0)+1; });
+    var cands=SERV.map(function(sv,si){ return {sv:sv,si:si,qty:(QTY[li]||[])[si]||0}; })
+      .filter(function(c){ return c.qty>0&&(postos[c.si]||0)<Math.max(1,c.sv.eq||1); });
+    var itens=[{tit:LOTS[li]+' · S'+isoWeek(mondayOf(semana))}];
+    if(!cands.length){
+      itens.push({lab:'Nenhum serviço disponível aqui',off:true});
+    } else {
+      cands.slice(0,9).forEach(function(c){
+        itens.push({lab:c.sv.n+' — '+fmtBR(c.qty)+' '+c.sv.u+((postos[c.si]||0)?('  (+'+((postos[c.si]||0)+1)+'ª equipe)'):''),
+          cor:svcColor(c.sv),
+          fn:function(){ OFI.pincel.si=c.si; OFI.pincel.team=0; ofiPincela(li,semana); }});
+      });
+    }
+    itens.push({sep:true});
+    itens.push({lab:'Escolher no diálogo…',fn:function(){ ofiDialogo(li,semana,null); }});
+    ofiMenu(ev.clientX,ev.clientY,itens);
+  }
   /** Equipes já colocadas neste serviço dentro deste lote. */
   function ofiEquipesNoLote(li,si,ignoraId){
     return ofiInit().plano.filter(function(x){ return x.li===li&&x.si===si&&x.id!==ignoraId; })
@@ -2135,6 +2255,7 @@
   /** Reaplica a sugestão em quem está fora de ordem, em passadas, até não sobrar nada que dê pra
    *  resolver deslizando. Não inventa colocação que falta — isso é decisão de quem monta. */
   function ofiArrumar(){
+    ofiSnapshot();
     for(var passo=0;passo<12;passo++){
       var segs=ofiCalc(), pend=ofiPendencias(segs);
       var mexeu=false;
@@ -2173,6 +2294,7 @@
       if(!melhor||r.semana<melhor.r.semana)melhor={t:t,r:r,q:q};
     });
     if(!melhor){ toast('Não dá pra calcular '+sv.n+' em '+LOTS[li]+' — falta quantidade ou produtividade.'); return true; }
+    ofiSnapshot();
     OFI.plano.push({id:OFI.prox++,li:li,si:si,team:melhor.t,ini:melhor.r.semana});
     if(melhor.r.semana!==semana){
       var m=[];
@@ -2202,6 +2324,7 @@
     var q=ofiQtdDaEquipe(liNovo,it.si,outras.concat([it.team]),it.team);
     var r=ofiPrimeiraValida(liNovo,it.si,it.team,semana,id,q);
     if(r.impossivel){ toast('Não dá pra calcular '+sv.n+' em '+LOTS[liNovo]+'.'); return; }
+    ofiSnapshot();
     it.li=liNovo; it.ini=r.semana;
     if(r.semana!==semana){
       var m=[];
@@ -2340,11 +2463,13 @@
     back.querySelector('#ofiCancel').addEventListener('click',fecha);
     var del=back.querySelector('#ofiDel');
     if(del)del.addEventListener('click',function(){
+      ofiSnapshot();
       OFI.plano=OFI.plano.filter(function(x){ return x.id!==editId; });
       fecha(); ofiRedesenha();
     });
     back.querySelector('#ofiOk').addEventListener('click',function(){
       var r=previa(); if(r.impossivel)return;
+      ofiSnapshot();
       var si=+selSvc.value, team=+selTeam.value;
       if(editId){
         OFI.plano.forEach(function(x){ if(x.id===editId){ x.si=si; x.team=team; x.ini=r.semana; } });
@@ -2451,12 +2576,14 @@
       '</div>'+
       '<div class="note" style="margin:-4px 0 10px">'+(sel
         ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote rateia a quantidade com a primeira pela produtividade de cada uma. Pra mover ou remover um bloco pelo clique, solte o pincel antes — arrastar funciona sempre.'
-        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover, ou arraste-o direto pra outra célula.')+'</div>';
+        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover, arraste-o pra outra célula, ou use o <b>botão direito</b> pra um menu de atalhos. <b>Ctrl+Z</b> desfaz.')+'</div>';
     var pend=ofiPendencias(segs);
     var listaPend=pend.length?('<div class="ofi-aviso" style="border-left-color:var(--crit)"><b>'+pend.length+' pendência(s)</b> — montar fora de ordem é permitido, mas o que ficou inconsistente aparece aqui:<ul style="margin:6px 0 0 16px;padding:0">'+
       pend.slice(0,12).map(function(x){ return '<li>'+escAttr(x.txt)+'</li>'; }).join('')+
       (pend.length>12?('<li>e mais '+(pend.length-12)+'</li>'):'')+'</ul></div>'):'';
     var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<button class="btn" id="ofiDesfaz"'+(OFI.hist.length?'':' disabled')+' title="Desfazer a última mudança (Ctrl+Z)">↶ Desfazer</button>'+
+      '<button class="btn" id="ofiRefaz"'+(OFI.refaz.length?'':' disabled')+' title="Refazer (Ctrl+Shift+Z)">↷ Refazer</button>'+
       '<button class="btn" id="ofiLimpar"'+(segs.length?'':' disabled')+'>Limpar estudo</button>'+
       '<button class="btn" id="ofiArrumar"'+(pend.length?'':' disabled')+' title="Desliza quem está fora de ordem para a primeira semana válida">Arrumar pendências</button>'+
       '<span class="note" style="align-self:center">'+segs.length+' colocação(ões) · '+faltam+' serviço(s) com quantidade ainda fora da matriz</span></div>';
@@ -2488,9 +2615,18 @@
         if(ofiPincela(+p[0],+p[1]))return;
         ofiDialogo(+p[0],+p[1],null);
       });
+      td.addEventListener('contextmenu',function(e){
+        e.preventDefault(); e.stopPropagation();
+        var p=td.getAttribute('data-ofinovo').split('::');
+        ofiMenuCelula(e,+p[0],+p[1]);
+      });
     });
     document.querySelectorAll('[data-ofiedit]').forEach(function(el){
       ofiArrasta(el);
+      el.addEventListener('contextmenu',function(e){
+        e.preventDefault(); e.stopPropagation();
+        ofiMenuBloco(e,+el.getAttribute('data-ofiedit'));
+      });
       el.addEventListener('click',function(e){
         if(ofiVeioDeArraste()){ e.stopPropagation(); return; }
         // Com tinta na mão o clique pinta, inclusive por cima de um bloco — é como se comporta
@@ -2505,10 +2641,15 @@
     var arr=document.getElementById('ofiArrumar');
     if(arr)arr.addEventListener('click',function(){ ofiArrumar(); ofiRedesenha(); });
     ofiRestauraScroll();
+    ofiLigaTeclas(); ofiLigaFechaMenu(); ofiFechaMenu();
+    var des=document.getElementById('ofiDesfaz');
+    if(des)des.addEventListener('click',ofiDesfaz);
+    var ref=document.getElementById('ofiRefaz');
+    if(ref)ref.addEventListener('click',ofiRefaz);
     var lim=document.getElementById('ofiLimpar');
     if(lim)lim.addEventListener('click',function(){
       if(!confirm('Apagar todas as colocações deste estudo? Nada mais é afetado.'))return;
-      OFI={plano:[],prox:1,pincel:OFI.pincel,fimAuto:OFI.fimAuto}; ofiRedesenha();
+      ofiSnapshot(); OFI.plano=[]; ofiRedesenha();
     });
   }
   VIEWS['cr-matriz']=function(){
