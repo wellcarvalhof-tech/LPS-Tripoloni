@@ -1470,15 +1470,10 @@
   var VIEWS={};
 
   VIEWS.torre=function(){
-    window._torreTab=window._torreTab||'curva';
-    var tabs=[['curva','Curva S'],['prod','Indicadores de produção']].map(function(t){return '<button class="subtab'+(window._torreTab===t[0]?' active':'')+'" data-torretab="'+t[0]+'">'+t[1]+'</button>';}).join('');
+    window._torreTab=window._torreTab||'painel';
+    var tabs=[['painel','Painel'],['curva','Curva S'],['prod','Indicadores de produção']].map(function(t){return '<button class="subtab'+(window._torreTab===t[0]?' active':'')+'" data-torretab="'+t[0]+'">'+t[1]+'</button>';}).join('');
     return head('Torre de Controle','Curva S e indicadores de produção da obra.', '<button class="btn" id="torreExecRep" style="padding:7px 11px">📄 Relatório de planejamento executivo</button>'+impBtn())+
-    '<div class="grid g4" style="margin-bottom:14px">'+
-      kpi('info','Avanço físico','47,2%','<span class="down">▼ 3,1pp</span> vs previsto')+
-      kpi('crit','SPI','0,88','atrasado no prazo')+
-      kpi('good','PPC · Sem 34','78%','<span class="up">▲ 6pp</span>')+
-      kpi('accent','Restrições','14','5 críticas')+
-    '</div>'+
+    '<div id="torreKpis">'+torreKpisHTML()+'</div>'+
     '<div class="subtabs" id="torreTabs" style="margin-bottom:14px">'+tabs+'</div>'+
     '<div id="torreContent"></div>';
   };
@@ -4546,7 +4541,14 @@
   function impBtn(){return '<button class="btn" data-import="1" style="padding:7px 11px">↥ Importar Excel</button>';}
   function renderTorreTab(){
     var c=document.getElementById('torreContent'); if(!c)return;
-    if((window._torreTab||'curva')==='prod'){
+    var abaAtual=window._torreTab||'painel';
+    if(abaAtual==='painel'){
+      c.innerHTML=torrePainelHTML();
+      torrePainelDraw();
+      if(!TORRE_DASH.lido&&!TORRE_DASH.carregando)torreDashCarrega();
+      return;
+    }
+    if(abaAtual==='prod'){
       var svcOpts=SERV.map(function(s,i){return '<option value="'+i+'"'+((window._torreSvc==null?1:+window._torreSvc)===i?' selected':'')+'>'+s.n+'</option>';}).join('');
       c.innerHTML='<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">'+
         '<div><div class="eyebrow" style="margin:0">Indicadores de produção</div><h3 style="margin:2px 0 0">Realizado (barras) × Previsto (linha)</h3></div>'+
@@ -4575,6 +4577,150 @@
       document.querySelectorAll('[data-peso]').forEach(function(inp){inp.addEventListener('input',function(){window.PESO[+inp.getAttribute('data-peso')]=+inp.value||0;if((window._torreW||'financeiro')==='financeiro')renderTorreCurva();});});
       renderTorreCurva();
     }
+  }
+  /* ================= Painel da Torre de Controle =================
+   * Quatro leituras da obra lado a lado, todas de dados reais: onde o avanço está (Curva S), se
+   * as restrições saem no prazo (IRR), se a semana é cumprida (PPC) e se o que foi apontado bate
+   * com o previsto por serviço. Restrições e programação não vêm no carregamento da obra, então
+   * o painel busca o que falta na primeira vez que é aberto. */
+  var TORRE_DASH={lido:false,carregando:false,erro:'',ppc:[]};
+  async function torreDashCarrega(){
+    if(TORRE_DASH.carregando||!selectedObra||!SB)return;
+    TORRE_DASH.carregando=true; TORRE_DASH.erro='';
+    if(current==='torre'){ torreAtualizaKpis(); renderTorreTab(); }
+    try{
+      if(!MP_LIDO){ MP=await sbMPListar(selectedObra.id); MP_LIDO=true; }
+      var planos=await sbProgPlanos(selectedObra.id);
+      // Uma consulta só pros compromissos da obra inteira: por plano seriam dezenas de idas ao
+      // banco, uma por semana programada.
+      var r=await sbTudo(function(){
+        return SB.from('compromissos').select('plano_id,status').eq('obra_id',selectedObra.id).order('id',{ascending:true});
+      });
+      if(r.error)throw r.error;
+      var por={};
+      (r.data||[]).forEach(function(c){
+        var g=por[c.plano_id]||(por[c.plano_id]={t:0,ok:0});
+        g.t++; if(c.status==='concluido')g.ok++;
+      });
+      TORRE_DASH.ppc=planos.map(function(pl){
+        var g=por[pl.id]||{t:0,ok:0};
+        return {sem:pl.semana_iso||'',ini:pl.data_inicio||'',t:g.t,ok:g.ok,pct:g.t?Math.round(100*g.ok/g.t):null};
+      }).filter(function(x){ return x.t>0; }).sort(function(a,b){ return a.ini<b.ini?-1:(a.ini>b.ini?1:0); });
+    }catch(e){ TORRE_DASH.erro=(e&&e.message)||String(e); }
+    TORRE_DASH.lido=true; TORRE_DASH.carregando=false;
+    if(current==='torre'){ torreAtualizaKpis(); renderTorreTab(); }
+  }
+  /** Previsto (cronograma) x apontado (produção diária), somado por serviço. */
+  function torreProdPorServico(){
+    var wq=weeklyQtyBySvc();
+    var idx={}; SERV.forEach(function(sv,i){ idx[sv.id]=i; });
+    var prev=SERV.map(function(_,si){ var t=0; for(var w=1;w<=wq.tw;w++)t+=wq.M[si][w]||0; return t; });
+    var real=SERV.map(function(){ return 0; });
+    (window.PROD_LIST||[]).forEach(function(r){
+      var si=idx[r.servId];
+      if(si!=null)real[si]+=(+r.qtd||0);
+    });
+    return SERV.map(function(sv,si){ return {sv:sv,si:si,prev:prev[si],real:real[si]}; })
+      .filter(function(x){ return x.prev>0||x.real>0; });
+  }
+  /** Barras horizontais pareadas: a comparação é por serviço, e nome de serviço não cabe
+   *  embaixo de barra vertical sem virar texto deitado. */
+  function torreProdSVG(linhas){
+    if(!linhas.length)return '<div class="note">Sem quantidades previstas nem produção apontada.</div>';
+    var mx=0; linhas.forEach(function(l){ mx=Math.max(mx,l.prev,l.real); }); if(mx<=0)mx=1;
+    var W=900, rowH=30, pl=190, pr=86, H=linhas.length*rowH+26, iw=W-pl-pr;
+    var s2='';
+    linhas.forEach(function(l,i){
+      var y=i*rowH+10, bw=10;
+      var wp=iw*l.prev/mx, wr=iw*l.real/mx;
+      var pct=l.prev>0?Math.round(100*l.real/l.prev):null;
+      s2+='<text x="'+(pl-8)+'" y="'+(y+12)+'" text-anchor="end" font-size="11" fill="var(--ink-2)">'+escAttr(l.sv.n)+'</text>'+
+        '<rect x="'+pl+'" y="'+y+'" width="'+Math.max(0,wp).toFixed(1)+'" height="'+bw+'" rx="2" fill="var(--muted)" opacity=".55"><title>Previsto: '+fmtBR(l.prev)+' '+escAttr(l.sv.u)+'</title></rect>'+
+        '<rect x="'+pl+'" y="'+(y+bw+2)+'" width="'+Math.max(0,wr).toFixed(1)+'" height="'+bw+'" rx="2" fill="'+svcColor(l.sv)+'"><title>Apontado: '+fmtBR(l.real)+' '+escAttr(l.sv.u)+'</title></rect>'+
+        '<text x="'+(W-pr+8)+'" y="'+(y+15)+'" font-size="11" font-family="IBM Plex Mono,monospace" fill="'+(pct==null?'var(--muted)':(pct>=95?'var(--good)':(pct>=70?'var(--warn)':'var(--crit)')))+'">'+(pct==null?'—':(pct+'%'))+'</text>';
+    });
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="max-height:'+Math.min(420,H+10)+'px">'+s2+'</svg>'+
+      '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--muted);opacity:.55"></span>Previsto no cronograma</span>'+
+      '<span><span class="swatch" style="background:var(--accent)"></span>Apontado na Produção Diária</span><span class="note">% = apontado ÷ previsto</span></div>';
+  }
+  /** PPC semana a semana, com a meta de 85% marcada. */
+  function torrePpcSVG(lista){
+    if(!lista.length)return '<div class="note">Nenhuma semana programada ainda. Crie uma em Last Planner &rarr; Programação Semanal.</div>';
+    var ks=lista.slice(-20);
+    var W=Math.max(320,ks.length*40), H=170, base=H-24, topo=12;
+    var meta=topo+(base-topo)*(1-0.85);
+    var bw=Math.min(28,(W/ks.length)*0.6);
+    var barras=ks.map(function(g,i){
+      var x=(i+0.5)*(W/ks.length), h=(base-topo)*(g.pct||0)/100;
+      var cor=g.pct>=85?'#22c55e':(g.pct>=70?'#eab308':'#ef4444');
+      return '<rect x="'+(x-bw/2).toFixed(1)+'" y="'+(base-h).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+h.toFixed(1)+'" rx="2" fill="'+cor+'"><title>'+escAttr(g.sem)+': '+g.ok+' de '+g.t+' concluídos</title></rect>'+
+        '<text x="'+x.toFixed(1)+'" y="'+(base-h-3).toFixed(1)+'" text-anchor="middle" font-size="9" fill="var(--ink-2)">'+g.pct+'%</text>'+
+        '<text x="'+x.toFixed(1)+'" y="'+(H-7)+'" text-anchor="middle" font-size="9" fill="var(--muted)">'+escAttr(String(g.sem).slice(-3))+'</text>';
+    }).join('');
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="max-height:200px">'+
+      '<line x1="0" y1="'+base+'" x2="'+W+'" y2="'+base+'" stroke="var(--line)"/>'+
+      '<line x1="0" y1="'+meta.toFixed(1)+'" x2="'+W+'" y2="'+meta.toFixed(1)+'" stroke="var(--good)" stroke-dasharray="4 3" opacity=".7"/>'+
+      barras+'</svg><div class="note" style="margin-top:4px">Meta ≥ 85% (linha tracejada). Cada barra é uma semana programada: concluídos ÷ total de compromissos.</div>';
+  }
+  /** Cartões do topo, todos calculados — nada de número de exemplo numa tela de decisão. */
+  function torreKpisHTML(){
+    if(!SERV.length||!LOTS.length)return '';
+    var d=null;
+    try{ d=curvaSData(); }catch(e){ d=null; }
+    var reSerie=d?(curveSeries(d.real,'total')||[]):[];
+    var exSerie=d?(curveSeries(d.executivo,'total')||[]):[];
+    var hw=d?Math.max(1,Math.min(d.hojeW||1,d.tw)):1;
+    var real=reSerie[hw]||0, prev=exSerie[hw]||0, dif=real-prev;
+    var ppcUlt=TORRE_DASH.ppc.length?TORRE_DASH.ppc[TORRE_DASH.ppc.length-1]:null;
+    var ind=MP_LIDO?mpIndicadores(MP):null;
+    // "em aberto" = tudo que nao foi removido nem cancelado, inclusive as sem data
+    var abertas=ind?(ind.c.atrasada+ind.c.no_prazo+ind.c.sem_data):null;
+    return '<div class="grid g4" style="margin-bottom:14px">'+
+      kpi(dif<-5?'crit':(dif<0?'warn':'good'),'Avanço realizado',fmtDec(real,1)+'%',
+        (d?('previsto pra hoje '+fmtDec(prev,1)+'% · '+(dif>=0?'+':'')+fmtDec(dif,1)+'pp'):'sem cronograma'))+
+      kpi('info','Previsto no fim',fmtDec(exSerie[d?d.tw:0]||0,1)+'%',d?('horizonte de '+d.tw+' semanas'):'—')+
+      kpi(ppcUlt?(ppcUlt.pct>=85?'good':(ppcUlt.pct>=70?'warn':'crit')):'info','PPC'+(ppcUlt?(' · '+ppcUlt.sem):''),
+        ppcUlt?(ppcUlt.pct+'%'):'—', ppcUlt?(ppcUlt.ok+' de '+ppcUlt.t+' compromissos'):'nenhuma semana programada')+
+      kpi(ind&&ind.c.atrasada?'crit':'accent','Restrições em aberto',abertas==null?'—':String(abertas),
+        ind?((ind.c.atrasada||0)+' com prazo vencido'+(ind.irr!=null?(' · IRR '+ind.irr+'%'):'')):'não carregadas')+
+    '</div>';
+  }
+  function torreAtualizaKpis(){
+    var k=document.getElementById('torreKpis');
+    if(k)k.innerHTML=torreKpisHTML();
+  }
+  function torrePainelHTML(){
+    if(!SERV.length||!LOTS.length)
+      return '<div class="card"><div class="note">Cadastre serviços, lotes e quantidades pra ver o painel.</div></div>';
+    var carregando=TORRE_DASH.carregando?'<span class="note"> · carregando restrições e programação…</span>':'';
+    var erro=TORRE_DASH.erro?('<div class="banner" style="border-color:var(--crit);margin-bottom:12px">Não deu pra carregar tudo: '+escAttr(TORRE_DASH.erro)+'</div>'):'';
+    return erro+
+      '<div class="card" style="margin-bottom:12px"><div class="eyebrow">Curva S — avanço físico acumulado (%)</div>'+
+        '<svg class="chart" id="torrePainelCurva" viewBox="0 0 900 280" style="max-height:40vh"></svg>'+
+        '<div class="legend" style="margin-top:4px"><span><span class="swatch" style="background:var(--warn)"></span>Previsto</span>'+
+        '<span><span class="swatch" style="background:var(--accent)"></span>Realizado</span>'+
+        '<span><span class="swatch" style="background:var(--crit)"></span>Linha de base</span></div></div>'+
+      '<div class="grid g2" style="margin-bottom:12px">'+
+        '<div class="card"><div class="eyebrow">IRR — restrições removidas no prazo'+carregando+'</div>'+
+          (MP_LIDO?mpIrrSemanaHTML(MP):'<div class="note">Carregando…</div>')+'</div>'+
+        '<div class="card"><div class="eyebrow">PPC — semanas programadas'+carregando+'</div>'+
+          (TORRE_DASH.lido?torrePpcSVG(TORRE_DASH.ppc):'<div class="note">Carregando…</div>')+'</div>'+
+      '</div>'+
+      '<div class="card"><div class="eyebrow">Produção por serviço — previsto × apontado</div>'+
+        torreProdSVG(torreProdPorServico())+'</div>';
+  }
+  function torrePainelDraw(){
+    var el=document.getElementById('torrePainelCurva'); if(!el)return;
+    var d;
+    try{ d=curvaSData(); }catch(e){ return; }
+    var ex=curveSeries(d.executivo,'total')||[], re=curveSeries(d.real,'total')||[], cl=curveSeries(d.cliente,'total');
+    var hw=Math.max(1,Math.min(d.hojeW||1,d.tw));
+    var series=[{values:ex.slice(1),color:cssHex('--warn'),label:'Previsto'},
+                // o realizado para em hoje: estender até o fim desenharia uma linha reta que
+                // ninguém apontou e que parece avanço.
+                {values:re.slice(1,hw+1),color:cssHex('--accent'),label:'Realizado',dots:hw<=60}];
+    if(cl)series.unshift({values:cl.slice(1),color:cssHex('--crit'),dashed:true,label:'Linha de base'});
+    lineChartSVG(el,series,{W:900,H:280,dateFn:mondayOf,ymax:100,fmt:function(v){return Math.round(v)+'%';}});
   }
   function setupTorre(){
     var repBtn=document.getElementById('torreExecRep');
