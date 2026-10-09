@@ -353,7 +353,12 @@
   /* Oficina: célula vazia convida o clique, mas sem virar um tabuleiro xadrez que cansa a vista. */
   .ofi td.cell{cursor:cell}
   .ofi td.cell:hover{background:var(--accent-soft)}
-  .ofi .tcm-seg{cursor:pointer}
+  .ofi .tcm-seg{cursor:grab;touch-action:none}
+  .ofi .tcm-seg:active{cursor:grabbing}
+  .ofi .tcm-seg.ofi-indo{opacity:.3}
+  .ofi td.cell.ofi-alvo{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-soft)}
+  .ofi-ghost{position:fixed;pointer-events:none;z-index:250;opacity:.9;border-radius:5px;padding:3px 9px;
+    font-size:11px;font-weight:700;font-family:"IBM Plex Mono",monospace;box-shadow:0 8px 20px rgba(0,0,0,.45)}
   .ofi-aviso{border-left:3px solid var(--warn);padding-left:9px;margin:8px 0;font-size:12.5px;color:var(--ink-2)}
   /* Paleta: o serviço escolhido fica na mão até trocar, igual pincel. */
   .ofi-pal{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -1945,7 +1950,22 @@
    * Nada daqui vai pro banco, nem pro cronograma ao vivo, nem pra um cenário. Vive na memória
    * desta aba e some ao recarregar a página — é de propósito, pra poder experimentar sem medo. */
   var OFI=null;
-  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null};
+  /* A matriz rola dentro do próprio quadro (.tc-wrap), e go() só devolve a rolagem da página —
+   * por isso cada edição jogava a vista de volta pro começo. Guarda a posição antes de redesenhar.
+   * A âncora é a distância até o FIM: as semanas são desenhadas de cima pra baixo em ordem
+   * decrescente, então o conteúdo novo entra por cima e medir pelo topo deslocaria a vista. */
+  function ofiRedesenha(){
+    var w=document.querySelector('.tc-wrap.ofi');
+    if(w)ofiInit().scroll={l:w.scrollLeft,b:w.scrollHeight-w.scrollTop};
+    go(current);
+  }
+  function ofiRestauraScroll(){
+    var w=document.querySelector('.tc-wrap.ofi'), sc=ofiInit().scroll;
+    if(!w||!sc)return;
+    w.scrollLeft=sc.l;
+    w.scrollTop=Math.max(0,w.scrollHeight-sc.b);
+  }
+  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null,scroll:null};
     if(!OFI.pincel)OFI.pincel={si:null,team:0};
     return OFI; }
   /** Equipes já colocadas neste serviço dentro deste lote. */
@@ -2163,8 +2183,92 @@
       toast(sv.n+' em '+LOTS[li]+' agora com '+(usadas.length+1)+' equipes, rateadas pela produtividade — '+
         fmtBR(melhor.q)+' '+sv.u+' pra '+teamLabel(sv.n,melhor.t)+'.');
     }
-    go(current);
+    ofiRedesenha();
     return true;
+  }
+  /** Leva uma colocação para outro lote/semana, com as mesmas regras de quando ela foi criada.
+   *  Mudar de lote muda a quantidade (é a do lote de destino) e o rateio com as outras equipes,
+   *  então nada disso pode ser só trocar o rótulo da célula. */
+  function ofiMove(id,liNovo,semana){
+    var it=ofiInit().plano.filter(function(x){ return x.id===id; })[0];
+    if(!it)return;
+    if(it.li===liNovo&&it.ini===semana)return;
+    var sv=SERV[it.si];
+    if(!((QTY[liNovo]||[])[it.si]>0)){ toast(sv.n+' não tem quantidade em '+LOTS[liNovo]+'.'); return; }
+    var outras=ofiEquipesNoLote(liNovo,it.si,id);
+    if(liNovo!==it.li&&outras.indexOf(it.team)>=0){
+      toast(teamLabel(sv.n,it.team)+' já está em '+LOTS[liNovo]+' — use outra equipe.'); return;
+    }
+    var q=ofiQtdDaEquipe(liNovo,it.si,outras.concat([it.team]),it.team);
+    var r=ofiPrimeiraValida(liNovo,it.si,it.team,semana,id,q);
+    if(r.impossivel){ toast('Não dá pra calcular '+sv.n+' em '+LOTS[liNovo]+'.'); return; }
+    it.li=liNovo; it.ini=r.semana;
+    if(r.semana!==semana){
+      var m=[];
+      if(r.predNomes.length)m.push('depende de '+r.predNomes.join(', '));
+      if(r.porEquipe)m.push(teamLabel(sv.n,it.team)+' já ocupada');
+      toast(sv.n+' caiu na S'+isoWeek(mondayOf(r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
+    }
+    ofiRedesenha();
+  }
+  /** Arrastar um bloco pra outra célula, como no ajuste manual. Um clique sem movimento continua
+   *  sendo clique (abre o diálogo, ou pinta se houver tinta na mão) — por isso a folga de 5px. */
+  function ofiArrasta(el){
+    el.addEventListener('pointerdown',function(ev){
+      if(ev.button&&ev.button!==0)return;
+      var id=+el.getAttribute('data-ofiedit');
+      var x0=ev.clientX, y0=ev.clientY, moveu=false, ghost=null, alvo=null;
+      try{ el.setPointerCapture&&el.setPointerCapture(ev.pointerId); }catch(e){}
+      function celulaEm(x,y){
+        if(ghost)ghost.style.display='none';
+        var n=document.elementFromPoint(x,y);
+        if(ghost)ghost.style.display='';
+        return n&&n.closest?n.closest('td.cell[data-ofinovo]'):null;
+      }
+      function mv(e2){
+        if(!moveu&&Math.abs(e2.clientX-x0)<5&&Math.abs(e2.clientY-y0)<5)return;
+        if(!moveu){
+          moveu=true;
+          ev.preventDefault();
+          el.classList.add('ofi-indo');
+          ghost=document.createElement('div');
+          ghost.className='ofi-ghost';
+          ghost.style.background=el.style.background;
+          ghost.style.color=el.style.color;
+          ghost.textContent=el.textContent;
+          document.body.appendChild(ghost);
+        }
+        ghost.style.left=(e2.clientX+12)+'px';
+        ghost.style.top=(e2.clientY-10)+'px';
+        var c=celulaEm(e2.clientX,e2.clientY);
+        if(c!==alvo){
+          if(alvo)alvo.classList.remove('ofi-alvo');
+          alvo=c;
+          if(alvo)alvo.classList.add('ofi-alvo');
+        }
+      }
+      function up(e2){
+        el.removeEventListener('pointermove',mv);
+        el.removeEventListener('pointerup',up);
+        el.removeEventListener('pointercancel',up);
+        if(ghost)ghost.remove();
+        el.classList.remove('ofi-indo');
+        if(alvo)alvo.classList.remove('ofi-alvo');
+        if(!moveu)return;                      // foi clique: deixa o handler de clique agir
+        window._ofiArrastou=Date.now();        // ...e aqui, não: segura o clique que vem a seguir
+        var c=celulaEm(e2.clientX,e2.clientY);
+        if(!c)return;
+        var pr=c.getAttribute('data-ofinovo').split('::');
+        ofiMove(id,+pr[0],+pr[1]);
+      }
+      el.addEventListener('pointermove',mv);
+      el.addEventListener('pointerup',up);
+      el.addEventListener('pointercancel',up);
+    });
+  }
+  /** O clique que fecha um arraste não pode pintar nem abrir diálogo. */
+  function ofiVeioDeArraste(){
+    return window._ofiArrastou&&(Date.now()-window._ofiArrastou)<350;
   }
   /** Diálogo de colocar/mover um serviço numa célula (lote x semana). */
   function ofiDialogo(li,semana,editId){
@@ -2237,7 +2341,7 @@
     var del=back.querySelector('#ofiDel');
     if(del)del.addEventListener('click',function(){
       OFI.plano=OFI.plano.filter(function(x){ return x.id!==editId; });
-      fecha(); go(current);
+      fecha(); ofiRedesenha();
     });
     back.querySelector('#ofiOk').addEventListener('click',function(){
       var r=previa(); if(r.impossivel)return;
@@ -2247,7 +2351,7 @@
       } else {
         OFI.plano.push({id:OFI.prox++,li:li,si:si,team:team,ini:r.semana});
       }
-      fecha(); go(current);
+      fecha(); ofiRedesenha();
     });
     enchEquipes(); previa();
   }
@@ -2346,8 +2450,8 @@
       (sel?'<button class="ofi-tinta" data-ofitinta="" title="Voltar a abrir o diálogo a cada célula">\u2715 soltar</button>':'')+
       '</div>'+
       '<div class="note" style="margin:-4px 0 10px">'+(sel
-        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote rateia a quantidade com a primeira pela produtividade de cada uma. Pra mover ou remover um bloco, solte o pincel antes.'
-        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover.')+'</div>';
+        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote rateia a quantidade com a primeira pela produtividade de cada uma. Pra mover ou remover um bloco pelo clique, solte o pincel antes — arrastar funciona sempre.'
+        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover, ou arraste-o direto pra outra célula.')+'</div>';
     var pend=ofiPendencias(segs);
     var listaPend=pend.length?('<div class="ofi-aviso" style="border-left-color:var(--crit)"><b>'+pend.length+' pendência(s)</b> — montar fora de ordem é permitido, mas o que ficou inconsistente aparece aqui:<ul style="margin:6px 0 0 16px;padding:0">'+
       pend.slice(0,12).map(function(x){ return '<li>'+escAttr(x.txt)+'</li>'; }).join('')+
@@ -2372,20 +2476,23 @@
         var si=(v==='')?null:+v;
         OFI.pincel.si=(OFI.pincel.si===si)?null:si;   // clicar de novo no mesmo solta o pincel
         OFI.pincel.team=0;
-        go(current);
+        ofiRedesenha();
       });
     });
     var eqs=document.getElementById('ofiEquipe');
     if(eqs)eqs.addEventListener('change',function(){ OFI.pincel.team=+eqs.value; });
     document.querySelectorAll('[data-ofinovo]').forEach(function(td){
       td.addEventListener('click',function(){
+        if(ofiVeioDeArraste())return;
         var p=td.getAttribute('data-ofinovo').split('::');
         if(ofiPincela(+p[0],+p[1]))return;
         ofiDialogo(+p[0],+p[1],null);
       });
     });
     document.querySelectorAll('[data-ofiedit]').forEach(function(el){
+      ofiArrasta(el);
       el.addEventListener('click',function(e){
+        if(ofiVeioDeArraste()){ e.stopPropagation(); return; }
         // Com tinta na mão o clique pinta, inclusive por cima de um bloco — é como se comporta
         // qualquer ferramenta de desenho. Pra mexer num bloco existente, solte o pincel antes.
         if(ofiInit().pincel.si!=null)return;
@@ -2396,11 +2503,12 @@
       });
     });
     var arr=document.getElementById('ofiArrumar');
-    if(arr)arr.addEventListener('click',function(){ ofiArrumar(); go(current); });
+    if(arr)arr.addEventListener('click',function(){ ofiArrumar(); ofiRedesenha(); });
+    ofiRestauraScroll();
     var lim=document.getElementById('ofiLimpar');
     if(lim)lim.addEventListener('click',function(){
       if(!confirm('Apagar todas as colocações deste estudo? Nada mais é afetado.'))return;
-      OFI={plano:[],prox:1,pincel:OFI.pincel,fimAuto:OFI.fimAuto}; go(current);
+      OFI={plano:[],prox:1,pincel:OFI.pincel,fimAuto:OFI.fimAuto}; ofiRedesenha();
     });
   }
   VIEWS['cr-matriz']=function(){
