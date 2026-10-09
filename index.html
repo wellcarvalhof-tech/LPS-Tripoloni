@@ -334,6 +334,15 @@
   .tcm-seg.apont{cursor:cell;transition:opacity .12s}
   .tcm-seg.apont:hover{opacity:1!important;box-shadow:inset 0 0 0 2px #fff}
   .tcm-seg.apont.temreal{font-weight:700}
+  /* Fora do plano: tracejado pra não se confundir com o que estava previsto. */
+  .tcm-seg.apont.forapl{outline:2px dashed rgba(255,255,255,.85);outline-offset:-3px}
+  /* Produção fora do plano: a célula vazia inteira aceita clique, e a ocupada ganha um "+"
+     estreito na borda — sem ele não sobraria onde clicar, porque as barras tomam a largura. */
+  .apontar td.cell{cursor:cell;position:relative}
+  .apontar td.cell:empty:hover{background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+  .apont-mais{flex:0 0 15px;display:flex;align-items:center;justify-content:center;background:transparent;
+    border:0;color:var(--muted);font-family:inherit;font-size:12px;font-weight:700;cursor:cell;padding:0;opacity:0}
+  td.cell:hover .apont-mais{opacity:1;color:var(--ink-2);background:var(--accent-soft)}
   tr.tcm-droprow{background:color-mix(in srgb,var(--accent) 14%,transparent)}
   td.tcm-dropcol{outline:2px dashed var(--accent);outline-offset:-2px}
   .tcm-grip{position:absolute;left:2px;opacity:.4;font-weight:400}
@@ -6714,64 +6723,87 @@
   /** Caixa de lançamento a partir de uma célula da matriz: a semana, o lote e o serviço já vêm
    *  da célula clicada, então sobra digitar data e quantidade. Mostra o previsto da semana e o
    *  que já foi lançado ali, pra conferir sem sair da tela. */
-  function prodDialogoCelula(w,li,si,previsto){
-    var sv=SERV[si]; if(!sv)return;
+  function prodDialogoCelula(w,li,si,prevMap){
     if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(!SERV.length)return;
+    prevMap=prevMap||{};
+    // si null = célula sem nada planejado: o serviço se escolhe aqui. Mesmo numa célula com
+    // barra dá pra trocar, porque apontar o que não estava previsto é rotina de obra.
+    if(si==null||!SERV[si])si=0;
+    var sv=SERV[si];
     var seg=mondayOf(w), fim=new Date(seg.getTime()); fim.setDate(fim.getDate()+6);
     var isoSeg=seg.toISOString().slice(0,10), isoFim=fim.toISOString().slice(0,10);
     var hoje=todayISO();
     var padrao=(hoje>=isoSeg&&hoje<=isoFim)?hoje:isoSeg;
     var loteId=(window._LOTIDS||[])[li];
-    var daSemana=(window.PROD_LIST||[]).filter(function(r){
-      return r.loteId===loteId&&r.servId===sv.id&&r.data>=isoSeg&&r.data<=isoFim;
-    }).sort(function(a,b){ return a.data<b.data?-1:1; });
-    var feito=daSemana.reduce(function(a,r){ return a+(+r.qtd||0); },0);
     var back=document.createElement('div'); back.className='segmenu-backdrop';
-    var lista=daSemana.length?('<div class="tbl-wrap" style="margin-top:10px;max-height:150px"><table class="edtbl" style="font-size:12px"><tbody>'+
-      daSemana.map(function(r){ return '<tr><td class="mono">'+brDate(r.data)+'</td><td class="r mono">'+fmtBR(r.qtd)+' '+escAttr(sv.u)+'</td>'+
-        '<td style="width:30px"><button class="iconbtn" data-pcdel="'+r.id+'" title="Excluir">✕</button></td></tr>'; }).join('')+
-      '</tbody></table></div>'):'';
+    var svcOpts=SERV.map(function(x,i){
+      var temQtd=((QTY[li]||[])[i]||0)>0;
+      return '<option value="'+i+'"'+(i===si?' selected':'')+'>'+escAttr(x.n)+(temQtd?'':' (sem quantidade neste lote)')+'</option>';
+    }).join('');
     back.innerHTML='<div class="segmenu-panel card" style="max-width:420px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Lançar produção</div>'+
-      '<div style="font-family:Archivo,sans-serif;font-weight:800;font-size:16px;line-height:1.2">'+escAttr(sv.n)+'</div>'+
-      '<div class="note" style="margin-bottom:12px">'+escAttr(LOTS[li])+' · semana S'+isoWeek(seg)+' ('+fmtDate(seg)+' a '+fmtDate(fim)+')<br>'+
-        'Previsto na semana <b>'+fmtBR(previsto)+' '+escAttr(sv.u)+'</b> · já lançado <b>'+fmtBR(feito)+'</b></div>'+
+      '<div class="note" style="margin-bottom:10px">'+escAttr(LOTS[li])+' · semana S'+isoWeek(seg)+' ('+fmtDate(seg)+' a '+fmtDate(fim)+')</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+
+        '<label>Serviço<select class="esel" id="pcServ" style="width:100%">'+svcOpts+'</select></label>'+
+        '<div class="note" id="pcCtx" style="min-height:2.4em"></div>'+
         '<label>Data<input class="einp" type="date" id="pcData" value="'+padrao+'" min="'+isoSeg+'" max="'+isoFim+'" style="width:100%"></label>'+
-        '<label>Quantidade ('+escAttr(sv.u)+')<input class="einp" type="number" id="pcQtd" placeholder="0" style="width:100%;text-align:right"></label>'+
-      '</div>'+lista+
+        '<label>Quantidade <span id="pcUn"></span><input class="einp" type="number" id="pcQtd" placeholder="0" style="width:100%;text-align:right"></label>'+
+      '</div><div id="pcHist"></div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
         '<button class="btn" id="pcCancel">Fechar</button>'+
         '<button class="btn primary" id="pcOk">+ Lançar</button>'+
       '</div></div>';
     document.body.appendChild(back);
+    var selServ=back.querySelector('#pcServ');
+    function svAtual(){ return SERV[+selServ.value]||SERV[0]; }
+    function pinta(){
+      var x=svAtual();
+      var daSem=(window.PROD_LIST||[]).filter(function(r){
+        return r.loteId===loteId&&r.servId===x.id&&r.data>=isoSeg&&r.data<=isoFim;
+      }).sort(function(a,b){ return a.data<b.data?-1:1; });
+      var feito=daSem.reduce(function(a,r){ return a+(+r.qtd||0); },0);
+      var prev=prevMap[w+'::'+li+'::'+(+selServ.value)]||0;
+      back.querySelector('#pcUn').textContent='('+x.u+')';
+      back.querySelector('#pcCtx').innerHTML=
+        (prev>0?('Previsto nesta semana <b>'+fmtBR(prev)+' '+escAttr(x.u)+'</b>')
+               :'<span style="color:var(--warn)">Nao havia producao prevista aqui</span> — o lancamento e aceito do mesmo jeito e aparece na matriz.')+
+        ' · ja lancado <b>'+fmtBR(feito)+'</b>';
+      back.querySelector('#pcHist').innerHTML=daSem.length?('<div class="tbl-wrap" style="margin-top:10px;max-height:150px"><table class="edtbl" style="font-size:12px"><tbody>'+
+        daSem.map(function(r){ return '<tr><td class="mono">'+brDate(r.data)+'</td><td class="r mono">'+fmtBR(r.qtd)+' '+escAttr(x.u)+'</td>'+
+          '<td style="width:30px"><button class="iconbtn" data-pcdel="'+r.id+'" title="Excluir">✕</button></td></tr>'; }).join('')+
+        '</tbody></table></div>'):'';
+      back.querySelectorAll('[data-pcdel]').forEach(function(b){
+        b.addEventListener('click',async function(){
+          var id=b.getAttribute('data-pcdel');
+          if(!confirm('Excluir este lançamento?'))return;
+          try{
+            await sbDeleteProducao(id);
+            window.PROD_LIST=window.PROD_LIST.filter(function(r){ return r.id!==id; });
+            fecha(); renderProd();
+          }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+        });
+      });
+    }
+    selServ.addEventListener('change',pinta);
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     back.querySelector('#pcCancel').addEventListener('click',fecha);
-    back.querySelectorAll('[data-pcdel]').forEach(function(b){
-      b.addEventListener('click',async function(){
-        var id=b.getAttribute('data-pcdel');
-        if(!confirm('Excluir este lançamento?'))return;
-        try{
-          await sbDeleteProducao(id);
-          window.PROD_LIST=window.PROD_LIST.filter(function(r){ return r.id!==id; });
-          fecha(); renderProd();
-        }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
-      });
-    });
     var ok=back.querySelector('#pcOk');
     ok.addEventListener('click',async function(){
       var data=back.querySelector('#pcData').value||padrao;
       var qtd=+back.querySelector('#pcQtd').value||0;
       if(qtd<=0){ toast('Informe a quantidade.'); return; }
       if(data<isoSeg||data>isoFim){ toast('A data precisa cair dentro da semana desta célula.'); return; }
+      var x=svAtual();
       ok.disabled=true; ok.textContent='Lançando…';
       try{
-        var id=await sbCreateProducao(selectedObra.id,{servico_id:sv.id,lote_id:loteId,data:data,quantidade:qtd});
-        window.PROD_LIST.unshift({id:id,data:data,servId:sv.id,loteId:loteId,qtd:qtd});
+        var id=await sbCreateProducao(selectedObra.id,{servico_id:x.id,lote_id:loteId,data:data,quantidade:qtd});
+        window.PROD_LIST.unshift({id:id,data:data,servId:x.id,loteId:loteId,qtd:qtd});
         fecha(); renderProd(); toast('Produção lançada.');
       }catch(e){ alert('Falha ao lançar: '+((e&&e.message)||e)); ok.disabled=false; ok.textContent='+ Lançar'; }
     });
+    pinta();
     var q=back.querySelector('#pcQtd'); if(q)q.focus();
   }
   function renderProd(){
@@ -6796,7 +6828,8 @@
     } else if(window._prodMode==='tc'){
       var realSem=realizadoPorSemana();
       content='<div class="banner" style="margin-bottom:12px">Modo <b>Tempo-Caminho</b>: a matriz vem pintada igual ao planejado, mas com os valores em branco — '+
-        'o número que aparece na célula é o que já foi <b>apontado</b>, não o previsto. Clique numa célula pra lançar; o previsto daquela semana aparece dentro da caixa.</div>'+
+        'o número que aparece na célula é o que já foi <b>apontado</b>, não o previsto. Clique numa célula pra lançar — inclusive nas <b>vazias</b>, pra registrar produção que não estava planejada; '+
+        'numa célula que já tem barra, o <b>+</b> na borda abre o lançamento de outro serviço.</div>'+
         matrixTableHTML(false,null,{apontar:true,real:realSem});
     } else { content=estacasHTML(); }
     root.innerHTML=tabs+content;
@@ -6808,7 +6841,14 @@
       root.querySelectorAll('[data-apont]').forEach(function(el){
         el.addEventListener('click',function(){
           var pr=el.getAttribute('data-apont').split('::');
-          prodDialogoCelula(+pr[0],+pr[1],+pr[2],prevCel[el.getAttribute('data-apont')]||0);
+          prodDialogoCelula(+pr[0],+pr[1],+pr[2],prevCel);
+        });
+      });
+      root.querySelectorAll('[data-apontnovo]').forEach(function(el){
+        el.addEventListener('click',function(e){
+          e.stopPropagation();
+          var pr=el.getAttribute('data-apontnovo').split('::');
+          prodDialogoCelula(+pr[0],+pr[1],null,prevCel);
         });
       });
     }
@@ -10243,6 +10283,21 @@
       for(var i=0;i<sg.dur;i++){var w=sg.start+i;var k=w+'::'+sg.li;
         (cell[k]||(cell[k]=[])).push({sg:sg,qty:sg.wq[i],isStart:i===0,isEnd:i===sg.dur-1,w:w});}
     });
+    // Produção apontada onde nada estava planejado precisa APARECER: senão o lançamento some da
+    // tela e quem apontou acha que não gravou. Entra como célula própria, marcada como fora do
+    // plano, e a matriz estica se o apontamento passou do horizonte previsto.
+    if(opts.apontar&&opts.real){
+      Object.keys(opts.real).forEach(function(k){
+        if(!(opts.real[k]>0))return;
+        var pr=k.split('::'), wx=+pr[0], lx2=+pr[1], sx=+pr[2], sv2=SERV[sx];
+        if(!sv2||lotIdxs.indexOf(lx2)<0)return;
+        var ck=wx+'::'+lx2, arr=cell[ck]||(cell[ck]=[]);
+        for(var z=0;z<arr.length;z++)if(arr[z].sg.si===sx)return;
+        arr.push({sg:{li:lx2,si:sx,color:svcColor(sv2),name:sv2.n,team:1,teams:1},
+          qty:opts.real[k],isStart:true,isEnd:true,w:wx,extra:true});
+        if(wx>totalWeeks)totalWeeks=wx;
+      });
+    }
     var canDragCols=(window._cronoTab==='ajuste');
     var th='<th>Segunda-feira</th><th>Semana</th>'+lotIdxs.map(function(li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+LOTS[li]+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
@@ -10260,7 +10315,10 @@
       for(var lx=0;lx<lotIdxs.length;lx++){
         var li=lotIdxs[lx];
         var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0&&!TC_HIDDEN_SVC[sc.sg.si];});
-        if(!subs.length){tds+='<td class="cell"'+(opts.apontar?'':' data-lot="'+li+'"')+'></td>';continue;}
+        if(!subs.length){
+          tds+='<td class="cell"'+(opts.apontar?(' data-apontnovo="'+w+'::'+li+'"'):(' data-lot="'+li+'"'))+'></td>';
+          continue;
+        }
         if(opts.apontar){
           // Mesma pintura do planejado, mas o número é o que foi APONTADO, não o previsto —
           // a matriz aqui é folha de lançamento, e previsto impresso na célula vira o número
@@ -10268,12 +10326,13 @@
           tds+='<td class="cell">'+'<div class="tcm-row">'+subs.map(function(sc,i){
             var k=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, feito=(opts.real||{})[k]||0;
             var cor=sc.sg.color;
-            return '<div class="tcm-seg apont'+(feito>0?' temreal':'')+'" data-apont="'+k+'" '+
+            return '<div class="tcm-seg apont'+(feito>0?' temreal':'')+(sc.extra?' forapl':'')+'" data-apont="'+k+'" '+
               'style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+cor+';color:'+pickFont(cor)+
               (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+(feito>0?'':';opacity:.55')+'" '+
-              'title="'+escAttr(sc.sg.name)+' · '+escAttr(LOTS[sc.sg.li])+' · previsto '+fmtBR(sc.qty)+' '+escAttr(SERV[sc.sg.si].u)+
+              'title="'+escAttr(sc.sg.name)+' · '+escAttr(LOTS[sc.sg.li])+' · '+
+              (sc.extra?'sem previsão nesta semana (lançado fora do plano)':('previsto '+fmtBR(sc.qty)+' '+escAttr(SERV[sc.sg.si].u)))+
               ' — clique pra lançar a produção">'+(feito>0?fmtBR(feito):'+')+'</div>';
-          }).join('')+'</div></td>';
+          }).join('')+'<button class="apont-mais" data-apontnovo="'+w+'::'+li+'" title="Lançar outro serviço nesta semana">+</button></div></td>';
           continue;
         }
         var inner=subs.map(function(sc,i){
@@ -10301,7 +10360,7 @@
         return '<tr class="sumrow"><td class="sumname" colspan="2" style="background:'+hex+';color:'+pickFont(hex)+'">'+s.n+' ('+s.u+')</td>'+cells+'</tr>';
       }).join('');
     }
-    return '<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
+    return '<table class="tcm'+(opts.apontar?' apontar':'')+'"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
   }
   function matrixTableHTML(withSummary,segsOverride,opts){
     var tableHtml=matrixTableCore(withSummary,viewLotIdxs(),segsOverride||buildSchedule(),opts);
