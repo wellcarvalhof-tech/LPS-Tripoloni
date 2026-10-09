@@ -1958,14 +1958,20 @@
    *
    * Nada daqui vai pro banco, nem pro cronograma ao vivo, nem pra um cenário. Vive na memória
    * desta aba e some ao recarregar a página — é de propósito, pra poder experimentar sem medo. */
-  var OFI=null;
+  var OFI=null, OFI_ESTUDO=null, OFI_MATRIZ=null;
   /* A matriz rola dentro do próprio quadro (.tc-wrap), e go() só devolve a rolagem da página —
    * por isso cada edição jogava a vista de volta pro começo. Guarda a posição antes de redesenhar.
    * A âncora é a distância até o FIM: as semanas são desenhadas de cima pra baixo em ordem
    * decrescente, então o conteúdo novo entra por cima e medir pelo topo deslocaria a vista. */
   function ofiRedesenha(){
+    var o=ofiInit();
     var w=document.querySelector('.tc-wrap.ofi');
-    if(w)ofiInit().scroll={l:w.scrollLeft,b:w.scrollHeight-w.scrollTop};
+    if(w)o.scroll={l:w.scrollLeft,b:w.scrollHeight-w.scrollTop};
+    if(o.ovr){
+      tcmEscreveOvr(o.plano);          // o manual vive em OVR; a tela é só a vista dele
+      renderCrono();                   // renderCrono já preserva a rolagem da matriz
+      return;
+    }
     go(current);
   }
   function ofiRestauraScroll(){
@@ -1974,10 +1980,64 @@
     w.scrollLeft=sc.l;
     w.scrollTop=Math.max(0,w.scrollHeight-sc.b);
   }
-  function ofiInit(){ if(!OFI)OFI={plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null,scroll:null,hist:[],refaz:[]};
+
+  function ofiNovo(ovr){ return {plano:[],prox:1,pincel:{si:null,team:0},fimAuto:null,scroll:null,hist:[],refaz:[],ovr:!!ovr}; }
+  /* Dois depósitos, uma implementação só: a Oficina mexe num rascunho que só existe na memória,
+   * e o Tempo-Caminho manual mexe nos ajustes da obra, que vão pro banco. Quem decide é a tela
+   * em que se está. */
+  function ofiInit(){
+    if(current==='cr-matriz'){ OFI=OFI_MATRIZ||(OFI_MATRIZ=ofiNovo(true)); }
+    else { OFI=OFI_ESTUDO||(OFI_ESTUDO=ofiNovo(false)); }
     if(!OFI.pincel)OFI.pincel={si:null,team:0};
     if(!OFI.hist)OFI.hist=[]; if(!OFI.refaz)OFI.refaz=[];
-    return OFI; }
+    return OFI;
+  }
+  /** Lê as colocações do manual a partir dos pins já gravados em OVR. */
+  function tcmLeOvr(){
+    var plano=[], id=1;
+    LOTS.forEach(function(_,li){
+      SERV.forEach(function(sv,si){
+        var o=ovrGet(li,si);
+        if(!(o&&o.pinned&&Array.isArray(o.pins)))return;
+        o.pins.forEach(function(pin){
+          if(!(pin.team>0&&pin.startWeek>0))return;
+          plano.push({id:id++,li:li,si:si,team:pin.team,ini:pin.startWeek});
+        });
+      });
+    });
+    return plano;
+  }
+  /** Devolve as colocações pra OVR como pins — o formato que o motor já sabe ler, com a
+   *  quantidade de cada equipe explícita pro rateio proporcional não se perder no caminho.
+   *  Só mexe em pinned/pins: equipe, sequência e produtividade ajustadas à mão continuam lá. */
+  function tcmEscreveOvr(plano){
+    LOTS.forEach(function(_,li){
+      SERV.forEach(function(sv,si){
+        var k=ovrKey(li,si), o=k&&OVR[k];
+        if(!o||!o.pinned)return;
+        delete o.pinned; delete o.pins;
+        if(!Object.keys(o).length)delete OVR[k];
+      });
+    });
+    var grupos={};
+    plano.forEach(function(it){ var k=it.li+'::'+it.si; (grupos[k]||(grupos[k]=[])).push(it); });
+    Object.keys(grupos).forEach(function(gk){
+      var pr=gk.split('::'), li=+pr[0], si=+pr[1], itens=grupos[gk];
+      var k=ovrKey(li,si); if(!k)return;
+      var rateio=ofiRateio(li,si,itens.map(function(x){ return x.team; }));
+      var o=OVR[k]||(OVR[k]={});
+      o.pinned=true;
+      o.pins=itens.map(function(x){ return {team:x.team,startWeek:x.ini,qty:rateio[x.team]}; });
+    });
+    ADJ_DIRTY=true;
+  }
+  /** Antes de desenhar o manual, recarrega o plano do estado da obra (fonte da verdade). */
+  function tcmSync(){
+    var o=ofiInit();
+    o.plano=tcmLeOvr();
+    o.prox=o.plano.length+1;
+    return o;
+  }
   /* Desfazer. Guarda o plano inteiro serializado antes de cada mudança: ele é pequeno (uma linha
    * por colocação) e assim não há risco de um desfazer parcial deixar o estudo meio arrumado.
    * Toda mudança nova descarta o refazer, que é o que se espera de um histórico linear. */
@@ -2521,6 +2581,13 @@
     ofiInit();
     if(!LOTS.length||!SERV.length)
       return '<div class="card"><div class="note">A oficina parte dos lotes e serviços já cadastrados. Cadastre em Tempo Caminho &rarr; Serviços e Lotes &amp; Quantidades.</div></div>';
+    return ofiLousaHTML(true);
+  };
+  /** A lousa de montagem manual. estudo=true é a Oficina (rascunho na memória); false é o
+   *  Tempo-Caminho manual da matriz, que grava nos ajustes da obra. O miolo é o mesmo de
+   *  propósito: o que se aprende montando num vale no outro. */
+  function ofiLousaHTML(estudo){
+    ofiInit();
     var lotIdxs=viewLotIdxs();
     var segs=ofiCalc();
     var fimEstudo=0; segs.forEach(function(g){ fimEstudo=Math.max(fimEstudo,g.start+g.dur-1); });
@@ -2541,7 +2608,7 @@
     }
     var fimAuto=OFI.fimAuto;
     var cmp='';
-    if(fimEstudo>0){
+    if(fimEstudo>0&&estudo){
       var dif=fimEstudo-fimAuto;
       cmp='<div class="grid g4" style="margin-bottom:12px">'+
         kpi('accent','Seu estudo','S'+isoWeek(mondayOf(fimEstudo)),fimEstudo+' semanas de projeto')+
@@ -2582,15 +2649,22 @@
       pend.slice(0,12).map(function(x){ return '<li>'+escAttr(x.txt)+'</li>'; }).join('')+
       (pend.length>12?('<li>e mais '+(pend.length-12)+'</li>'):'')+'</ul></div>'):'';
     var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+      (OFI.ovr?('<button class="btn primary" id="tcmSalvar"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"'):'Salvar cronograma')+'</button>'):'')+
       '<button class="btn" id="ofiDesfaz"'+(OFI.hist.length?'':' disabled')+' title="Desfazer a última mudança (Ctrl+Z)">↶ Desfazer</button>'+
       '<button class="btn" id="ofiRefaz"'+(OFI.refaz.length?'':' disabled')+' title="Refazer (Ctrl+Shift+Z)">↷ Refazer</button>'+
       '<button class="btn" id="ofiLimpar"'+(segs.length?'':' disabled')+'>Limpar estudo</button>'+
       '<button class="btn" id="ofiArrumar"'+(pend.length?'':' disabled')+' title="Desliza quem está fora de ordem para a primeira semana válida">Arrumar pendências</button>'+
       '<span class="note" style="align-self:center">'+segs.length+' colocação(ões) · '+faltam+' serviço(s) com quantidade ainda fora da matriz</span></div>';
     return '<div class="card">'+
-      '<div class="eyebrow">Oficina — montagem manual <span class="wip">◔ estudo</span></div>'+
-      '<div class="ofi-aviso"><b>Nada aqui é gravado.</b> Este estudo não toca o cronograma ao vivo, nem um cenário, nem o banco — vive só nesta aba e some ao recarregar a página. '+
-        'Serve pra testar uma montagem e comparar com o automático antes de decidir qualquer coisa.</div>'+
+      (estudo
+        ? ('<div class="eyebrow">Oficina — montagem manual <span class="wip">◔ estudo</span></div>'+
+           '<div class="ofi-aviso"><b>Nada aqui é gravado.</b> Este estudo não toca o cronograma ao vivo, nem um cenário, nem o banco — vive só nesta aba e some ao recarregar a página. '+
+           'Serve pra testar uma montagem e comparar com o automático antes de decidir qualquer coisa.'+
+           '<div style="margin-top:8px"><button class="btn" id="ofiPromove"'+(segs.length?'':' disabled')+'>↑ Levar para o Tempo-Caminho manual</button></div></div>')
+        : ('<div class="eyebrow">Tempo-Caminho manual</div>'+
+           '<div class="ofi-aviso" style="border-left-color:var(--accent)">Este é o cronograma da obra: o que você desenha aqui alimenta Resumo, Gantt, Curva S, histograma e programação. '+
+           'Lote que você não colocar simplesmente não entra no cronograma. Lembre de <b>salvar</b>.'+
+           (ADJ_DIRTY?' <b style="color:var(--warn)">Há mudanças não salvas.</b>':'')+'</div>'))+
       '<div class="note" style="margin-bottom:10px">Monte clicando nas células. Um lote aceita vários serviços na mesma semana (frentes em paralelo) e mais de uma equipe no mesmo serviço — nesse caso a quantidade do lote é rateada entre elas pela produtividade de cada uma, pra todas terminarem na mesma semana. '+
         'A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. '+
         'A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</div>'+
@@ -2646,6 +2720,20 @@
     if(des)des.addEventListener('click',ofiDesfaz);
     var ref=document.getElementById('ofiRefaz');
     if(ref)ref.addEventListener('click',ofiRefaz);
+    var pro=document.getElementById('ofiPromove');
+    if(pro)pro.addEventListener('click',function(){
+      if(isReadOnly()){ toast('Seu perfil não permite mudar o cronograma.'); return; }
+      var plano=OFI_ESTUDO?OFI_ESTUDO.plano:[];
+      if(!plano.length)return;
+      if(!confirm('Levar este estudo para o Tempo-Caminho manual da obra?'+String.fromCharCode(10)+String.fromCharCode(10)+
+        'Substitui o que estiver desenhado lá e liga o modo manual. Ainda precisa salvar depois.'))return;
+      tcmEscreveOvr(plano.map(function(x){ return {li:x.li,si:x.si,team:x.team,ini:x.ini}; }));
+      tcSetModo('manual');
+      window._cronoTab='tc';
+      if(OFI_MATRIZ){ OFI_MATRIZ.hist=[]; OFI_MATRIZ.refaz=[]; }
+      go('cr-matriz');
+      toast('Estudo levado para o Tempo-Caminho manual — confira e salve.');
+    });
     var lim=document.getElementById('ofiLimpar');
     if(lim)lim.addEventListener('click',function(){
       if(!confirm('Apagar todas as colocações deste estudo? Nada mais é afetado.'))return;
@@ -2678,6 +2766,11 @@
         return b?('Linha de base ativa: <b>'+b.revisao+'</b> — '+b.nome+'. Ajustes aqui não alteram a linha de base até você gerar uma nova revisão.'):
           'Rascunho — você ainda está montando o cronograma. Quando estiver pronto, gere a <b>linha de base</b> (REV00) pra criar a referência de previsto e o histórico de revisões.';
       })()+'</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+        '<span class="note">Como o cronograma é montado:</span>'+
+        '<button class="subtab'+(tcManual()?'':' active')+'" data-tcmodo="auto" title="O app distribui os lotes pelas equipes sozinho, respeitando predecessoras e fila">Automático</button>'+
+        '<button class="subtab'+(tcManual()?' active':'')+'" data-tcmodo="manual" title="Você desenha o cronograma célula a célula, como na Oficina">Manual</button>'+
+      '</div>'+
       '<div class="subtabs" id="cronoTabs">'+tabs+'</div>'+
       '<div class="legend" id="matLeg" style="margin:12px 0"></div>'+
       '<div class="print-only print-head"><h2 id="printTitle"></h2><div class="note" id="printSub"></div></div>'+
@@ -6593,7 +6686,7 @@
     }
     if(view==='cr-prod'){prodHoraDraw();}
     if(view==='cr-oficina'){ofiDraw();}
-    if(view==='cr-matriz'){setupCrono();}
+    if(view==='cr-matriz'){setupCrono(); wireModoTC();}
     if(view==='cr-cenarios'){
       cmpAll();
       // Marcar/desmarcar uma linha redesenha só os gráficos (sem recarregar a aba inteira, que
@@ -7744,6 +7837,14 @@
 
   function ovrKey(li,si){var lid=(window._LOTIDS||[])[li],sid=SERV[si]&&SERV[si].id;return lid&&sid?(lid+'::'+sid):null;}
   function ovrGet(li,si){var k=ovrKey(li,si);return k?OVR[k]:null;}
+  /* Automático x manual. Mora dentro de ajustes_manuais, que já vai e volta do banco inteiro —
+   * chave reservada, com prefixo que nunca colide com "loteId::servicoId". Assim o modo viaja
+   * junto com os ajustes, inclusive para dentro de um cenário, sem coluna nova. */
+  function tcManual(){ return OVR&&OVR.__tcmodo==='manual'; }
+  function tcSetModo(m){
+    if(m==='manual')OVR.__tcmodo='manual'; else delete OVR.__tcmodo;
+    ADJ_DIRTY=true;
+  }
   /** Duas semanas em comum entre os segmentos de uma mesma equipe só são um problema de
    *  verdade se sobrarem mais de uma semana de sobra, ou se a única semana em comum NÃO for
    *  exatamente o fim de um e o início do outro (a transição normal, onde a semana é dividida
@@ -7852,6 +7953,9 @@
   }
   function buildSchedule(){
     var segs=[], startByKey={}, endByKey={};
+    // No modo manual o cronograma é SÓ o que foi desenhado: lote sem colocação não entra na
+    // fila automática, senão o app voltaria a preencher sozinho o que o usuário deixou de fora.
+    var MANUAL=tcManual();
     var order=topoSortServices();
     var periods=calRainPeriods(), wfCache={};
     function predReadyWeek(s,li){
@@ -7975,7 +8079,7 @@
         // que a equipe fez).
         var remaining=[];
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0||pinnedLis[li])return;
+          if(QTY[li][si]<=0||pinnedLis[li]||MANUAL)return;
           var o=ovrGet(li,si);
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
@@ -8031,7 +8135,7 @@
         // partes iguais entre elas, cada uma trabalhando em paralelo com sua própria produtividade.
         var teamLots=[]; for(var t=1;t<=teams;t++)teamLots.push([]);
         LOTS.forEach(function(l,li){
-          if(QTY[li][si]<=0||pinnedLis[li])return;
+          if(QTY[li][si]<=0||pinnedLis[li]||MANUAL)return;
           var o=ovrGet(li,si);
           var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
           if(!teamsArr||!teamsArr.length)teamsArr=[(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1)];
@@ -11545,6 +11649,7 @@
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
+    if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+ofiLousaHTML(false); }
     if(tab==='equipe') return fsBarHTML()+editarPorEquipeHTML();
     if(tab==='resumo') return fsBarHTML()+resumoHTML();
     if(tab==='gantt') return fsBarHTML()+ganttHTML();
@@ -11579,6 +11684,18 @@
     });
     wireMatrixZoom();
     refreshTopSaveBtn(); applyReadOnly();
+    if(tcManual()&&(window._cronoTab||'tc')==='tc'){
+      ofiDraw();
+      var sv=document.getElementById('tcmSalvar');
+      if(sv)sv.addEventListener('click',async function(){
+        sv.disabled=true; sv.textContent='Salvando…';
+        try{
+          if(ACTIVE_CENARIO){ await saveIntoActiveCenario(); }
+          else{ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; toast('Cronograma salvo.'); }
+          renderCrono();
+        }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); sv.disabled=false; }
+      });
+    }
     if((window._cronoTab||'tc')==='ajuste'&&!isReadOnly()){
       renderAssignPanel(); wireDragMatrix();
       var clearB=document.getElementById('clearAdjustsBtn');
@@ -12028,6 +12145,26 @@
     clearTimeout(window._toastT); window._toastT=setTimeout(function(){t.classList.remove('show');},2400);
   }
 
+  function wireModoTC(){
+    document.querySelectorAll('[data-tcmodo]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var m=b.getAttribute('data-tcmodo');
+        if((m==='manual')===tcManual())return;
+        if(isReadOnly()){ toast('Seu perfil não permite mudar o cronograma.'); return; }
+        if(m==='manual'){
+          var pins=tcmLeOvr().length;
+          if(!confirm('Passar para o Tempo-Caminho manual?'+String.fromCharCode(10)+String.fromCharCode(10)+
+            'A partir daí só entra no cronograma o que você desenhar. '+
+            (pins?('Os '+pins+' ajuste(s) que você já fixou viram o ponto de partida.')
+                 :'Hoje não há nada fixado, então a matriz começa em branco.')+
+            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro automático quando quiser — o que você desenhar fica guardado.'))return;
+        }
+        tcSetModo(m);
+        window._cronoTab='tc';
+        renderCrono();
+      });
+    });
+  }
   function setupCrono(){
     var leg=document.getElementById('matLeg');
     if(leg){
