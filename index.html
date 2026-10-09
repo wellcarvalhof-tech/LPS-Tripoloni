@@ -1841,6 +1841,7 @@
   function barsSVG(el,series,opts){
     if(!el)return; opts=opts||{};
     var W=opts.W||900,H=opts.H||200,pl=52,pr=opts.acc?60:12,pt=24,pb=48,iw=W-pl-pr,ih=H-pt-pb, dateFn=opts.dateFn||mondayOf;
+    var w0=opts.week0||1;   // a 1ª barra pode não ser a 1ª semana do projeto
     var n=0; series.forEach(function(sr){n=Math.max(n,sr.values.length);}); n=Math.max(1,n);
     var mx=0; series.forEach(function(sr){sr.values.forEach(function(v){mx=Math.max(mx,v||0);});}); if(mx<=0)mx=1;
     var unit=mx>2000?1000:(mx>200?100:(mx>20?10:1)), top=Math.max(unit,Math.ceil(mx/4/unit)*unit*4);
@@ -1848,10 +1849,10 @@
     for(var g=0;g<=4;g++){var val=top*g/4;s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+fmtBR(val)+'</text>';}
     var passoS=labelStep(gap/Math.max(1,k),7);
     series.forEach(function(sr,j){ sr.values.forEach(function(v,i){ if(!(v>0))return; var x=pl+gap*i+gap*0.1+bw*j;
-      s+='<rect x="'+x.toFixed(1)+'" y="'+yy(v).toFixed(1)+'" width="'+Math.max(0.5,bw-0.6).toFixed(1)+'" height="'+Math.max(0,yy(0)-yy(v)).toFixed(1)+'" rx="1" fill="'+sr.color+'"><title>S'+isoWeek(dateFn(i+1))+(sr.label?' · '+sr.label:'')+': '+fmtBR(v)+'</title></rect>';
+      s+='<rect x="'+x.toFixed(1)+'" y="'+yy(v).toFixed(1)+'" width="'+Math.max(0.5,bw-0.6).toFixed(1)+'" height="'+Math.max(0,yy(0)-yy(v)).toFixed(1)+'" rx="1" fill="'+sr.color+'"><title>S'+isoWeek(dateFn(w0+i))+(sr.label?' · '+sr.label:'')+': '+fmtBR(v)+'</title></rect>';
       if(i%passoS===0)s+=barLabelSVG(x+bw/2,yy(v),bw,v); }); });
-    var wn=[]; for(var i2=0;i2<n;i2++)wn.push(i2+1);
-    s+=weekAxisSVG(wn,function(i){return pl+gap*i+gap/2;},gap,pt+ih,pl,W-pr,dateFn);
+    var wn=[]; for(var i2=0;i2<n;i2++)wn.push(w0+i2);
+    s+=weekAxisSVG(wn,function(i){return pl+gap*i+gap/2;},gap,pt+ih,pl,W-pr,dateFn,{plotTop:pt});
     if(opts.acc)s+=accLinesSVG(opts.acc,function(i){return pl+gap*i+gap/2;},W-pr,pt,ih,wn.map(function(w){return 'S'+isoWeek(dateFn(w));}));
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
@@ -1869,8 +1870,16 @@
     // distribuição semanal por serviço
     var wq=weeklyQtyBySvc();
     document.querySelectorAll('[data-execbar]').forEach(function(el){
-      var si=+el.getAttribute('data-execbar'), vals=[]; for(var w=1;w<=wq.tw;w++)vals.push(wq.M[si][w]||0);
-      barsSVG(el,[{values:vals,color:svcColor(SERV[si])}],{H:240,dateFn:mondayOf});
+      var si=+el.getAttribute('data-execbar');
+      // Espalhar o serviço pelo projeto inteiro espremia as barras num canto e deixava dezenas de
+      // semanas vazias ocupando o eixo — ninguém conseguia dizer em que semana a produção cai.
+      // Cada gráfico mostra só a janela do próprio serviço, com uma semana de folga nas pontas.
+      var ini=0,fim=0;
+      for(var w=1;w<=wq.tw;w++){ if((wq.M[si][w]||0)>0){ if(!ini)ini=w; fim=w; } }
+      if(!ini){ ini=1; fim=Math.min(wq.tw,6); }
+      var a=Math.max(1,ini-1), b=Math.min(wq.tw,fim+1);
+      var vals=[]; for(var w2=a;w2<=b;w2++)vals.push(wq.M[si][w2]||0);
+      barsSVG(el,[{values:vals,color:svcColor(SERV[si])}],{H:240,dateFn:mondayOf,week0:a});
     });
     // histograma previsto (mão de obra × equipamentos) + acumulado total
     var hEl=document.getElementById('execHist');
@@ -4451,8 +4460,8 @@
    *  na horizontal) e, abaixo, uma faixa com os meses (mês da segunda-feira de cada semana).
    *  weekNums = nº da semana do projeto de cada ponto; xAt(i) = centro do ponto i; gap = largura
    *  de uma semana; yTop = base da área do gráfico; xl/xr = limites horizontais. Ocupa ~46 de altura. */
-  function weekAxisSVG(weekNums,xAt,gap,yTop,xl,xr,dateFn){
-    dateFn=dateFn||calWeekDate;
+  function weekAxisSVG(weekNums,xAt,gap,yTop,xl,xr,dateFn,opts){
+    dateFn=dateFn||calWeekDate; opts=opts||{};
     var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
     var rot=gap<22, s='';
     weekNums.forEach(function(w,i){
@@ -4469,6 +4478,10 @@
     s+='<line x1="'+xl+'" y1="'+yBand+'" x2="'+xr+'" y2="'+yBand+'" stroke="var(--line)"/>';
     groups.forEach(function(g,gi){
       var x0=xAt(g.from)-gap/2, x1=xAt(g.to)+gap/2, wpx=x1-x0;
+      // Divisa de mês subindo pelo gráfico: com muitas semanas o rótulo embaixo fica minúsculo,
+      // e sem nenhuma referência vertical não dá pra dizer em que semana a barra está.
+      if(opts.plotTop!=null&&gi>0)
+        s+='<line x1="'+x0.toFixed(1)+'" y1="'+opts.plotTop+'" x2="'+x0.toFixed(1)+'" y2="'+yTop+'" stroke="var(--line)" stroke-dasharray="2 3" opacity=".55"/>';
       s+='<line x1="'+x0.toFixed(1)+'" y1="'+yBand+'" x2="'+x0.toFixed(1)+'" y2="'+(yBand+14)+'" stroke="var(--line)"/>';
       if(gi===groups.length-1)s+='<line x1="'+x1.toFixed(1)+'" y1="'+yBand+'" x2="'+x1.toFixed(1)+'" y2="'+(yBand+14)+'" stroke="var(--line)"/>';
       var full=MES[g.m]+'/'+String(g.y).slice(2);
