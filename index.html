@@ -1538,6 +1538,19 @@
     if(!a)return {v:v,u:sv.u,ok:false};
     return {v:v/a,u:'m',ok:true};
   }
+  /** Quanto multiplicar pra sair da unidade cadastrada do serviço pra escolhida no relatório.
+   *  Serve pra converter uma série inteira sem repetir relConv valor a valor. */
+  function relFator(sv){
+    var a=relConv(1,sv);
+    return {f:a.v,u:a.u,ok:a.ok};
+  }
+  /** Botões de unidade, iguais aos do card de produtividade — o estado é o mesmo (REL_UNID),
+   *  então valem pro relatório inteiro onde quer que apareçam. */
+  function relUnidBotoesHTML(){
+    return [['cad','Unidade cadastrada'],['m','Tudo em metros'],['m3','Tudo em '+M3]].map(function(o){
+      return '<button class="subtab'+(REL_UNID===o[0]?' active':'')+'" data-relunid="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+  }
   /** Número digitado em campo brasileiro ("0,25"). Vazio vira null pra poder apagar a medida. */
   function relNum(t){
     var x=String(t==null?'':t).trim(); if(!x)return null;
@@ -1633,9 +1646,7 @@
         '<td class="r mono">'+fmtAuto(cDia.v)+'</td>'+
         '<td class="r mono">'+fmtAuto(cSem.v)+'</td></tr>';
     }).join('');
-    var opcoes=[['cad','Unidade cadastrada'],['m','Tudo em metros'],['m3','Tudo em '+M3]].map(function(o){
-      return '<button class="subtab'+(REL_UNID===o[0]?' active':'')+'" data-relunid="'+o[0]+'">'+o[1]+'</button>';
-    }).join('');
+    var opcoes=relUnidBotoesHTML();
     var modos=[['cheia','Produtividade completa'],['prat','Com praticabilidade']].map(function(o){
       var off=(o[0]==='prat'&&!temChuva);
       return '<button class="subtab'+(REL_PRAT===o[0]&&!off?' active':'')+'" data-relprat="'+o[0]+'"'+
@@ -1771,7 +1782,9 @@
   }
   VIEWS['torre-rel']=function(){
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
-    var top='<div class="page-head-mini" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="execBack">← Voltar</button><button class="btn primary" id="execPrint">🖨 Imprimir / PDF</button></div>';
+    var top='<div class="page-head-mini" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+      '<button class="btn" id="execBack">← Voltar</button><button class="btn primary" id="execPrint">🖨 Imprimir / PDF</button>'+
+      '<span class="note" style="margin-left:10px">Unidade do relatório:</span>'+relUnidBotoesHTML()+'</div>';
     if(!SERV.length||!LOTS.length)return top+'<div class="note">Cadastre serviços, lotes e quantidades pra gerar o relatório.</div>';
     var segsAll=buildSchedule(), segs=viewSegs(segsAll);
     var tw=1; segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
@@ -1807,19 +1820,25 @@
         vistaProd[sg.si][w]=1; semProd[sg.si]++;
       }
     });
+    var faltaSec=0;
     var prodRows=SERV.map(function(sv,si){
-      var perTeam=pnum(sv.p), semanal=perTeam*(sv.eq||0), span=sp[si], dur=span.e>0?(span.e-span.s+1):0;
-      return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</td><td>'+sv.u+'</td><td class="r mono">'+sv.eq+'</td><td class="r mono">'+fmtBR(perTeam)+'</td><td class="r mono">'+fmtBR(semanal)+'</td>'+
-        '<td class="r mono">'+(totalByServ[si]>0?fmtBR(totalByServ[si]):'—')+'</td><td class="mono">'+(span.s?('S'+isoWeek(mondayOf(span.s))+' · '+fmtDate(mondayOf(span.s))):'—')+'</td><td class="mono">'+(span.e?('S'+isoWeek(mondayOf(span.e))+' · '+fmtDate(mondayOf(span.e))):'—')+'</td><td class="r mono">'+(dur||'—')+'</td>'+
+      var span=sp[si], dur=span.e>0?(span.e-span.s+1):0;
+      // Tudo nesta linha e quantidade do mesmo servico: uma conversao serve pra todas.
+      var cv=relFator(sv); if(!cv.ok)faltaSec++;
+      var perTeam=pnum(sv.p)*cv.f, semanal=perTeam*(sv.eq||0), total=totalByServ[si]*cv.f;
+      return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</td><td>'+escAttr(cv.u)+(cv.ok?'':' <span style="color:var(--warn)" title="Falta a secao transversal deste servico">&#9888;</span>')+'</td><td class="r mono">'+sv.eq+'</td><td class="r mono">'+fmtBR(perTeam)+'</td><td class="r mono">'+fmtBR(semanal)+'</td>'+
+        '<td class="r mono">'+(total>0?fmtBR(total):'—')+'</td><td class="mono">'+(span.s?('S'+isoWeek(mondayOf(span.s))+' · '+fmtDate(mondayOf(span.s))):'—')+'</td><td class="mono">'+(span.e?('S'+isoWeek(mondayOf(span.e))+' · '+fmtDate(mondayOf(span.e))):'—')+'</td><td class="r mono">'+(dur||'—')+'</td>'+
         '<td class="r mono">'+(semProd[si]||'—')+'</td>'+
-        '<td class="r mono">'+(semProd[si]>0&&totalByServ[si]>0?fmtBR(totalByServ[si]/semProd[si]):'—')+'</td></tr>';
+        '<td class="r mono">'+(semProd[si]>0&&total>0?fmtBR(total/semProd[si]):'—')+'</td></tr>';
     }).join('');
     var prod='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Quadro resumo de produtividade dos serviços</div><div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
       '<th>Serviço</th><th>Un.</th><th class="r">Equipes</th><th class="r">Prod. cadastrada<br>por equipe/sem</th><th class="r">Prod. total<br>por semana</th><th class="r">Quantidade</th><th>Início</th><th>Término</th><th class="r">Duração<br>(sem)</th><th class="r">Semanas<br>com produção</th><th class="r">Média efetiva<br>por semana</th></tr></thead><tbody>'+prodRows+'</tbody></table></div>'+
-      '<div class="note" style="margin-top:6px">Prod. total = cadastrada × nº de equipes. Duração = do início ao fim no cronograma. Semanas com produção = só as que têm quantidade prevista — a diferença entre as duas é espera entre lotes, paralisação ou praticabilidade zero. Média efetiva = quantidade ÷ semanas com produção, ou seja, o ritmo da equipe quando ela está produzindo.</div></div>';
+      '<div class="note" style="margin-top:6px">Prod. total = cadastrada × nº de equipes. Duração = do início ao fim no cronograma. Semanas com produção = só as que têm quantidade prevista — a diferença entre as duas é espera entre lotes, paralisação ou praticabilidade zero. Média efetiva = quantidade ÷ semanas com produção, ou seja, o ritmo da equipe quando ela está produzindo.'+
+      (REL_UNID==='cad'?'':(' <b>Unidade: '+(REL_UNID==='m'?'metros':M3)+'</b> — a conversão usa a seção (largura × espessura) cadastrada em Tempo Caminho → Produtividade; serviço sem essas medidas fica na unidade dele, marcado com &#9888;'+(faltaSec?(' ('+faltaSec+')'):'')+'.'))+'</div></div>';
     // 4) distribuição semanal por serviço (desenhada depois do render)
     var dist='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:6px">Distribuição semanal da produção por serviço (quantidade prevista por semana)</div><div class="exec-grid">'+
-      SERV.map(function(sv,si){ if(!(totalByServ[si]>0))return ''; return '<div class="card"><div style="font-size:12px;font-weight:600;margin-bottom:2px"><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+sv.u+')</span></div><svg class="chart" data-execbar="'+si+'" viewBox="0 0 900 240"></svg></div>'; }).join('')+
+      SERV.map(function(sv,si){ if(!(totalByServ[si]>0))return ''; var cu=relFator(sv);
+        return '<div class="card"><div style="font-size:12px;font-weight:600;margin-bottom:2px"><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+escAttr(cu.u)+(cu.ok?'':' &#9888;')+')</span></div><svg class="chart" data-execbar="'+si+'" viewBox="0 0 900 240"></svg></div>'; }).join('')+
       '</div></div>';
     // 5) gantt
     var gantt='<div class="card" style="margin-bottom:12px"><div class="eyebrow">Gantt do projeto</div><div style="max-width:900px">'+ganttSVG({rowH:16,W:900,maxH:'260px'})+'</div></div>';
@@ -1873,7 +1892,8 @@
       for(var w=1;w<=wq.tw;w++){ if((wq.M[si][w]||0)>0){ if(!ini)ini=w; fim=w; } }
       if(!ini){ ini=1; fim=Math.min(wq.tw,6); }
       var a=Math.max(1,ini-1), b=Math.min(wq.tw,fim+1);
-      var vals=[]; for(var w2=a;w2<=b;w2++)vals.push(wq.M[si][w2]||0);
+      var cvb=relFator(SERV[si]);
+      var vals=[]; for(var w2=a;w2<=b;w2++)vals.push((wq.M[si][w2]||0)*cvb.f);
       barsSVG(el,[{values:vals,color:svcColor(SERV[si])}],{H:240,dateFn:mondayOf,week0:a});
     });
     // histograma previsto (mão de obra × equipamentos) + acumulado total
