@@ -2540,7 +2540,7 @@
     });
     enchEquipes(); previa();
   }
-  function ofiMatrizHTML(segs,lotIdxs,totalWeeks){
+  function ofiMatrizHTML(segs,lotIdxs,totalWeeks,naMatriz){
     var cell={};
     segs.forEach(function(sg){
       for(var i=0;i<sg.dur;i++){
@@ -2575,7 +2575,15 @@
       var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
       body+='<tr'+(cls?' class="'+cls+'"':'')+'><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
-    return '<div class="tc-wrap ofi'+(ofiInit().pincel.si!=null?' pincel':'')+'"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    var tabela='<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
+    // Na matriz o quadro usa o mesmo id/estrutura da matriz automática, pra herdar o zoom, o
+    // ajuste de altura e a tela cheia que já existem — sem duplicar nada disso.
+    if(naMatriz){
+      var z=window._matrixZoom||1;
+      return '<div class="tc-wrap ofi'+(ofiInit().pincel.si!=null?' pincel':'')+'" id="tcWrap">'+
+        '<div class="tc-zoomin" style="zoom:'+z+'">'+tabela+'</div></div>';
+    }
+    return '<div class="tc-wrap ofi'+(ofiInit().pincel.si!=null?' pincel':'')+'">'+tabela+'</div>';
   }
   VIEWS['cr-oficina']=function(){
     ofiInit();
@@ -2668,7 +2676,9 @@
       '<div class="note" style="margin-bottom:10px">Monte clicando nas células. Um lote aceita vários serviços na mesma semana (frentes em paralelo) e mais de uma equipe no mesmo serviço — nesse caso a quantidade do lote é rateada entre elas pela produtividade de cada uma, pra todas terminarem na mesma semana. '+
         'A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. '+
         'A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</div>'+
-      paleta+acoes+listaPend+cmp+ofiMatrizHTML(segs,lotIdxs,totalWeeks)+'</div>';
+      paleta+acoes+listaPend+cmp+
+      (estudo?'':tcZoomBarHTML())+
+      ofiMatrizHTML(segs,lotIdxs,totalWeeks,!estudo)+'</div>';
   };
   function ofiDraw(){
     document.querySelectorAll('[data-ofitinta]').forEach(function(b){
@@ -9956,13 +9966,19 @@
       (anyHidden?'<button class="btn" id="svcShowAll" style="padding:4px 10px;font-size:11.5px">Mostrar todos</button>':'')+
     '</div>'):'';
     var z=window._matrixZoom||1;
-    var zoomBar='<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
-      '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
-      (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+
-      '<button data-zoom="full" title="Ver a matriz ocupando a tela toda (Esc sai)" style="width:auto;padding:0 10px;margin-left:auto">'+(document.body.classList.contains('mat-fullscreen')?'✕ Sair da tela cheia':'⛶ Tela cheia')+'</button>'+'</div>';
+    var zoomBar=tcZoomBarHTML();
     // O zoom vai no conteúdo (tc-zoomin), não no quadro: o quadro (tcWrap) mantém o tamanho e
     // rola por dentro — a página não cresce quando a escala muda.
     return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap"><div class="tc-zoomin" style="zoom:'+z+'">'+tableHtml+'</div></div>';
+  }
+  /** Barra de zoom + tela cheia. Compartilhada pela matriz automática e pela manual. */
+  function tcZoomBarHTML(){
+    var z=window._matrixZoom||1;
+    return '<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
+      '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
+      (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+
+      '<button data-zoom="full" title="Ver a matriz ocupando a tela toda (Esc sai)" style="width:auto;padding:0 10px;margin-left:auto">'+
+      (document.body.classList.contains('mat-fullscreen')?'✕ Sair da tela cheia':'⛶ Tela cheia')+'</button></div>';
   }
   /** Quadro da matriz ocupa o que sobra da tela abaixo dele (com a página no topo), com mínimo
    *  de 320px — independe do zoom, que só escala o conteúdo por dentro. Em tela cheia o bloco é
@@ -10016,7 +10032,9 @@
     });
     document.querySelectorAll('[data-fsact]').forEach(function(b){
       b.addEventListener('click',function(){
-        var alvo=document.getElementById(b.getAttribute('data-fsact')==='save'?'saveAdjustsBtn':'clearAdjustsBtn');
+        var salvar=(b.getAttribute('data-fsact')==='save');
+        // No manual o botao de salvar e outro (tcmSalvar); a barra de tela cheia so repassa.
+        var alvo=document.getElementById(salvar?(document.getElementById('tcmSalvar')?'tcmSalvar':'saveAdjustsBtn'):'clearAdjustsBtn');
         if(alvo)alvo.click();
       });
     });
@@ -11594,6 +11612,8 @@
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'';
     return '<div class="fs-bar">'+
       '<span class="fs-title">'+escAttr(nome)+'</span>'+tabs+
+      (tab==='tc'&&tcManual()&&!isReadOnly()?
+        '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar cronograma')+'</button>':'')+
       (tab==='ajuste'&&!isReadOnly()?
         '<button class="btn" data-fsdrawer="1" title="Abrir/fechar o painel de lotes e sequência por equipe">⚙ Equipes e sequência</button>'+
         '<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
@@ -12161,6 +12181,9 @@
         }
         tcSetModo(m);
         window._cronoTab='tc';
+        document.querySelectorAll('[data-tcmodo]').forEach(function(x){
+          x.classList.toggle('active',(x.getAttribute('data-tcmodo')==='manual')===tcManual());
+        });
         renderCrono();
       });
     });
