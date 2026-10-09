@@ -2356,6 +2356,7 @@
   /** Uma pincelada: coloca o serviço que está na mão, sem diálogo, e avisa por toast se deslizou.
    *  É o modo de desenhar — escolhe a tinta uma vez e sai aplicando lote a lote. */
   function ofiPincela(li,semana){
+    if(OFI&&OFI.ovr&&matBloqueada()){ toast('Cronograma travado pela linha de base — use "Liberar edição".'); return true; }
     var si=ofiInit().pincel.si; if(si==null)return false;
     var sv=SERV[si]; if(!sv)return false;
     if(!((QTY[li]||[])[si]>0)){ toast(sv.n+' não tem quantidade em '+LOTS[li]+'.'); return true; }
@@ -2479,6 +2480,7 @@
   }
   /** Diálogo de colocar/mover um serviço numa célula (lote x semana). */
   function ofiDialogo(li,semana,editId){
+    if(OFI&&OFI.ovr&&matBloqueada()){ toast('Cronograma travado pela linha de base — use "Liberar edição".'); return; }
     var atual=editId?ofiInit().plano.filter(function(x){return x.id===editId;})[0]:null;
     var cands=SERV.map(function(sv,si){ return {sv:sv,si:si,qty:(QTY[li]||[])[si]||0}; })
       .filter(function(c){ return c.qty>0; });
@@ -2620,6 +2622,7 @@
    *  propósito: o que se aprende montando num vale no outro. */
   function ofiLousaHTML(estudo){
     ofiInit();
+    var travado=(!estudo)&&matBloqueada();
     var lotIdxs=viewLotIdxs();
     var segs=ofiCalc();
     var fimEstudo=0; segs.forEach(function(g){ fimEstudo=Math.max(fimEstudo,g.start+g.dur-1); });
@@ -2655,7 +2658,7 @@
       '</div>';
     }
     // Paleta: só serviços com quantidade em algum lote à vista — o resto não tem o que desenhar.
-    var pincel=OFI.pincel, sel=(pincel.si!=null)?SERV[pincel.si]:null;
+    var pincel=OFI.pincel, sel=travado?null:((pincel.si!=null)?SERV[pincel.si]:null);
     var tintas=SERV.map(function(sv,si){
       var temQtd=lotIdxs.some(function(li){ return ((QTY[li]||[])[si]||0)>0; });
       if(!temQtd)return '';
@@ -2785,7 +2788,7 @@
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
 
     window._cronoTab=window._cronoTab||'tc';
-    if(isReadOnly()&&(window._cronoTab==='ajuste'||window._cronoTab==='equipe'))window._cronoTab='tc';
+    if(matBloqueada()&&(window._cronoTab==='ajuste'||window._cronoTab==='equipe'))window._cronoTab='tc';
     if(isMobile()&&!MOBILE_TAB_MATRIZ[window._cronoTab])window._cronoTab='tc';
     var tabs=cronoTabsHTML('cr-matriz');
 
@@ -2800,7 +2803,20 @@
         return b?('Linha de base ativa: <b>'+b.revisao+'</b> — '+b.nome+'. Ajustes aqui não alteram a linha de base até você gerar uma nova revisão.'):
           'Rascunho — você ainda está montando o cronograma. Quando estiver pronto, gere a <b>linha de base</b> (REV00) pra criar a referência de previsto e o histórico de revisões.';
       })()+'</div>'+
+      (function(){
+        var b=activeBaseline(); if(!b)return '';
+        var cong=b.congeladoEm?(' · congelada em '+fmtDate(new Date(b.congeladoEm))):'';
+        var tr=tcTravada();
+        return '<div class="banner" style="margin-bottom:12px;border-color:'+(tr?'var(--info)':'var(--warn)')+'">'+
+          (tr?'🔒 ':'🔓 ')+'<b>Linha de base '+escAttr(b.revisao||'')+'</b>'+escAttr(cong)+' — '+
+          (tr?'esta é a referência de previsto do projeto e a matriz está <b>travada</b> para edição.'
+             :'a matriz está <b>liberada</b> para edição. A linha de base em si não muda; para que o previsto passe a valer o novo plano, gere uma revisão.')+
+          (isReadOnly()?'':(' <button class="btn" id="tcTrava" style="margin-left:8px;padding:3px 10px;font-size:11.5px">'+(tr?'🔓 Liberar edição':'🔒 Travar de novo')+'</button>'))+
+        '</div>';
+      })()+
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+        '<span class="note">Vista:</span>'+tcVistaBotoesHTML()+
+        '<span style="width:14px"></span>'+
         '<span class="note">Como o cronograma é montado:</span>'+
         '<button class="subtab'+(tcManual()?'':' active')+'" data-tcmodo="auto" title="O app distribui os lotes pelas equipes sozinho, respeitando predecessoras e fila">Automático</button>'+
         '<button class="subtab'+(tcManual()?' active':'')+'" data-tcmodo="manual" title="Você desenha o cronograma célula a célula, como na Oficina">Manual</button>'+
@@ -6875,7 +6891,7 @@
     }
     if(view==='cr-prod'){prodHoraDraw();}
     if(view==='cr-oficina'){ofiDraw();}
-    if(view==='cr-matriz'){setupCrono(); wireModoTC();}
+    if(view==='cr-matriz'){setupCrono(); wireModoTC(); wireTrava();}
     if(view==='cr-cenarios'){
       cmpAll();
       // Marcar/desmarcar uma linha redesenha só os gráficos (sem recarregar a aba inteira, que
@@ -8456,8 +8472,19 @@
       var s=SERV[si], teams=s.eq, prod=pnum(s.p), hex=svcColor(s);
       if(teams<=0||prod<=0)return;
       var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
-      LOTS.forEach(function(l,li){
-        if(QTY[li][si]<=0)return;
+      // A equipe é uma só e faz um lote de cada vez: sem guardar onde ela parou, dois lotes da
+      // mesma equipe eram projetados em paralelo e a projeção saía mais curta que o plano.
+      // A ordem da fila é a do próprio plano (início previsto).
+      var teamPos={};
+      var ordemLotes=LOTS.map(function(l,li){ return li; })
+        .filter(function(li){ return QTY[li][si]>0; })
+        .sort(function(a,b){
+          var sa=startByKey[a+'::'+si], sb=startByKey[b+'::'+si];
+          var pa=(ovrGet(a,si)||{}).startWeek||0, pb=(ovrGet(b,si)||{}).startWeek||0;
+          return (pa||a)-(pb||b);
+        });
+      ordemLotes.forEach(function(li){
+        var l=LOTS[li];
         var o=ovrGet(li,si);
         var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
         var team=(teamsArr&&teamsArr.length)?teamsArr[0]:((o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1));
@@ -8468,10 +8495,11 @@
         var earliestPos=predReadyWeek(s,li)-1;
         var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
         var svcMin=(s.cfg&&s.cfg.minStartWeek>0)?s.cfg.minStartWeek-1:0;
-        var startPos=Math.max(earliestPos,pinPos,svcMin);
+        var startPos=Math.max(earliestPos,pinPos,svcMin,teamPos[team]||0);
+        // Nada que ainda não terminou pode ser projetado no passado: o saldo só pode ser feito
+        // desta semana em diante.
+        startPos=Math.max(startPos,hojeW-1);
         if(real>0){
-          // já começou de verdade: retoma a projeção a partir de hoje (ou da posição prevista, se ainda for futura)
-          startPos=Math.max(startPos,hojeW);
           if(mode==='historico'){
             var fw=firstRealWeekForLoteServ(li,si);
             var weeksElapsed=Math.max(1,hojeW-(fw!=null?fw-1:startPos));
@@ -8481,6 +8509,7 @@
         }
         var fixedDur=(o&&o.duration>0)?o.duration:undefined;
         var packed=remaining>0?packSegment(startPos,remaining/effProd,effProd,remaining,periods,wfCache,fixedDur):null;
+        if(packed)teamPos[team]=packed.endPos;
         if(packed)segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:remaining,wq:packed.wq,
           color:teamColor(hex,team,Math.max(1,teams)),name:s.n,real:real,total:QTY[li][si]});
         startByKey[li+'::'+si]=packed?packed.start:startPos+1;
@@ -8569,6 +8598,26 @@
   }
   function scheduleWithSnapshot(snap){ return withSnapshot(snap,buildSchedule); }
   function histogramWithSnapshot(snap){ return withSnapshot(snap,computeHistogram); }
+  /* Com linha de base congelada, a matriz fica trancada: o plano virou compromisso e mexer nele
+   * sem querer apaga a referência de quem está atrasado. A liberação é explícita e fica gravada
+   * (em ajustes_manuais, junto do resto), pra equipe toda ver que o cronograma está aberto. */
+  function tcTravada(){ return !!(activeBaseline()&&!(OVR&&OVR.__editavel)); }
+  function matBloqueada(){ return isReadOnly()||tcTravada(); }
+  function tcDestrava(v){
+    if(v)OVR.__editavel=true; else delete OVR.__editavel;
+    ADJ_DIRTY=true;
+  }
+  /* 'plano' = o cronograma como está planejado; 'projecao' = o mesmo cronograma reprojetado no
+   * ritmo que os apontamentos mostram. A linha de base não entra nessa conta: ela é o retrato
+   * congelado, e é justamente contra ela que a projeção se compara. */
+  var TC_VISTA='plano';
+  function tcVistaBotoesHTML(){
+    return [['plano','Planejado'],['projecao','Projeção pelo ritmo real']].map(function(o){
+      return '<button class="subtab'+(TC_VISTA===o[0]?' active':'')+'" data-tcvista="'+o[0]+'"'+
+        (o[0]==='projecao'?' title="Refaz as datas do saldo com a produtividade que os apontamentos mostram — quem produz mais antecipa, quem produz menos estende"':'')+
+        '>'+o[1]+'</button>';
+    }).join('');
+  }
   function activeBaseline(){
     return CENARIOS.filter(function(c){return c.tipo==='baseline'&&c.ativo;})[0]||null;
   }
@@ -8593,7 +8642,10 @@
         var id=await sbCreateCenario(selectedObra.id,{nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,ajustes_manuais:snap,ordem:CENARIOS.length,congelado_em:new Date().toISOString()});
         CENARIOS.push({id:id,nome:'Linha de base '+rev,tipo:'baseline',revisao:rev,ativo:true,snap:snap,ordem:CENARIOS.length,congeladoEm:new Date().toISOString()});
       }
-      toast('Linha de base '+rev+' gerada.');
+      // Gerar revisão fecha o cronograma de novo: o plano acabou de virar compromisso.
+      delete OVR.__editavel;
+      try{ await saveOverrides(); ADJ_DIRTY=false; }catch(e2){}
+      toast('Linha de base '+rev+' gerada — a matriz ficou travada.');
       go(current);
     }catch(e){ alert('Falha ao gerar linha de base: '+((e&&e.message)||e)); }
   }
@@ -10134,8 +10186,8 @@
     }
     return '<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
   }
-  function matrixTableHTML(withSummary){
-    var tableHtml=matrixTableCore(withSummary,viewLotIdxs(),buildSchedule());
+  function matrixTableHTML(withSummary,segsOverride){
+    var tableHtml=matrixTableCore(withSummary,viewLotIdxs(),segsOverride||buildSchedule());
     var anyHidden=SERV.some(function(s,si){return !!TC_HIDDEN_SVC[si];});
     var svcToggles=SERV.length?('<div class="tc-svctoggle">'+
       SERV.map(function(sv,si){
@@ -10172,7 +10224,7 @@
   /** Abre a gaveta de edição quando faz sentido: tela cheia + aba de ajuste + perfil que edita. */
   function abreGavetaAjuste(){
     var vale=document.body.classList.contains('mat-fullscreen')&&
-             (window._cronoTab==='ajuste'||window._cronoTab==='equipe')&&!isReadOnly();
+             (window._cronoTab==='ajuste'||window._cronoTab==='equipe')&&!matBloqueada();
     document.body.classList.toggle('assign-open',vale);
     fitMatrixFrameHeight();
     requestAnimationFrame(fitMatrixFrameHeight);
@@ -11786,14 +11838,14 @@
   function fsBarHTML(){
     var tab=window._cronoTab||'tc';
     var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt']]
-      .filter(function(t){ return !(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe')); })
+      .filter(function(t){ return !(matBloqueada()&&(t[0]==='ajuste'||t[0]==='equipe')); })
       .map(function(t){ return '<button class="subtab'+(tab===t[0]?' active':'')+'" data-fstab="'+t[0]+'">'+t[1]+'</button>'; }).join('');
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'';
     return '<div class="fs-bar">'+
       '<span class="fs-title">'+escAttr(nome)+'</span>'+tabs+
-      (tab==='tc'&&tcManual()&&!isReadOnly()?
+      (tab==='tc'&&tcManual()&&!matBloqueada()?
         '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar cronograma')+'</button>':'')+
-      (tab==='ajuste'&&!isReadOnly()?
+      (tab==='ajuste'&&!matBloqueada()?
         '<button class="btn" data-fsdrawer="1" title="Abrir/fechar o painel de lotes e sequência por equipe">⚙ Equipes e sequência</button>'+
         '<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
         '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar ajustes')+'</button>':'')+
@@ -11810,7 +11862,7 @@
       ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     return TABS.filter(function(t){
-      if(isReadOnly()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
+      if(matBloqueada()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
       if(t[2]&&!canViewTab(t[2]))return false;
       if(isMobile()&&!MOBILE_TAB_MATRIZ[t[0]])return false; // no celular: tempo caminho, resumo e gantt
       return true;
@@ -11848,6 +11900,21 @@
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
+    if(tab==='tc'&&TC_VISTA==='projecao'){
+      var proj=buildProjectedSchedule('historico');
+      var fim=0; proj.forEach(function(g){ fim=Math.max(fim,g.start+g.dur-1); });
+      var plan=buildSchedule(), fimP=0; plan.forEach(function(g){ fimP=Math.max(fimP,g.start+g.dur-1); });
+      var dd=fim-fimP;
+      return fsBarHTML()+
+        '<div class="banner" style="margin-bottom:10px;border-color:'+(dd>0?'var(--crit)':(dd<0?'var(--good)':'var(--line)'))+'">'+
+          '<b>Projeção pelo ritmo real.</b> O que já foi apontado sai do saldo, e o que falta é refeito na produtividade que cada frente vem mostrando: '+
+          'quem produz mais que o previsto antecipa, quem produz menos estende. '+
+          (fim?('Término projetado <b>S'+isoWeek(mondayOf(fim))+'</b> contra S'+isoWeek(mondayOf(fimP))+' no planejado — '+
+            (dd>0?('<b style="color:var(--crit)">'+dd+' semana(s) a mais</b>'):(dd<0?('<b style="color:var(--good)">'+(-dd)+' semana(s) a menos</b>'):'sem diferença'))+'.')
+            :'Nada apontado ainda — a projeção repete o planejado.')+
+          ' Esta vista é só leitura: nem o plano nem a linha de base mudam.</div>'+
+        matrixTableHTML(true,proj);
+    }
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+ofiLousaHTML(false); }
     if(tab==='equipe') return fsBarHTML()+editarPorEquipeHTML();
     if(tab==='resumo') return fsBarHTML()+resumoHTML();
@@ -11895,7 +11962,7 @@
         }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); sv.disabled=false; }
       });
     }
-    if((window._cronoTab||'tc')==='ajuste'&&!isReadOnly()){
+    if((window._cronoTab||'tc')==='ajuste'&&!matBloqueada()){
       renderAssignPanel(); wireDragMatrix();
       var clearB=document.getElementById('clearAdjustsBtn');
       if(clearB)clearB.addEventListener('click',function(){
@@ -12344,12 +12411,32 @@
     clearTimeout(window._toastT); window._toastT=setTimeout(function(){t.classList.remove('show');},2400);
   }
 
+  function wireTrava(){
+    var b=document.getElementById('tcTrava');
+    if(b)b.addEventListener('click',function(){
+      if(isReadOnly())return;
+      var tr=tcTravada();
+      if(tr&&!confirm('Liberar a matriz para edição?'+String.fromCharCode(10)+String.fromCharCode(10)+
+        'A linha de base continua intacta — ela é o previsto do projeto e não muda. O que você editar daqui em diante passa a divergir dela, e essa diferença é o que aparece como atraso ou adiantamento.'+
+        String.fromCharCode(10)+String.fromCharCode(10)+'Para que o novo plano vire a referência, gere uma nova revisão depois.'))return;
+      tcDestrava(tr);
+      go('cr-matriz');
+    });
+    document.querySelectorAll('[data-tcvista]').forEach(function(x){
+      x.addEventListener('click',function(){
+        TC_VISTA=x.getAttribute('data-tcvista');
+        window._cronoTab='tc';
+        document.querySelectorAll('[data-tcvista]').forEach(function(y){ y.classList.toggle('active',y.getAttribute('data-tcvista')===TC_VISTA); });
+        renderCrono();
+      });
+    });
+  }
   function wireModoTC(){
     document.querySelectorAll('[data-tcmodo]').forEach(function(b){
       b.addEventListener('click',function(){
         var m=b.getAttribute('data-tcmodo');
         if((m==='manual')===tcManual())return;
-        if(isReadOnly()){ toast('Seu perfil não permite mudar o cronograma.'); return; }
+        if(matBloqueada()){ toast(tcTravada()?'O cronograma está travado pela linha de base. Use "Liberar edição".':'Seu perfil não permite mudar o cronograma.'); return; }
         if(m==='manual'){
           var pins=tcmLeOvr().length;
           if(!confirm('Passar para o Tempo-Caminho manual?'+String.fromCharCode(10)+String.fromCharCode(10)+
