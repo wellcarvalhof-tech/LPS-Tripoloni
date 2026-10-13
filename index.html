@@ -10015,6 +10015,9 @@
       var pacoteVal=(hasPacoteCol&&row[iPacote]!=null)?String(row[iPacote]).trim():null;
       if(!lotByName.hasOwnProperty(lname.toLowerCase())){
         await sbCreateLote(selectedObra.id,{nome:lname,ordem:LOTS.length+createdLot+1,pacote_contratual:pacoteVal||null});
+        // Marca como existente na hora: sem isso, lote repetido na planilha era CRIADO duas vezes
+        // na obra, e aí o nome passava a apontar pra dois registros.
+        lotByName[lname.toLowerCase()]=-1;
         createdLot++;
       }
       rows.push(row);
@@ -10037,21 +10040,37 @@
         }
       }
     }
-    var pendentes=[], semLote=[];
+    // O banco grava tudo numa tacada só, e o Postgres recusa a chamada inteira se o mesmo
+    // lote+serviço aparecer duas vezes nela ("ON CONFLICT DO UPDATE command cannot affect row a
+    // second time"). Acontece com planilha que repete uma linha de lote ou uma coluna de serviço.
+    // Em vez de deixar a importação toda falhar, junta as repetidas aqui — vale a última — e
+    // depois conta o que se repetiu, pra pessoa poder arrumar a planilha.
+    var porChave={}, ordem=[], semLote=[], dupCelulas=0, lotesRepetidos={}, servRepetidos={};
+    var vistosLote={};
+    var contaCol={};
+    colServ.forEach(function(x){
+      var nome=SERV[x.si]?SERV[x.si].n:('col'+x.c);
+      contaCol[nome]=(contaCol[nome]||0)+1;
+      if(contaCol[nome]>1)servRepetidos[nome]=1;
+    });
     for(var k=0;k<rows.length;k++){
       var qrow=rows[k];
       var nomeL=String(qrow[0]).trim();
       var li2=lotIdxByName[nomeL.toLowerCase()];
       if(li2==null){ semLote.push(nomeL); continue; }
+      if(vistosLote[li2])lotesRepetidos[nomeL]=1; else vistosLote[li2]=1;
       for(var c2=0;c2<colServ.length;c2++){
         var cel=qrow[colServ[c2].c];
         if(cel==null||cel==='')continue;
         var val=numPlanilha(cel);
         if(val==null){ naoNumero++; continue; }
         var si2=colServ[c2].si;
-        pendentes.push({loteId:window._LOTIDS[li2],servicoId:SERV[si2].id,quantidade:val,unidade:SERV[si2].u});
+        var ch=window._LOTIDS[li2]+'::'+SERV[si2].id;
+        if(porChave[ch])dupCelulas++; else ordem.push(ch);
+        porChave[ch]={loteId:window._LOTIDS[li2],servicoId:SERV[si2].id,quantidade:val,unidade:SERV[si2].u};
       }
     }
+    var pendentes=ordem.map(function(ch){ return porChave[ch]; });
     var erro='';
     try{ await sbUpsertQuantidades(selectedObra.id,pendentes); qtyCount=pendentes.length; }
     catch(e){ erro=(e&&e.message)||String(e); }
@@ -10072,7 +10091,8 @@
     var unicosL={}; semLote.forEach(function(n){unicosL[n]=1;});
     return {createdLot:createdLot,qtyCount:qtyCount,semServico:Object.keys(unicos),
             naoNumero:naoNumero,semLote:Object.keys(unicosL),erro:erro,
-            enviadas:pendentes.length,naoPersistiu:naoPersistiu};
+            enviadas:pendentes.length,naoPersistiu:naoPersistiu,
+            dupCelulas:dupCelulas,lotesRepetidos:Object.keys(lotesRepetidos),servRepetidos:Object.keys(servRepetidos)};
   }
   /** Explica por que uma importação de lotes trouxe menos quantidade do que o esperado. Sem isso
    *  a coluna que não casa com nenhum serviço é ignorada em silêncio e parece que "não carregou". */
@@ -10132,6 +10152,16 @@
           return '• '+n+(sug?('   →   talvez seja "'+sug+'"'):'');
         }).join(NL)+(r.semServico.length>8?(NL+'• e mais '+(r.semServico.length-8)):'')+
         NL+NL+'O nome da coluna tem que ser igual ao nome do serviço cadastrado em Tempo Caminho → Serviços.');
+    if(r.dupCelulas){
+      var det=[];
+      if(r.lotesRepetidos&&r.lotesRepetidos.length)
+        det.push('lote(s) repetido(s) na planilha: '+r.lotesRepetidos.slice(0,6).join(', ')+(r.lotesRepetidos.length>6?' e mais '+(r.lotesRepetidos.length-6):''));
+      if(r.servRepetidos&&r.servRepetidos.length)
+        det.push('coluna(s) de serviço repetida(s): '+r.servRepetidos.slice(0,6).join(', '));
+      p.push(r.dupCelulas+' célula(s) caíam no mesmo lote + serviço e valeu a última'+
+        (det.length?(' — '+det.join('; ')):'')+'.'+NL+
+        'Vale conferir a planilha: linha de lote duplicada costuma ser cópia esquecida, e aí metade dos números não é a que você quer.');
+    }
     if(r.naoNumero)p.push(r.naoNumero+' célula(s) não eram número e foram ignoradas.');
     return p.length?('\n\n'+p.join('\n\n')):'';
   }
