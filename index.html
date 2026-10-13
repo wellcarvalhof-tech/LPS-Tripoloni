@@ -2135,10 +2135,15 @@
         if(!(o&&o.pinned&&Array.isArray(o.pins)))return;
         o.pins.forEach(function(pin){
           if(!(pin.team>0&&pin.startWeek>0))return;
-          plano.push({id:id++,li:li,si:si,team:pin.team,ini:pin.startWeek});
+          plano.push({id:id++,li:li,si:si,team:pin.team,ini:pin.startWeek,
+            ord:(pin.ordem!=null?pin.ordem:1e9)});
         });
       });
     });
+    // De volta à sequência em que foi montado; quem não tiver ordem (ajuste antigo, feito pelo
+    // "Personalizar") entra depois, na ordem de lote, que é o comportamento de antes.
+    plano.sort(function(a,b){ return ((a.ord||0)-(b.ord||0))||(a.id-b.id); });
+    plano.forEach(function(it,i){ it.ord=i; });
     return plano;
   }
   /** Devolve as colocações pra OVR como pins — o formato que o motor já sabe ler, com a
@@ -2154,14 +2159,17 @@
       });
     });
     var grupos={};
-    plano.forEach(function(it){ var k=it.li+'::'+it.si; (grupos[k]||(grupos[k]=[])).push(it); });
+    plano.forEach(function(it,i){ if(it.ord==null)it.ord=i; var k=it.li+'::'+it.si; (grupos[k]||(grupos[k]=[])).push(it); });
     Object.keys(grupos).forEach(function(gk){
       var pr=gk.split('::'), li=+pr[0], si=+pr[1], itens=grupos[gk];
       var k=ovrKey(li,si); if(!k)return;
       var rateio=ofiRateio(li,si,itens.map(function(x){ return x.team; }));
       var o=OVR[k]||(OVR[k]={});
       o.pinned=true;
-      o.pins=itens.map(function(x){ return {team:x.team,startWeek:x.ini,qty:rateio[x.team]}; });
+      // A sequência em que foi montado precisa ser GRAVADA: duas colocações podem cair na mesma
+      // semana (a equipe faz uma na primeira metade e outra na segunda), e sem isso o desempate
+      // caía no número do lote — quem montasse de trás pra frente via o app inverter tudo.
+      o.pins=itens.map(function(x){ return {team:x.team,startWeek:x.ini,qty:rateio[x.team],ordem:x.ord}; });
     });
     adjDirty();
   }
@@ -2314,7 +2322,9 @@
     // lote pequeno consumia uma semana inteira de capacidade: um CFT de 4.500/sem com lotes de
     // 1.000 fazia um lote por semana em vez de quatro e meio, e a produtividade virava enfeite.
     // É a mesma conta do motor ao vivo (startPos = max(pronto, posição da equipe)).
-    var ordem=lista.slice().sort(function(a,b){ return (a.ini-b.ini)||(a.id-b.id); });
+    var ordem=lista.slice().sort(function(a,b){
+      return (a.ini-b.ini)||((a.ord!=null?a.ord:a.id)-(b.ord!=null?b.ord:b.id));
+    });
     var posEquipe={};   // si::team -> intervalos [a,b) que a equipe já ocupa, em posição fracionária
     return ordem.map(function(it){
       var s=SERV[it.si]; if(!s)return null;
@@ -2465,7 +2475,7 @@
     });
     if(!melhor){ toast('Não dá pra calcular '+sv.n+' em '+LOTS[li]+' — falta quantidade ou produtividade.'); return true; }
     ofiSnapshot();
-    OFI.plano.push({id:OFI.prox++,li:li,si:si,team:melhor.t,ini:melhor.r.semana});
+    OFI.plano.push({id:OFI.prox++,li:li,si:si,team:melhor.t,ini:melhor.r.semana,ord:OFI.plano.length});
     if(melhor.r.semana!==semana){
       var m=[];
       if(melhor.r.predNomes.length)m.push('depende de '+melhor.r.predNomes.join(', '));
@@ -2645,7 +2655,7 @@
       if(editId){
         OFI.plano.forEach(function(x){ if(x.id===editId){ x.si=si; x.team=team; x.ini=r.semana; } });
       } else {
-        OFI.plano.push({id:OFI.prox++,li:li,si:si,team:team,ini:r.semana});
+        OFI.plano.push({id:OFI.prox++,li:li,si:si,team:team,ini:r.semana,ord:OFI.plano.length});
       }
       fecha(); ofiRedesenha();
     });
@@ -8437,7 +8447,7 @@
         if(!pins.length)return;
         pinnedLis[li]=true;
         var qtyEachFallback=QTY[li][si]/pins.length;
-        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:p.qty>0?p.qty:qtyEachFallback}); });
+        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:p.qty>0?p.qty:qtyEachFallback,ordem:(p.ordem!=null?p.ordem:1e9)}); });
       });
       // Agrupa por equipe, ordena por semana de início e processa em sequência (posição
       // contínua, igual o cálculo automático) — assim, se um lote termina no meio de uma
@@ -8450,7 +8460,11 @@
       Object.keys(byTeamPins).forEach(function(teamKey){
         var t2=+teamKey;
         var effProd=teamProds[t2-1]>0?teamProds[t2-1]:prod;
-        var list=byTeamPins[teamKey].slice().sort(function(a,b){return a.startWeek-b.startWeek;});
+        // Mesmo desempate da lousa: semana primeiro, e dentro da semana a ordem em que foi
+        // montado. Sem isso o motor e a matriz discordariam na mesma semana.
+        var list=byTeamPins[teamKey].slice().sort(function(a,b){
+          return (a.startWeek-b.startWeek)||((a.ordem||0)-(b.ordem||0));
+        });
         var tPos=0;
         list.forEach(function(p){
           var startPos=Math.max(p.startWeek-1,tPos);
