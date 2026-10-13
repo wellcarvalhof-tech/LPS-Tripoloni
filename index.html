@@ -1234,6 +1234,99 @@
    * leitura — melhor avisar do que deixar digitar algo que se perderia. */
   var OFFLINE_MODE=false, OFFLINE_EM='';
   function isReadOnly(){ return OFFLINE_MODE||(!IS_APP_ADMIN&&MY_ROLE.papel==='visualizador'); }
+
+  /* ================= Desfazer / refazer =================
+   * Um histórico só, trocando de contexto conforme a tela. O retrato é do estado inteiro daquela
+   * edição (é pequeno: ajustes manuais e linha de balanço são objetos de configuração), o que
+   * evita desfazer pela metade.
+   *
+   * O gatilho não é cada ponto de edição espalhado pelo código — é o próprio "ficou sujo":
+   * toda mudança de cronograma já passa por adjDirty() ou lbMarkDirty(). Como o retrato é tirado
+   * DEPOIS da mudança, o módulo guarda o estado anterior em UNDO.atual e empilha esse.
+   *
+   * Fica de fora o que grava campo a campo direto no banco (Serviços, Lotes, Calendário, Médio
+   * Prazo, Produção): ali não existe "estado em edição" pra restaurar, e desfazer significaria
+   * reescrever no banco — outro mecanismo, não este. */
+  var UNDO={ctx:null,atual:null,pilha:[],refaz:[]};
+  var UNDO_CTX={
+    tc:{ rotulo:'cronograma',
+         ler:function(){ return JSON.stringify(OVR||{}); },
+         escrever:function(st){ OVR=JSON.parse(st); adjDirty(); if(typeof renderCrono==='function')renderCrono(); } },
+    lb:{ rotulo:'linha de balanço',
+         ler:function(){ return JSON.stringify(LB||null); },
+         escrever:function(st){ LB=JSON.parse(st); LB_DIRTY=true; go('cr-lb'); } },
+    oficina:{ rotulo:'estudo',
+         ler:function(){ return JSON.stringify((OFI_ESTUDO&&OFI_ESTUDO.plano)||[]); },
+         escrever:function(st){ if(!OFI_ESTUDO)return; OFI_ESTUDO.plano=JSON.parse(st); go('cr-oficina'); } }
+  };
+  /** Qual edição está em jogo na tela de agora. */
+  function undoContexto(){
+    if(current==='cr-oficina')return 'oficina';
+    if(current==='cr-lb')return 'lb';
+    if(current==='cr-matriz')return 'tc';
+    return null;
+  }
+  /** Chamado ao abrir a tela: fixa o ponto de partida sem empilhar nada. */
+  function undoInit(ctx){
+    if(!ctx||!UNDO_CTX[ctx])return;
+    if(UNDO.ctx===ctx)return;
+    UNDO.ctx=ctx; UNDO.pilha=[]; UNDO.refaz=[];
+    UNDO.atual=UNDO_CTX[ctx].ler();
+  }
+  /** Chamado depois de cada mudança. */
+  function undoMarca(ctx){
+    if(!ctx||!UNDO_CTX[ctx])return;
+    var st=UNDO_CTX[ctx].ler();
+    if(UNDO.ctx!==ctx){ UNDO.ctx=ctx; UNDO.pilha=[]; UNDO.refaz=[]; UNDO.atual=st; return; }
+    if(st===UNDO.atual)return;
+    UNDO.pilha.push(UNDO.atual);
+    if(UNDO.pilha.length>60)UNDO.pilha.shift();
+    UNDO.refaz.length=0;
+    UNDO.atual=st;
+  }
+  function undoPode(){ return UNDO.ctx&&UNDO.pilha.length>0; }
+  function undoPodeRefazer(){ return UNDO.ctx&&UNDO.refaz.length>0; }
+  function undoDesfaz(){
+    var c=undoContexto();
+    if(c&&UNDO.ctx!==c)undoInit(c);
+    if(!undoPode()){ toast('Nada pra desfazer.'); return; }
+    UNDO.refaz.push(UNDO.atual);
+    UNDO.atual=UNDO.pilha.pop();
+    UNDO_CTX[UNDO.ctx].escrever(UNDO.atual);
+  }
+  function undoRefaz(){
+    if(!undoPodeRefazer()){ toast('Nada pra refazer.'); return; }
+    UNDO.pilha.push(UNDO.atual);
+    UNDO.atual=UNDO.refaz.pop();
+    UNDO_CTX[UNDO.ctx].escrever(UNDO.atual);
+  }
+  function undoBotoesHTML(){
+    return '<button class="btn" data-undo="z"'+(undoPode()?'':' disabled')+' title="Desfazer (Ctrl+Z)">\u21b6 Desfazer</button>'+
+           '<button class="btn" data-undo="y"'+(undoPodeRefazer()?'':' disabled')+' title="Refazer (Ctrl+Shift+Z)">\u21b7 Refazer</button>';
+  }
+  function undoLigaBotoes(raiz){
+    (raiz||document).querySelectorAll('[data-undo]').forEach(function(b){
+      if(b._undoLigado)return; b._undoLigado=true;
+      b.addEventListener('click',function(){ if(b.getAttribute('data-undo')==='z')undoDesfaz(); else undoRefaz(); });
+    });
+  }
+  /* Ctrl+Z vale em qualquer tela que tenha edição com histórico, e nunca dentro de um campo de
+   * digitação — ali o desfazer é do navegador, e tomá-lo seria pior que não ter atalho. */
+  var UNDO_TECLAS=false;
+  function undoLigaTeclas(){
+    if(UNDO_TECLAS)return; UNDO_TECLAS=true;
+    document.addEventListener('keydown',function(e){
+      if(!(e.ctrlKey||e.metaKey))return;
+      if(!undoContexto())return;
+      var t=e.target, tag=t&&t.tagName;
+      if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable))return;
+      var k=String(e.key||'').toLowerCase();
+      if(k==='z'&&!e.shiftKey){ e.preventDefault(); undoDesfaz(); }
+      else if((k==='z'&&e.shiftKey)||k==='y'){ e.preventDefault(); undoRefaz(); }
+    });
+  }
+  /** Marca o cronograma como alterado — e guarda o passo pro desfazer. */
+  function adjDirty(){ ADJ_DIRTY=true; undoMarca('tc'); }
   function refreshOffBar(){
     var b=document.getElementById('offBar'); if(!b)return;
     if(!OFFLINE_MODE){ b.style.display='none'; return; }
@@ -1370,7 +1463,11 @@
     var contentEl0=document.getElementById('content');
     var keepContentScroll=sameView&&contentEl0?contentEl0.scrollTop:0;
     var keepPageScroll=sameView?(window.scrollY||window.pageYOffset||0):0;
-    current=view; markActive();
+    current=view;
+    // Antes de montar o HTML: os botões de desfazer são desenhados junto com a tela, e trocar o
+    // contexto depois deixava "Refazer" aceso com o histórico da tela anterior.
+    undoInit(undoContexto());
+    markActive();
     var c=CRUMB[view]||['—'];
     document.getElementById('crumb').innerHTML=c.map(function(x,i){return i===c.length-1?'<b>'+x+'</b>':x;}).join(' <span style="opacity:.4">/</span> ');
     if(mobileBloqueada(view)){
@@ -2005,10 +2102,11 @@
     var w=document.querySelector('.tc-wrap.ofi');
     if(w)o.scroll={l:w.scrollLeft,b:w.scrollHeight-w.scrollTop};
     if(o.ovr){
-      tcmEscreveOvr(o.plano);          // o manual vive em OVR; a tela é só a vista dele
+      tcmEscreveOvr(o.plano);          // o manual vive em OVR; adjDirty() lá dentro guarda o passo
       renderCrono();                   // renderCrono já preserva a rolagem da matriz
       return;
     }
+    undoMarca('oficina');
     go(current);
   }
   function ofiRestauraScroll(){
@@ -2026,7 +2124,6 @@
     if(current==='cr-matriz'){ OFI=OFI_MATRIZ||(OFI_MATRIZ=ofiNovo(true)); }
     else { OFI=OFI_ESTUDO||(OFI_ESTUDO=ofiNovo(false)); }
     if(!OFI.pincel)OFI.pincel={si:null,team:0};
-    if(!OFI.hist)OFI.hist=[]; if(!OFI.refaz)OFI.refaz=[];
     return OFI;
   }
   /** Lê as colocações do manual a partir dos pins já gravados em OVR. */
@@ -2066,7 +2163,7 @@
       o.pinned=true;
       o.pins=itens.map(function(x){ return {team:x.team,startWeek:x.ini,qty:rateio[x.team]}; });
     });
-    ADJ_DIRTY=true;
+    adjDirty();
   }
   /** Antes de desenhar o manual, recarrega o plano do estado da obra (fonte da verdade). */
   function tcmSync(){
@@ -2078,40 +2175,15 @@
   /* Desfazer. Guarda o plano inteiro serializado antes de cada mudança: ele é pequeno (uma linha
    * por colocação) e assim não há risco de um desfazer parcial deixar o estudo meio arrumado.
    * Toda mudança nova descarta o refazer, que é o que se espera de um histórico linear. */
-  function ofiSnapshot(){
-    var o=ofiInit();
-    o.hist.push(JSON.stringify(o.plano));
-    if(o.hist.length>60)o.hist.shift();
-    o.refaz.length=0;
-  }
-  function ofiDesfaz(){
-    var o=ofiInit(); if(!o.hist.length){ toast('Nada pra desfazer.'); return; }
-    o.refaz.push(JSON.stringify(o.plano));
-    o.plano=JSON.parse(o.hist.pop());
-    ofiRedesenha();
-  }
-  function ofiRefaz(){
-    var o=ofiInit(); if(!o.refaz.length){ toast('Nada pra refazer.'); return; }
-    o.hist.push(JSON.stringify(o.plano));
-    o.plano=JSON.parse(o.refaz.pop());
-    ofiRedesenha();
-  }
+  /* O histórico virou um só, no módulo UNDO: aqui ficam só os apelidos, porque o retrato passou
+   * a ser tirado DEPOIS da mudança (em ofiRedesenha), não antes. */
+  function ofiSnapshot(){}
+  function ofiDesfaz(){ undoDesfaz(); }
+  function ofiRefaz(){ undoRefaz(); }
   /* Ctrl+Z / Ctrl+Shift+Z valem só dentro da oficina e fora de campo de digitação — em cima de um
    * input o desfazer é do navegador, e roubar isso seria pior que não ter atalho. Registrado uma
    * vez só: ofiDraw roda a cada redesenho e empilharia um listener por vez. */
-  var OFI_TECLAS=false;
-  function ofiLigaTeclas(){
-    if(OFI_TECLAS)return; OFI_TECLAS=true;
-    document.addEventListener('keydown',function(e){
-      if(current!=='cr-oficina')return;
-      if(!(e.ctrlKey||e.metaKey))return;
-      var t=e.target, tag=t&&t.tagName;
-      if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable))return;
-      var k=String(e.key||'').toLowerCase();
-      if(k==='z'&&!e.shiftKey){ e.preventDefault(); ofiDesfaz(); }
-      else if((k==='z'&&e.shiftKey)||k==='y'){ e.preventDefault(); ofiRefaz(); }
-    });
-  }
+  function ofiLigaTeclas(){ undoLigaTeclas(); }
   /* Menu do botão direito. Flutuante em vez de diálogo: aqui ele é um atalho em cima da célula,
    * e abrir uma caixa modal no meio da tela pra cada clique quebraria o ritmo de montar. */
   var OFI_MENU=null;
@@ -2698,8 +2770,7 @@
       (pend.length>12?('<li>e mais '+(pend.length-12)+'</li>'):'')+'</ul></div>'):'';
     var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
       (OFI.ovr?('<button class="btn primary" id="tcmSalvar"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"'):'Salvar cronograma')+'</button>'):'')+
-      '<button class="btn" id="ofiDesfaz"'+(OFI.hist.length?'':' disabled')+' title="Desfazer a última mudança (Ctrl+Z)">↶ Desfazer</button>'+
-      '<button class="btn" id="ofiRefaz"'+(OFI.refaz.length?'':' disabled')+' title="Refazer (Ctrl+Shift+Z)">↷ Refazer</button>'+
+      undoBotoesHTML()+
       '<button class="btn" id="ofiLimpar"'+(segs.length?'':' disabled')+'>Limpar estudo</button>'+
       '<button class="btn" id="ofiArrumar"'+(pend.length?'':' disabled')+' title="Desliza quem está fora de ordem para a primeira semana válida">Arrumar pendências</button>'+
       '<span class="note" style="align-self:center">'+segs.length+' colocação(ões) · '+faltam+' serviço(s) com quantidade ainda fora da matriz</span></div>';
@@ -2766,10 +2837,7 @@
     if(arr)arr.addEventListener('click',function(){ ofiArrumar(); ofiRedesenha(); });
     ofiRestauraScroll();
     ofiLigaTeclas(); ofiLigaFechaMenu(); ofiFechaMenu();
-    var des=document.getElementById('ofiDesfaz');
-    if(des)des.addEventListener('click',ofiDesfaz);
-    var ref=document.getElementById('ofiRefaz');
-    if(ref)ref.addEventListener('click',ofiRefaz);
+    undoLigaBotoes();
     var pro=document.getElementById('ofiPromove');
     if(pro)pro.addEventListener('click',function(){
       if(isReadOnly()){ toast('Seu perfil não permite mudar o cronograma.'); return; }
@@ -6964,7 +7032,7 @@
   function afterRender(view){
     if(view==='torre'){setupTorre();}
     if(view==='torre-rel'){execReportDraw();}
-    if(view==='cr-lb'){wireLinhaBalanco();}
+    if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
     if(view==='ac-curvas'){
       renderCurvaS();
       var curveSelEl=document.getElementById('cvCurveSel');
@@ -7011,8 +7079,8 @@
       });
     }
     if(view==='cr-prod'){prodHoraDraw();}
-    if(view==='cr-oficina'){ofiDraw();}
-    if(view==='cr-matriz'){setupCrono(); wireModoTC(); wireTrava();}
+    if(view==='cr-oficina'){undoInit('oficina'); ofiDraw();}
+    if(view==='cr-matriz'){undoInit('tc'); setupCrono(); wireModoTC(); wireTrava();}
     if(view==='cr-cenarios'){
       cmpAll();
       // Marcar/desmarcar uma linha redesenha só os gráficos (sem recarregar a aba inteira, que
@@ -7061,7 +7129,7 @@
             });
           }
           window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
-          ADJ_DIRTY=true; ADJ_PENDING={};
+          adjDirty(); ADJ_PENDING={};
           ACTIVE_CENARIO={id:c.id,nome:c.nome};
           window._cronoTab='ajuste';
           toast('Cenário "'+c.nome+'" carregado — você está editando ele agora (calendário, serviços e ajustes).');
@@ -8169,7 +8237,7 @@
   function tcManual(){ return OVR&&OVR.__tcmodo==='manual'; }
   function tcSetModo(m){
     if(m==='manual')OVR.__tcmodo='manual'; else delete OVR.__tcmodo;
-    ADJ_DIRTY=true;
+    adjDirty();
   }
   /** Duas semanas em comum entre os segmentos de uma mesma equipe só são um problema de
    *  verdade se sobrarem mais de uma semana de sobra, ou se a única semana em comum NÃO for
@@ -8746,7 +8814,7 @@
   function matBloqueada(){ return isReadOnly()||tcTravada(); }
   function tcDestrava(v){
     if(v)OVR.__editavel=true; else delete OVR.__editavel;
-    ADJ_DIRTY=true;
+    adjDirty();
   }
   /* 'plano' = o cronograma como está planejado; 'projecao' = o mesmo cronograma reprojetado no
    * ritmo que os apontamentos mostram. A linha de base não entra nessa conta: ela é o retrato
@@ -10123,7 +10191,7 @@
       var prod=pnum(row[7]); if(prod>0)o.productivity=prod;
       if(Object.keys(o).length){ OVR[k]=o; adjApplied++; }
     });
-    if(adjApplied>0)ADJ_DIRTY=true;
+    if(adjApplied>0)adjDirty();
     return adjApplied;
   }
 
@@ -10143,7 +10211,7 @@
       OVR[k]=Object.assign({},OVR[k],patch);
       applied++;
     });
-    if(applied>0)ADJ_DIRTY=true;
+    if(applied>0)adjDirty();
     return applied;
   }
 
@@ -10566,7 +10634,7 @@
     }
     return root.servicos[id];
   }
-  function lbMarkDirty(){ LB_DIRTY=true; refreshTopSaveBtn(); }
+  function lbMarkDirty(){ LB_DIRTY=true; undoMarca('lb'); refreshTopSaveBtn(); }
   async function lbSalvar(){
     if(!selectedObra||!LB)return;
     try{
@@ -11703,7 +11771,7 @@
     }
     return head('Linha de Balanço','Detalhamento do Tempo-Caminho por serviço.',
         '<button class="btn" id="lbImportar">↥ Importar cronograma</button>'+
-        '<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
+        undoBotoesHTML()+'<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
       '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+abas+'</div>'+
       cabec+corpo;
   };
@@ -11759,6 +11827,7 @@
     if(imp)imp.addEventListener('click',importarCronogramaArquivo);
     var save=document.getElementById('lbSave');
     if(save)save.addEventListener('click',lbSalvar);
+    undoLigaTeclas(); undoLigaBotoes();
     root.querySelectorAll('[data-lbtab]').forEach(function(b){
       b.addEventListener('click',function(){ LB_TAB=b.getAttribute('data-lbtab'); MF_SEL=null; go('cr-lb'); });
     });
@@ -12023,7 +12092,7 @@
         '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar cronograma')+'</button>':'')+
       (tab==='ajuste'&&!matBloqueada()?
         '<button class="btn" data-fsdrawer="1" title="Abrir/fechar o painel de lotes e sequência por equipe">⚙ Equipes e sequência</button>'+
-        '<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
+        undoBotoesHTML()+'<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
         '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar ajustes')+'</button>':'')+
       (ACTIVE_CENARIO?'<span class="note" style="color:var(--warn);white-space:nowrap">Editando cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</span>':'')+
       (ADJ_DIRTY?'<span class="note" style="color:var(--warn);white-space:nowrap">ajustes não salvos</span>':'')+
@@ -12065,6 +12134,12 @@
       });
     });
   }
+  /** Barra de desfazer. Fica DENTRO do conteúdo redesenhado: no cabeçalho da tela ela
+   *  envelheceria, porque renderCrono só troca #cronoContent. */
+  function undoBarraHTML(){
+    if(isReadOnly())return '';
+    return '<div style="display:flex;gap:8px;margin-bottom:8px">'+undoBotoesHTML()+'</div>';
+  }
   function cronoContent(){
     var tab=window._cronoTab||'tc';
     if(tab==='ajuste') return fsBarHTML()+'<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
@@ -12072,7 +12147,7 @@
       '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.'+
       (ADJ_DIRTY?' <b style="color:var(--warn)">Há ajustes não salvos.</b>':'')+'</p></div>'+
       '<div style="display:flex;gap:8px;white-space:nowrap">'+
-        '<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
+        undoBotoesHTML()+'<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
@@ -12092,10 +12167,10 @@
         matrixTableHTML(true,proj);
     }
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+ofiLousaHTML(false); }
-    if(tab==='equipe') return fsBarHTML()+editarPorEquipeHTML();
+    if(tab==='equipe') return fsBarHTML()+undoBarraHTML()+editarPorEquipeHTML();
     if(tab==='resumo') return fsBarHTML()+resumoHTML();
     if(tab==='gantt') return fsBarHTML()+ganttHTML();
-    return fsBarHTML()+matrixTableHTML(true); // 'tc'
+    return fsBarHTML()+undoBarraHTML()+matrixTableHTML(true); // 'tc'
   }
   function renderCrono(){
     var c=document.getElementById('cronoContent'); if(!c)return;
@@ -12125,6 +12200,7 @@
       window.scrollTo(0,prevPageScroll);
     });
     wireMatrixZoom();
+    undoLigaTeclas(); undoLigaBotoes();
     refreshTopSaveBtn(); applyReadOnly();
     if(tcManual()&&(window._cronoTab||'tc')==='tc'){
       ofiDraw();
@@ -12143,7 +12219,7 @@
       var clearB=document.getElementById('clearAdjustsBtn');
       if(clearB)clearB.addEventListener('click',function(){
         if(!confirm('Remover todos os ajustes manuais deste cronograma? (precisa clicar em "Salvar ajustes" pra valer)'))return;
-        OVR={}; ADJ_PENDING={}; ADJ_DIRTY=true; renderCrono();
+        OVR={}; ADJ_PENDING={}; adjDirty(); renderCrono();
       });
       var saveB=document.getElementById('saveAdjustsBtn');
       if(saveB)saveB.addEventListener('click',async function(){
@@ -12240,7 +12316,7 @@
     refreshPreview();
     var clearB=document.getElementById('smClear');
     if(clearB)clearB.addEventListener('click',function(){
-      var k=ovrKey(li,si); if(k){delete OVR[k]; delete ADJ_PENDING[k]; ADJ_DIRTY=true;}
+      var k=ovrKey(li,si); if(k){delete OVR[k]; delete ADJ_PENDING[k]; adjDirty();}
       close(); renderCrono();
     });
     document.getElementById('smApply').addEventListener('click',function(){
@@ -12262,7 +12338,7 @@
         }
         OVR[kNew]={pinned:true,pins:[{team:newTeam,startWeek:projWeek}]};
         ADJ_PENDING[kNew]=true; if(kOld)ADJ_PENDING[kOld]=true;
-        ADJ_DIRTY=true;
+        adjDirty();
         close(); renderCrono();
       }
       if(p.conflicts.length){
@@ -12509,7 +12585,7 @@
             OVR[kDst]=newVal;
             if(kOrig&&kOrig!==kDst)cleanupOrigin(kOrig);
             ADJ_PENDING[kDst]=true; if(kOrig)ADJ_PENDING[kOrig]=true;
-            ADJ_DIRTY=true; renderCrono();
+            adjDirty(); renderCrono();
           }
           if(conflicts.length){
             openOverlapWarning(sv.n,team,conflicts,function(choice){
@@ -12568,7 +12644,7 @@
         clearTimeout(_segClickTimer); _segClickTimer=null; _segClickEl=null;
         var li=+el.getAttribute('data-li'), si=+el.getAttribute('data-si');
         var k=ovrKey(li,si); if(!k||!OVR[k])return;
-        delete OVR[k]; delete ADJ_PENDING[k]; ADJ_DIRTY=true; renderCrono();
+        delete OVR[k]; delete ADJ_PENDING[k]; adjDirty(); renderCrono();
       });
     });
   }
@@ -12808,7 +12884,7 @@
         var cur=lotTeams(li);
         var next=cb.checked?(cur.indexOf(team)>=0?cur:cur.concat([team])):cur.filter(function(t){return t!==team;});
         setLotTeams(li,next);
-        ADJ_DIRTY=true;
+        adjDirty();
         renderCrono();
       });
     });
@@ -12822,7 +12898,7 @@
         OVR[k]=Object.assign({},OVR[k],{seq:i});
         ADJ_PENDING[k]=true;
       });
-      ADJ_DIRTY=true;
+      adjDirty();
       renderCrono();
     }
     function reorderSeqTo(fromLi,toLi){
@@ -12837,7 +12913,7 @@
         OVR[k]=Object.assign({},OVR[k],{seq:i});
         ADJ_PENDING[k]=true;
       });
-      ADJ_DIRTY=true;
+      adjDirty();
       renderCrono();
     }
     // Arraste por pointer events (não drag-and-drop nativo do navegador) — mesmo mecanismo já
