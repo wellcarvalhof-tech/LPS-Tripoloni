@@ -9393,22 +9393,46 @@
       probe.remove();
       var alturaUtil=pageH-headH-slack;
       if(window._pdfFormato==='unica'){
-        /* Uma página do tamanho exato da matriz. A escala fica em 1 (nada de letra encolhida) e
-         * quem imprime decide papel e redução no diálogo — que é o que dá pra fazer com plotter
-         * ou com "ajustar à página". O limite de 5 m é do próprio PDF (200 polegadas); acima
-         * disso a matriz é reduzida só o necessário pra caber. */
-        var larguraNat=fixedW+lotWs.reduce(function(a,b){return a+b;},0);
-        var escU=Math.min(1,5000/((larguraNat+40)/pxPerMm),5000/((naturalH+headH+40)/pxPerMm));
-        var mmW=Math.ceil((larguraNat*escU)/pxPerMm)+16;
-        var mmH=Math.ceil(((naturalH+headH)*escU)/pxPerMm)+16;
+        /* Uma página do tamanho exato do conteúdo. Escala 1 (nada de letra encolhida); papel e
+         * redução ficam pro diálogo de impressão ou pra plotter.
+         *
+         * O tamanho NÃO é estimado: o bloco é montado, medido como vai sair, e só então o @page
+         * é escrito. Estimar pela tabela sozinha ignorava o cabeçalho e o quadro-resumo, e aí o
+         * conteúdo passava da página e o navegador quebrava em duas — que era o problema. */
+        var resumoHTML=(foot&&foot.innerHTML)||'';
+        if(foot)foot.innerHTML='';   // o resumo entra na mesma folha; não pode sair de novo
+        mat.innerHTML='<div class="print-page" id="pgUnica">'+
+          '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span id="pgUnicaInfo">Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+'</span></div>'+
+          matrixTableCore(true,allIdxs,segsAll)+
+          (resumoHTML?('<div style="margin-top:8px">'+resumoHTML+'</div>'):'')+
+        '</div>';
+        var antes=mat.style.cssText;
+        mat.style.cssText='display:block;position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content';
+        var pg=document.getElementById('pgUnica');
+        var realW=pg.offsetWidth, realH=pg.offsetHeight;
+        mat.style.cssText=antes;
+        // Teto de 5 m por lado: é o limite do próprio PDF (200 polegadas).
+        var margem=8, folgaMM=6;
+        var escU=Math.min(1,(5000-2*margem)/Math.max(1,realW/pxPerMm),(5000-2*margem)/Math.max(1,realH/pxPerMm));
+        var mmW=Math.ceil(realW*escU/pxPerMm)+2*margem+folgaMM;
+        var mmH=Math.ceil(realH*escU/pxPerMm)+2*margem+folgaMM;
+        if(escU<1){
+          var zd=document.createElement('div');
+          zd.className='print-zoom'; zd.style.zoom=(+escU.toFixed(3));
+          while(pg.firstChild)zd.appendChild(pg.firstChild);
+          pg.appendChild(zd);
+        }
+        var info=document.getElementById('pgUnicaInfo');
+        if(info)info.textContent+=' · folha única '+mmW+'×'+mmH+' mm';
         var est=document.getElementById('pdfPageSize')||document.createElement('style');
         est.id='pdfPageSize';
-        est.textContent='@media print{@page{size:'+mmW+'mm '+mmH+'mm;margin:8mm}'+
-          'body.printing-mat .print-page{break-after:auto;page-break-after:auto}}';
+        // break-inside:avoid na folha vira quebra quando o conteúdo passa da página; aqui ele
+        // cabe por construção, e desligar as quebras garante que não sobre uma folha em branco.
+        est.textContent='@media print{@page{size:'+mmW+'mm '+mmH+'mm;margin:'+margem+'mm}'+
+          'body.printing-mat .print-page{break-after:auto!important;page-break-after:auto!important;'+
+          'break-inside:auto!important;page-break-inside:auto!important}'+
+          'body.printing-mat #printFoot{display:none!important}}';
         document.head.appendChild(est);
-        mat.innerHTML='<div class="print-page">'+
-          '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+' · folha única '+mmW+'×'+mmH+' mm</span></div>'+
-          '<div class="print-zoom" style="zoom:'+(+escU.toFixed(3))+'">'+matrixTableCore(true,allIdxs,segsAll)+'</div></div>';
         return;
       }
       /* Antes a escala saía só da ALTURA e os lotes eram fatiados na largura que sobrasse. Numa
