@@ -9377,7 +9377,7 @@
       var probe=document.createElement('div');
       probe.className='print-page';
       probe.style.cssText='position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content';
-      probe.innerHTML=matrixTableCore(true,allIdxs,segsAll);
+      probe.innerHTML=matrixTableCore(true,allIdxs,segsAll,{compacto:true});
       document.body.appendChild(probe);
       var ptable=probe.querySelector('table');
       var naturalH=ptable.offsetHeight;
@@ -9403,7 +9403,7 @@
         if(foot)foot.innerHTML='';   // o resumo entra na mesma folha; não pode sair de novo
         mat.innerHTML='<div class="print-page" id="pgUnica">'+
           '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span id="pgUnicaInfo">Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+'</span></div>'+
-          matrixTableCore(true,allIdxs,segsAll)+
+          matrixTableCore(true,allIdxs,segsAll,{compacto:true})+
           (resumoHTML?('<div style="margin-top:8px">'+resumoHTML+'</div>'):'')+
         '</div>';
         var antes=mat.style.cssText;
@@ -9505,7 +9505,7 @@
           folhasHTML.push('<div class="print-page'+(n<total?' brk':'')+'">'+
             '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+faixa+'</span></div>'+
             '<div class="print-zoom" style="zoom:'+scale+'">'+
-              matrixTableCore(true,chunk,segsAll,{wIni:fx.de,wFim:fx.ate,semSumario:!fx.ultima})+'</div></div>');
+              matrixTableCore(true,chunk,segsAll,{wIni:fx.de,wFim:fx.ate,semSumario:!fx.ultima,compacto:true})+'</div></div>');
         });
       });
       mat.innerHTML=folhasHTML.join('');
@@ -10530,6 +10530,17 @@
         if(wx>totalWeeks)totalWeeks=wx;
       });
     }
+    // Semanas com alguma produção visível nesta fatia de lotes — na impressão, as que não têm
+    // nada viram uma linha só. Era daí o bloco em branco ocupando meia folha.
+    var semComConteudo={};
+    if(opts.compacto){
+      Object.keys(cell).forEach(function(kk){
+        var pr2=kk.split('::'), w2=+pr2[0], li3=+pr2[1];
+        if(lotIdxs.indexOf(li3)<0)return;
+        var tem=cell[kk].some(function(sc){ return sc.qty>0&&!TC_HIDDEN_SVC[sc.sg.si]; });
+        if(tem)semComConteudo[w2]=1;
+      });
+    }
     var canDragCols=(window._cronoTab==='ajuste');
     var th='<th>Segunda-feira</th><th>Semana</th>'+lotIdxs.map(function(li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+LOTS[li]+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
@@ -10547,6 +10558,19 @@
     var body='';
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
+      if(opts.compacto&&!entry.isHoliday&&!semComConteudo[entry.working]){
+        // Agrupa a corrida inteira numa linha. Duas ou mais: abaixo disso a linha resumida
+        // ocuparia o mesmo espaco da semana que ela esconde, e a leitura do tempo piora.
+        var jj=idx, maisNova=entry, maisVelha=entry, nv=0;
+        while(jj>=0&&!calRows[jj].isHoliday&&!semComConteudo[calRows[jj].working]){ maisVelha=calRows[jj]; nv++; jj--; }
+        if(nv>=2){
+          body+='<tr class="tcm-holrow"><td class="dt">'+fmtDate(maisVelha.date)+'</td><td class="wk">⋯</td>'+
+            '<td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">'+nv+' semanas sem produção — '+
+            fmtDate(maisVelha.date)+' a '+fmtDate(maisNova.date)+'</td></tr>';
+          idx=jj+1;
+          continue;
+        }
+      }
       if(entry.isHoliday){
         body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehSemanaDeHoje(d)?'<span class="tcm-hojetag">hoje</span>':'')+'</td><td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
         continue;
