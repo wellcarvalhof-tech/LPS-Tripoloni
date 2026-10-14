@@ -9356,39 +9356,91 @@
       document.body.appendChild(probe);
       var ptable=probe.querySelector('table');
       var naturalH=ptable.offsetHeight;
+      var theadH=(ptable.tHead?ptable.tHead.offsetHeight:0);
+      var corpo=ptable.querySelectorAll('tbody tr');
+      var linhaH=corpo.length?Math.max(6,(naturalH-theadH)/corpo.length):12;
+      var nSum=ptable.querySelectorAll('tbody tr.sumrow').length;
+      var nSemRows=corpo.length-nSum;             // linhas de semana (inclui paralisações)
+      var sumH=nSum*linhaH;
       var ths=ptable.querySelectorAll('thead th');
       var fixedW=(ths[0]?ths[0].offsetWidth:0)+(ths[1]?ths[1].offsetWidth:0);
       var lotWs=[]; for(var ti=2;ti<ths.length;ti++)lotWs.push(ths[ti].offsetWidth||60);
       probe.remove();
-      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
-      // de semanas isso soma — sem a folga a última linha pode escorregar pra uma folha vazia.
-      var scale=Math.max(0.12,Math.min(1.6,+((pageH-headH-slack)/Math.max(1,naturalH)*0.97).toFixed(3)));
-      // Quantos lotes cabem em cada folha: acumula a largura real de cada coluna até estourar.
-      // Primeiro descobre quantas folhas são necessárias (guloso), depois redistribui os lotes
-      // em fatias de largura parecida — senão a última folha podia ficar com um lote sozinho.
-      var availW=pageW/scale*0.97-fixedW;
-      function splitLots(target){
+      var alturaUtil=pageH-headH-slack;
+      /* Antes a escala saía só da ALTURA e os lotes eram fatiados na largura que sobrasse. Numa
+       * obra com muitas semanas e poucos lotes a matriz é alta e estreita: ela encolhia pra caber
+       * na altura (54% numa medição real) e metade da folha ficava em branco, com a letra miúda.
+       * Agora as semanas também podem ser fatiadas: procura-se em quantas faixas de semanas e de
+       * lotes a folha fica mais cheia — ou seja, qual combinação permite a MAIOR escala. */
+      function fatiaLotes(av,target){
         var out=[], cur=[], curW=0;
         for(var k=0;k<allIdxs.length;k++){
-          var wcol=lotWs[k]||60; // lotWs está na ordem de allIdxs (uma coluna por lote em exibição)
-          if(cur.length&&(curW+wcol>availW||curW>=target)){ out.push(cur); cur=[]; curW=0; }
+          var wcol=lotWs[k]||60;
+          if(cur.length&&(curW+wcol>av||curW>=target)){ out.push(cur); cur=[]; curW=0; }
           cur.push(allIdxs[k]); curW+=wcol;
         }
         if(cur.length)out.push(cur);
         return out;
       }
-      var chunks=splitLots(Infinity);
-      if(chunks.length>1){
-        var totalW=lotWs.reduce(function(a,b){return a+b;},0);
-        var balanced=splitLots(totalW/chunks.length);
-        if(balanced.length===chunks.length)chunks=balanced;
+      var totalW=lotWs.reduce(function(a,b){return a+b;},0);
+      var melhor=null;
+      for(var nR=1;nR<=6&&nR<=Math.max(1,nSemRows);nR++){
+        var porFaixa=Math.ceil(nSemRows/nR);
+        // só a última faixa de semanas leva o resumo por serviço
+        var hFaixa=theadH+porFaixa*linhaH+(nR===1?sumH:0);
+        var escH=alturaUtil/Math.max(1,hFaixa);
+        var esc=Math.min(1.25,escH);
+        var av=pageW/esc*0.97-fixedW;
+        if(av<=0)continue;
+        var cols=fatiaLotes(av,Infinity);
+        // largura real da maior fatia, pra escala não estourar a folha
+        var maiorW=0, acc=0, idx0=0;
+        cols.forEach(function(c){ var w2=0; for(var q=0;q<c.length;q++)w2+=lotWs[allIdxs.indexOf(c[q])]||60; maiorW=Math.max(maiorW,w2); });
+        var escW=pageW*0.97/Math.max(1,maiorW+fixedW);
+        esc=Math.min(1.25,escH,escW);
+        var folhas=cols.length*nR;
+        if(!melhor||esc>melhor.esc+0.02||(Math.abs(esc-melhor.esc)<=0.02&&folhas<melhor.folhas))
+          melhor={nR:nR,esc:esc,cols:cols,folhas:folhas,porFaixa:porFaixa};
       }
-      mat.innerHTML=chunks.map(function(chunk,pi){
-        var faixa=chunks.length>1?(' — Lotes '+LOTS[chunk[0]]+' a '+LOTS[chunk[chunk.length-1]]+' — folha '+(pi+1)+'/'+chunks.length):'';
-        return '<div class="print-page'+(pi<chunks.length-1?' brk':'')+'">'+
-          '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+faixa+'</span></div>'+
-          '<div class="print-zoom" style="zoom:'+scale+'">'+matrixTableCore(true,chunk,segsAll)+'</div></div>';
-      }).join('');
+      if(!melhor)melhor={nR:1,esc:Math.max(0.12,alturaUtil/Math.max(1,naturalH)),cols:[allIdxs],folhas:1,porFaixa:nSemRows};
+      var chunks=melhor.cols;
+      if(chunks.length>1){
+        var bal=fatiaLotes(pageW/melhor.esc*0.97-fixedW,totalW/chunks.length);
+        if(bal.length===chunks.length)chunks=bal;
+      }
+      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
+      // de semanas isso soma — sem a folga a última linha pode escorregar pra uma folha vazia.
+      var scale=Math.max(0.12,Math.min(1.6,+(melhor.esc*0.97).toFixed(3)));
+      // Com a escala já decidida, cada folha leva quantas semanas couberem de fato — dividir em
+      // partes iguais deixava sobra de altura em todas elas.
+      var cabem=Math.max(1,Math.floor((alturaUtil/scale-theadH)/Math.max(1,linhaH)));
+      var faixas=[], pos=1;
+      while(pos<=nSemRows){
+        var sobra=nSemRows-pos+1;
+        // a última leva também o resumo por serviço, que ocupa algumas linhas
+        var cabeAqui=(sobra<=cabem-nSum)?sobra:Math.min(cabem,sobra);
+        var ate=Math.min(nSemRows,pos+cabeAqui-1);
+        faixas.push({de:pos,ate:ate,ultima:false});
+        pos=ate+1;
+      }
+      if(!faixas.length)faixas.push({de:1,ate:nSemRows,ultima:true});
+      faixas[faixas.length-1].ultima=true;
+      var folhasHTML=[], total=chunks.length*faixas.length, n=0;
+      chunks.forEach(function(chunk){
+        faixas.forEach(function(fx){
+          n++;
+          var rot=[];
+          if(chunks.length>1)rot.push('lotes '+LOTS[chunk[0]]+' a '+LOTS[chunk[chunk.length-1]]);
+          // Data em vez de número ISO: numa obra que atravessa o ano, "S37 a S4" parece erro.
+          if(faixas.length>1)rot.push(fmtDate(mondayOf(fx.de))+' a '+fmtDate(mondayOf(fx.ate)));
+          var faixa=(total>1?(' — '+(rot.length?rot.join(' · ')+' — ':'')+'folha '+n+'/'+total):'');
+          folhasHTML.push('<div class="print-page'+(n<total?' brk':'')+'">'+
+            '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+faixa+'</span></div>'+
+            '<div class="print-zoom" style="zoom:'+scale+'">'+
+              matrixTableCore(true,chunk,segsAll,{wIni:fx.de,wFim:fx.ate,semSumario:!fx.ultima})+'</div></div>');
+        });
+      });
+      mat.innerHTML=folhasHTML.join('');
     }
   }
 
@@ -10414,6 +10466,16 @@
     var th='<th>Segunda-feira</th><th>Semana</th>'+lotIdxs.map(function(li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+LOTS[li]+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
     var calRows=buildCalendarRows(totalWeeks);
+    // Recorte de semanas (impressão em várias folhas). A semana de uma linha de paralisação é a
+    // da semana útil seguinte, senão o recorte perderia a linha ou a repetiria nas duas folhas.
+    if(opts.wIni||opts.wFim){
+      var loW=opts.wIni||1, hiW=opts.wFim||totalWeeks, ultW=0;
+      calRows=calRows.filter(function(e){
+        if(!e.isHoliday)ultW=e.working;
+        var ww=e.isHoliday?(ultW+1):e.working;
+        return ww>=loW&&ww<=hiW;
+      });
+    }
     var body='';
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
@@ -10464,7 +10526,7 @@
       var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
       body+='<tr'+(cls?' class="'+cls+'"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
-    if(withSummary){
+    if(withSummary&&!opts.semSumario){
       body+=SERV.map(function(s,si){
         if(TC_HIDDEN_SVC[si])return '';
         var hex=svcColor(s);
