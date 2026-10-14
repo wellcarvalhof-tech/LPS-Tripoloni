@@ -9276,7 +9276,31 @@
     XLSX.writeFile(wb,nome+'_dados.xlsx');
     toast('Dados exportados.');
   }
-  function exportPdf(){
+  /** Pergunta o formato antes de imprimir. Folha única sai numa página do tamanho exato da
+   *  matriz: o PDF fica com uma página só, e a escolha de papel e escala passa a ser do diálogo
+   *  de impressão (ou da plotter), em vez de o app decidir por quem imprime. */
+  function exportPdfDialogo(){
+    if(!LOTS.length||!SERV.length){ exportPdf('a4'); return; }
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:470px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Exportar PDF</div>'+
+      '<div class="note" style="margin-bottom:12px">Como a matriz deve ser dividida no papel.</div>'+
+      '<div style="display:flex;flex-direction:column;gap:10px">'+
+        '<button class="btn" id="pdfA4" style="text-align:left;padding:10px 12px;height:auto">'+
+          '<b>A4 paisagem, várias folhas</b><br><span class="note">Pronto pra imprimir em impressora comum. O app escolhe a escala e divide por lotes e semanas.</span></button>'+
+        '<button class="btn" id="pdfUm" style="text-align:left;padding:10px 12px;height:auto">'+
+          '<b>Folha única, sob medida</b><br><span class="note">Uma página só, do tamanho da matriz inteira. Você ajusta papel e escala no diálogo de impressão — serve pra plotter ou pra "ajustar à página".</span></button>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" id="pdfCancel">Cancelar</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#pdfCancel').addEventListener('click',fecha);
+    back.querySelector('#pdfA4').addEventListener('click',function(){ fecha(); exportPdf('a4'); });
+    back.querySelector('#pdfUm').addEventListener('click',function(){ fecha(); exportPdf('unica'); });
+  }
+  function exportPdf(formato){
+    window._pdfFormato=(formato==='unica')?'unica':'a4';
     window._cronoTab='tc'; // relatório sempre a partir da visão limpa (com totais por lote)
     var prevZoom=window._matrixZoom||1;
     var prevTitle=document.title;
@@ -9298,6 +9322,7 @@
       document.body.classList.remove('printing-mat');
       window._matrixZoom=prevZoom; document.title=prevTitle;
       var m=document.getElementById('printMat'); if(m)m.innerHTML='';
+      var pg=document.getElementById('pdfPageSize'); if(pg)pg.remove();
       renderCrono(); window.onafterprint=null;
     };
     window.print();
@@ -9367,6 +9392,25 @@
       var lotWs=[]; for(var ti=2;ti<ths.length;ti++)lotWs.push(ths[ti].offsetWidth||60);
       probe.remove();
       var alturaUtil=pageH-headH-slack;
+      if(window._pdfFormato==='unica'){
+        /* Uma página do tamanho exato da matriz. A escala fica em 1 (nada de letra encolhida) e
+         * quem imprime decide papel e redução no diálogo — que é o que dá pra fazer com plotter
+         * ou com "ajustar à página". O limite de 5 m é do próprio PDF (200 polegadas); acima
+         * disso a matriz é reduzida só o necessário pra caber. */
+        var larguraNat=fixedW+lotWs.reduce(function(a,b){return a+b;},0);
+        var escU=Math.min(1,5000/((larguraNat+40)/pxPerMm),5000/((naturalH+headH+40)/pxPerMm));
+        var mmW=Math.ceil((larguraNat*escU)/pxPerMm)+16;
+        var mmH=Math.ceil(((naturalH+headH)*escU)/pxPerMm)+16;
+        var est=document.getElementById('pdfPageSize')||document.createElement('style');
+        est.id='pdfPageSize';
+        est.textContent='@media print{@page{size:'+mmW+'mm '+mmH+'mm;margin:8mm}'+
+          'body.printing-mat .print-page{break-after:auto;page-break-after:auto}}';
+        document.head.appendChild(est);
+        mat.innerHTML='<div class="print-page">'+
+          '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+' · folha única '+mmW+'×'+mmH+' mm</span></div>'+
+          '<div class="print-zoom" style="zoom:'+(+escU.toFixed(3))+'">'+matrixTableCore(true,allIdxs,segsAll)+'</div></div>';
+        return;
+      }
       /* Antes a escala saía só da ALTURA e os lotes eram fatiados na largura que sobrasse. Numa
        * obra com muitas semanas e poucos lotes a matriz é alta e estreita: ela encolhia pra caber
        * na altura (54% numa medição real) e metade da folha ficava em branco, com a letra miúda.
@@ -12828,7 +12872,7 @@
         if(a==='exp-xls'){exportExcel();return;}
         if(a==='exp-dados'){exportDadosExcel();return;}
         if(a==='exp-cronog'){exportProjectWorkbook();return;}
-        if(a==='exp-pdf'){exportPdf();return;}
+        if(a==='exp-pdf'){exportPdfDialogo();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-cronog'){pickExcelFile(function(file){readWorkbookFile(file).then(importProjectWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
