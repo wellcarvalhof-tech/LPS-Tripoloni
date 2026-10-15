@@ -12733,12 +12733,64 @@
   }
   /** Barra de desfazer. Fica DENTRO do conteúdo redesenhado: no cabeçalho da tela ela
    *  envelheceria, porque renderCrono só troca #cronoContent. */
+  /** Lote x serviço com quantidade cadastrada que ninguém colocou no manual. */
+  function tcmFaltando(){
+    var out=[];
+    viewLotIdxs().forEach(function(li){
+      SERV.forEach(function(sv,si){
+        var q=(QTY[li]||[])[si]||0; if(q<=0)return;
+        var o=ovrGet(li,si);
+        if(o&&o.pinned&&Array.isArray(o.pins)&&o.pins.length)return;
+        out.push({li:li,si:si,q:q});
+      });
+    });
+    return out;
+  }
+  /* No manual o cronograma é só o que foi desenhado — então lote com quantidade e sem colocação
+   * some da matriz. Isso é o comportamento certo, mas sumir calado não é: quem está montando um
+   * cenário vê a coluna vazia e acha que perdeu a quantidade. O aviso fica dentro do conteúdo,
+   * que é o pedaço redesenhado, pra contagem não envelhecer. */
+  function tcmAvisoFaltaHTML(){
+    if(!tcManual())return '';
+    var f=tcmFaltando();
+    if(!f.length)return '';
+    var lotes={}; f.forEach(function(x){ lotes[x.li]=1; });
+    return '<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
+      '<b>Modo manual:</b> a matriz mostra só o que foi desenhado. '+
+      '<b>'+f.length+'</b> combinação(ões) lote × serviço têm quantidade cadastrada e ainda não foram colocadas, '+
+      'em <b>'+Object.keys(lotes).length+'</b> lote(s) — por isso essas colunas aparecem vazias.'+
+      ' <button class="btn" id="tcmVerFalta" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Ver quais</button>'+
+      '</div>';
+  }
+  function tcmDialogoFalta(){
+    var f=tcmFaltando();
+    var porLote={};
+    f.forEach(function(x){ (porLote[x.li]||(porLote[x.li]=[])).push(x); });
+    var linhas=Object.keys(porLote).map(function(li){
+      var itens=porLote[li];
+      return '<tr><td style="white-space:nowrap"><b>'+escAttr(LOTS[li])+'</b></td><td>'+
+        itens.map(function(x){ return escAttr(SERV[x.si].n)+' <span class="note">('+fmtBR(x.q)+' '+escAttr(SERV[x.si].u)+')</span>'; }).join('<br>')+
+        '</td></tr>';
+    }).join('');
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:640px;max-height:84vh;overflow:auto">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Quantidade cadastrada, sem colocação no manual</div>'+
+      '<div class="note" style="margin-bottom:10px">Nada disso entra no cronograma enquanto não for desenhado na aba <b>Tempo Caminho</b>. '+
+      'Se o esperado era o app distribuir sozinho, o caminho é voltar para <b>Automático</b>.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px;min-width:0"><thead><tr><th>Lote</th><th>Serviços sem colocação</th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" id="fxFechar">Fechar</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#fxFechar').addEventListener('click',fecha);
+  }
   function undoBarraHTML(){
     if(isReadOnly())return '';
     return '<div style="display:flex;gap:8px;margin-bottom:8px">'+undoBotoesHTML()+'</div>';
   }
   function cronoContent(){
     var tab=window._cronoTab||'tc';
+    var avFalta=tcmAvisoFaltaHTML();
     if(tab==='ajuste') return fsBarHTML()+'<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
       '<div><h3>Ajuste manual (arraste para mover)</h3>'+
       '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.'+
@@ -12747,7 +12799,7 @@
         undoBotoesHTML()+'<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
-      '<div class="assign" id="assignPanel"></div>'+matrixTableHTML(false);
+      '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false);
     if(tab==='tc'&&TC_VISTA==='projecao'){
       var proj=buildProjectedSchedule('historico');
       var fim=0; proj.forEach(function(g){ fim=Math.max(fim,g.start+g.dur-1); });
@@ -12763,11 +12815,11 @@
           ' Esta vista é só leitura: nem o plano nem a linha de base mudam.</div>'+
         matrixTableHTML(true,proj);
     }
-    if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+ofiLousaHTML(false); }
-    if(tab==='equipe') return fsBarHTML()+undoBarraHTML()+editarPorEquipeHTML();
-    if(tab==='resumo') return fsBarHTML()+resumoHTML();
-    if(tab==='gantt') return fsBarHTML()+ganttHTML();
-    return fsBarHTML()+undoBarraHTML()+matrixTableHTML(true); // 'tc'
+    if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+avFalta+ofiLousaHTML(false); }
+    if(tab==='equipe') return fsBarHTML()+avFalta+undoBarraHTML()+editarPorEquipeHTML();
+    if(tab==='resumo') return fsBarHTML()+avFalta+resumoHTML();
+    if(tab==='gantt') return fsBarHTML()+avFalta+ganttHTML();
+    return fsBarHTML()+avFalta+undoBarraHTML()+matrixTableHTML(true); // 'tc'
   }
   function renderCrono(){
     var c=document.getElementById('cronoContent'); if(!c)return;
@@ -12798,6 +12850,8 @@
     });
     wireMatrixZoom();
     undoLigaTeclas(); undoLigaBotoes();
+    var vf=document.getElementById('tcmVerFalta');
+    if(vf)vf.addEventListener('click',tcmDialogoFalta);
     refreshTopSaveBtn(); applyReadOnly();
     if(tcManual()&&(window._cronoTab||'tc')==='tc'){
       ofiDraw();
