@@ -2873,7 +2873,7 @@
       ['imp-xls','Importar Excel (tudo)','↥'],['imp-serv','Importar Serviços','↥'],['imp-lot','Importar Lotes','↥'],['imp-cal','Importar Calendário','↥'],
       ['imp-tc','Importar Tempo-Caminho','↥'],['imp-cronog','Importar Cronograma (Project)','↥'],
       ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],['reset','Reiniciar exemplo','↺'],
-      ['exp-dados','Exportar dados','↧'],['exp-cronog','Exportar Cronograma (Project)','↧'],['exp-xls','Exportar Excel','↧'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
+      ['exp-dados','Exportar dados','↧'],['exp-cronog','Exportar Cronograma (Project)','↧'],['exp-xls','Exportar Excel','↧'],['exp-rel','Exportar relatório Excel','▦'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
     var tb=TB.map(function(t){var cls=(t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn';
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
@@ -9512,6 +9512,250 @@
     }
   }
 
+  /* ================= Relatório completo em Excel =================
+   * Uma pasta com as várias leituras do cronograma, cada uma numa aba, no formato que a obra já
+   * usa pra trocar com terceiros: quadro (semana x lote), tarefas, semana a semana, serviços,
+   * volumes por mês, produção prevista x realizada, histograma e composição das equipes.
+   *
+   * O que NÃO sai: valores em R$. O app não tem custo unitário por serviço, e preencher coluna
+   * de dinheiro com número derivado de outra coisa seria pior que não ter a coluna. */
+  function relSigla(sv){
+    if(sv.codigo)return String(sv.codigo).trim().slice(0,6);
+    return (typeof lbSiglaAuto==='function')?lbSiglaAuto(sv.n):String(sv.n||'').slice(0,3).toUpperCase();
+  }
+  function relRotSem(w){ var d=mondayOf(w); return 'S'+isoWeek(d)+'-'+String(d.getFullYear()).slice(2); }
+  function relMes(w){
+    var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    var d=mondayOf(w); return MES[d.getMonth()]+'/'+String(d.getFullYear()).slice(2);
+  }
+  function relCabecalho(ws,titulos,larguras){
+    ws.columns=titulos.map(function(t,i){ return {width:(larguras&&larguras[i])||14}; });
+    var r=ws.addRow(titulos);
+    r.font={bold:true,size:10};
+    r.alignment={vertical:'middle',wrapText:true};
+    r.height=28;
+    r.eachCell(function(c){
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F3A4D'}};
+      c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+      c.border={bottom:{style:'thin',color:{argb:'FF9AA7B0'}}};
+    });
+    return r;
+  }
+  async function exportRelatorioExcel(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
+    if(!SERV.length||!LOTS.length){ alert('Cadastre serviços, lotes e quantidades antes de exportar o relatório.'); return; }
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var segs=buildSchedule();
+    var base=activeBaseline();
+    var segsLB=base?scheduleWithSnapshot(base.snap):null;
+    var lotIdxs=viewLotIdxs();
+    var tw=1; segs.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
+    if(segsLB)segsLB.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
+    var realSem=realizadoPorSemana();
+    var realTot={};
+    (window.PROD_LIST||[]).forEach(function(r){
+      var li=(window._LOTIDS||[]).indexOf(r.loteId), si=-1;
+      SERV.forEach(function(x,i){ if(x.id===r.servId)si=i; });
+      if(li<0||si<0)return;
+      realTot[li+'::'+si]=(realTot[li+'::'+si]||0)+(+r.qtd||0);
+    });
+    var wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+
+    /* ---- Meta ---- */
+    var wsM=wb.addWorksheet('Meta');
+    relCabecalho(wsM,['Chave','Valor','O que é'],[26,34,52]);
+    [['obra',nome,'nome da obra'],
+     ['gerado_em',fmtDate(new Date()),'data da exportação'],
+     ['modo_cronograma',tcManual()?'manual':'automático','como o cronograma é montado'],
+     ['linha_de_base',base?(base.revisao+' — '+(base.nome||'')):'(sem linha de base)','referência de previsto'],
+     ['semana_inicio',fmtDate(mondayOf(1)),'segunda-feira da semana 1'],
+     ['num_semanas',tw,'horizonte do cronograma'],
+     ['lotes',lotIdxs.length+' de '+LOTS.length,'lotes em exibição / total'],
+     ['servicos',SERV.length,'serviços cadastrados'],
+     ['dias_uteis_semana',DIAS_SEM,'base de cálculo das durações'],
+     ['observacao','Sem colunas em R$: o app não tem custo unitário por serviço.','']
+    ].forEach(function(l){ wsM.addRow(l); });
+    wsM.views=[{state:'frozen',ySplit:1}];
+
+    /* ---- Quadro: semana x lote ---- */
+    var wsQ=wb.addWorksheet('Quadro',{views:[{state:'frozen',xSplit:1,ySplit:1}]});
+    relCabecalho(wsQ,['Semana ↓ / Lote →'].concat(lotIdxs.map(function(li){ return LOTS[li]; })),
+      [18].concat(lotIdxs.map(function(){ return 11; })));
+    var cel={};
+    segs.forEach(function(g){
+      for(var i=0;i<g.dur;i++){
+        if(!(g.wq[i]>0))continue;
+        var k=(g.start+i)+'::'+g.li;
+        (cel[k]||(cel[k]=[])).push(g.si);
+      }
+    });
+    for(var w=tw;w>=1;w--){
+      var linha=[relRotSem(w)+' · '+fmtDate(mondayOf(w))];
+      for(var c=0;c<lotIdxs.length;c++){
+        var ks=cel[w+'::'+lotIdxs[c]]||[];
+        var vistos={}, sig=[];
+        ks.forEach(function(si){ if(vistos[si])return; vistos[si]=1; sig.push(relSigla(SERV[si])); });
+        linha.push(sig.join(' '));
+      }
+      var rw=wsQ.addRow(linha);
+      rw.font={size:9};
+      rw.getCell(1).font={size:9,bold:true};
+      for(var c2=0;c2<lotIdxs.length;c2++){
+        var ks2=cel[w+'::'+lotIdxs[c2]]||[];
+        if(!ks2.length)continue;
+        var cor=svcColor(SERV[ks2[0]]).replace('#','').toUpperCase();
+        var cl=rw.getCell(c2+2);
+        cl.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF'+cor}};
+        cl.font={size:9,bold:true,color:{argb:pickFont('#'+cor)==='#ffffff'?'FFFFFFFF':'FF0A0A0A'}};
+        cl.alignment={horizontal:'center'};
+      }
+    }
+
+    /* ---- Tarefas: um segmento por linha ---- */
+    var wsT=wb.addWorksheet('Tarefas',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsT,['Serviço','Sigla','Lote','Equipe','Início','Término','Duração (sem)','Duração (dias úteis)',
+      'Sem. início','Sem. término','Qtd','Unid','Executado (lote)','Ajustado'],
+      [26,8,16,10,12,12,13,16,12,13,13,8,15,10]);
+    segs.slice().sort(function(a,b){ return (a.si-b.si)||(a.start-b.start)||(a.li-b.li); }).forEach(function(g){
+      var sv=SERV[g.si], fim=new Date(mondayOf(g.start+g.dur-1).getTime()); fim.setDate(fim.getDate()+4);
+      var r=wsT.addRow([sv.n,relSigla(sv),LOTS[g.li],teamLabel(sv.n,g.team),
+        fmtDate(mondayOf(g.start)),fmtDate(fim),g.dur,g.dur*DIAS_SEM,
+        relRotSem(g.start),relRotSem(g.start+g.dur-1),
+        Math.round(g.qty),sv.u,Math.round(realTot[g.li+'::'+g.si]||0),g.adjusted?'sim':'']);
+      r.font={size:10};
+      r.getCell(2).font={size:10,bold:true,color:{argb:'FF'+svcColor(sv).replace('#','').toUpperCase()}};
+      [11,13].forEach(function(i){ r.getCell(i).numFmt='#,##0'; });
+    });
+
+    /* ---- Semana a semana ---- */
+    var wsS=wb.addWorksheet('Semana a semana',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsS,['Serviço','Sigla','Lote','Equipe','Semana','Rótulo','Data (segunda)','Mês','Qtd prevista','Unid','Executado (semana)'],
+      [26,8,16,10,9,11,14,10,13,8,17]);
+    segs.slice().sort(function(a,b){ return (a.start-b.start)||(a.si-b.si)||(a.li-b.li); }).forEach(function(g){
+      var sv=SERV[g.si];
+      for(var i=0;i<g.dur;i++){
+        if(!(g.wq[i]>0))continue;
+        var w2=g.start+i;
+        var r=wsS.addRow([sv.n,relSigla(sv),LOTS[g.li],teamLabel(sv.n,g.team),w2,relRotSem(w2),
+          fmtDate(mondayOf(w2)),relMes(w2),Math.round(g.wq[i]),sv.u,
+          Math.round(realSem[w2+'::'+g.li+'::'+g.si]||0)]);
+        r.font={size:10};
+        [9,11].forEach(function(c3){ r.getCell(c3).numFmt='#,##0'; });
+      }
+    });
+
+    /* ---- Serviços ---- */
+    var wsSv=wb.addWorksheet('Serviços',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsSv,['Serviço','Sigla','Unid','Equipes','Prod. cadastrada (equipe/sem)','Prod. total/sem',
+      'Qtd prevista','Sem. início','Início','Sem. término','Término','Duração (sem)','Semanas com produção','Média efetiva/sem','Executado'],
+      [26,8,8,9,24,15,14,12,12,13,12,13,19,16,14]);
+    var sp=svcSpan();
+    SERV.forEach(function(sv,si){
+      var tot=0; lotIdxs.forEach(function(li){ tot+=QTY[li][si]||0; });
+      var exec=0; lotIdxs.forEach(function(li){ exec+=realTot[li+'::'+si]||0; });
+      var span=sp[si], dur=span.e>0?(span.e-span.s+1):0;
+      var semProd={}; segs.forEach(function(g){ if(g.si!==si)return; for(var i=0;i<g.dur;i++)if(g.wq[i]>0)semProd[g.start+i]=1; });
+      var nProd=Object.keys(semProd).length;
+      var r=wsSv.addRow([sv.n,relSigla(sv),sv.u,sv.eq,pnum(sv.p),pnum(sv.p)*(sv.eq||0),Math.round(tot),
+        span.s?relRotSem(span.s):'',span.s?fmtDate(mondayOf(span.s)):'',
+        span.e?relRotSem(span.e):'',span.e?fmtDate(mondayOf(span.e)):'',
+        dur||'',nProd||'',nProd?Math.round(tot/nProd):'',Math.round(exec)]);
+      r.font={size:10};
+      r.getCell(2).font={size:10,bold:true,color:{argb:'FF'+svcColor(sv).replace('#','').toUpperCase()}};
+      [5,6,7,14,15].forEach(function(c4){ r.getCell(c4).numFmt='#,##0'; });
+    });
+
+    /* ---- Volumes por mês ---- */
+    var meses=[], vistoM={};
+    for(var wm=1;wm<=tw;wm++){ var mm=relMes(wm); if(!vistoM[mm]){ vistoM[mm]=1; meses.push({lab:mm,w:wm}); } }
+    var wsV=wb.addWorksheet('Volumes',{views:[{state:'frozen',xSplit:3,ySplit:1}]});
+    relCabecalho(wsV,['Serviço','Sigla','Unid'].concat(meses.map(function(m){ return m.lab; })),
+      [26,8,8].concat(meses.map(function(){ return 11; })));
+    SERV.forEach(function(sv,si){
+      var porMes={};
+      segs.forEach(function(g){ if(g.si!==si)return; for(var i=0;i<g.dur;i++){ var mL=relMes(g.start+i); porMes[mL]=(porMes[mL]||0)+(g.wq[i]||0); } });
+      var r=wsV.addRow([sv.n,relSigla(sv),sv.u].concat(meses.map(function(m){ return porMes[m.lab]?Math.round(porMes[m.lab]):null; })));
+      r.font={size:10};
+      r.eachCell(function(c,i){ if(i>3)c.numFmt='#,##0'; });
+    });
+
+    /* ---- Produção semana a semana: previsto x linha de base x realizado ---- */
+    var wsP=wb.addWorksheet('Produção · semanas',{views:[{state:'frozen',xSplit:2,ySplit:1}]});
+    relCabecalho(wsP,['Serviço','Sigla','Unid','Semana','Rótulo','Data (segunda)','Mês','Previsto (ativo)','Previsto (linha de base)','Realizado','Equipes ativas'],
+      [26,8,8,9,11,14,10,15,22,13,13]);
+    var atbw=activeTeamsByWeek();
+    SERV.forEach(function(sv,si){
+      var prev=[], lb=[], real=[];
+      for(var w3=0;w3<=tw;w3++){ prev[w3]=0; lb[w3]=0; real[w3]=0; }
+      segs.forEach(function(g){ if(g.si!==si)return; for(var i=0;i<g.dur;i++)prev[g.start+i]+=(g.wq[i]||0); });
+      if(segsLB)segsLB.forEach(function(g){ if(g.si!==si)return; for(var i=0;i<g.dur;i++)lb[g.start+i]+=(g.wq[i]||0); });
+      Object.keys(realSem).forEach(function(k){
+        var pr=k.split('::'); if(+pr[2]!==si)return;
+        var w4=+pr[0]; if(w4<=tw)real[w4]+=realSem[k];
+      });
+      var times=(atbw.teamsByService&&atbw.teamsByService[si])||[];
+      for(var w5=1;w5<=tw;w5++){
+        if(!(prev[w5]>0||lb[w5]>0||real[w5]>0))continue;
+        var r=wsP.addRow([sv.n,relSigla(sv),sv.u,w5,relRotSem(w5),fmtDate(mondayOf(w5)),relMes(w5),
+          Math.round(prev[w5]),segsLB?Math.round(lb[w5]):'',Math.round(real[w5]),times[w5-1]||0]);
+        r.font={size:10};
+        [8,9,10].forEach(function(c5){ r.getCell(c5).numFmt='#,##0'; });
+      }
+    });
+
+    /* ---- Histograma: recurso x semana ---- */
+    if(RECURSOS.length){
+      var h=computeHistogram();
+      var wsH=wb.addWorksheet('Histograma · dados',{views:[{state:'frozen',xSplit:3,ySplit:1}]});
+      var cabH=['Recurso','Tipo','Categoria'];
+      for(var wh=1;wh<=h.tw;wh++)cabH.push(relRotSem(wh));
+      relCabecalho(wsH,cabH,[28,14,18].concat(cabH.slice(3).map(function(){ return 9; })));
+      RECURSOS.forEach(function(rc){
+        var serie=h.byResource[rc.id]||[];
+        var linha=[rc.n,(rc.tipo==='equipamento'?'Equipamento':'Mão de obra'),rc.cat||''];
+        for(var i=0;i<h.tw;i++)linha.push(Math.round(serie[i]||0));
+        var r=wsH.addRow(linha); r.font={size:10};
+        r.eachCell(function(c,i){ if(i>3)c.numFmt='#,##0'; });
+      });
+      var somaMO=[], somaEQ=[];
+      for(var i2=0;i2<h.tw;i2++){ somaMO[i2]=0; somaEQ[i2]=0; }
+      RECURSOS.forEach(function(rc){
+        var serie=h.byResource[rc.id]||[];
+        for(var i3=0;i3<h.tw;i3++){ if(rc.tipo==='equipamento')somaEQ[i3]+=serie[i3]||0; else somaMO[i3]+=serie[i3]||0; }
+      });
+      [['TOTAL mão de obra','','',somaMO],['TOTAL equipamentos','','',somaEQ]].forEach(function(t){
+        var r=wsH.addRow([t[0],t[1],t[2]].concat(t[3].map(function(v){ return Math.round(v); })));
+        r.font={size:10,bold:true};
+        r.eachCell(function(c,i){ if(i>3)c.numFmt='#,##0'; });
+      });
+    }
+
+    /* ---- Composição das equipes ---- */
+    var wsC=wb.addWorksheet('Composição das equipes',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsC,['Serviço','Sigla','Recurso','Tipo','Por equipe','Equipes','No pico'],[26,8,28,14,12,10,12]);
+    SERV.forEach(function(sv){
+      var crew=(sv.cfg&&sv.cfg.crew)||[];
+      crew.forEach(function(it){
+        var rc=RECURSOS.filter(function(x){ return x.id===it.resourceId; })[0];
+        if(!rc)return;
+        var r=wsC.addRow([sv.n,relSigla(sv),rc.n,(rc.tipo==='equipamento'?'Equipamento':'Mão de obra'),
+          it.qtyPerTeam||0,sv.eq||0,(it.qtyPerTeam||0)*(sv.eq||0)]);
+        r.font={size:10};
+        [5,6,7].forEach(function(c6){ r.getCell(c6).numFmt='#,##0.##'; });
+      });
+    });
+    if(wsC.rowCount===1)wsC.addRow(['(nenhuma equipe cadastrada no Histograma)']);
+
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='tempo_caminho_'+(nome.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('Relatório exportado.');
+  }
   function downloadResourcesTemplate(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var wb=XLSX.utils.book_new();
@@ -12920,6 +13164,7 @@
         if(a==='exp-xls'){exportExcel();return;}
         if(a==='exp-dados'){exportDadosExcel();return;}
         if(a==='exp-cronog'){exportProjectWorkbook();return;}
+        if(a==='exp-rel'){comCarga(exportRelatorioExcel);return;}
         if(a==='exp-pdf'){exportPdfDialogo();return;}
         if(a==='imp-xls'){pickExcelFile(function(file){readWorkbookFile(file).then(applyImportWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-tc'){pickExcelFile(function(file){readWorkbookFile(file).then(importTempoCaminhoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
