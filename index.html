@@ -9519,6 +9519,65 @@
    *
    * O que NÃO sai: valores em R$. O app não tem custo unitário por serviço, e preencher coluna
    * de dinheiro com número derivado de outra coisa seria pior que não ter a coluna. */
+  /* Gráfico do app virando imagem pra dentro do Excel. A biblioteca de planilha do app escreve
+   * dados, não gráficos nativos; então os mesmos SVGs que aparecem na tela são convertidos em
+   * PNG e colados nas abas. Perde-se o gráfico editável do Excel, mas o relatório deixa de ser
+   * só tabela — e o número que gerou cada curva está na aba de dados ao lado.
+   *
+   * O SVG precisa virar auto-suficiente antes: as cores vêm de variáveis CSS e as fontes de
+   * classes, e nada disso existe dentro de uma imagem solta. */
+  function relSvgParaPng(svgEl,W,H,escala){
+    return new Promise(function(res){
+      try{
+        var clone=svgEl.cloneNode(true);
+        clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+        clone.setAttribute('width',W); clone.setAttribute('height',H);
+        var txt=new XMLSerializer().serializeToString(clone);
+        txt=txt.replace(/var\(\s*(--[a-z0-9-]+)\s*\)/gi,function(_,v){ try{ return cssHex(v); }catch(e){ return '#888888'; } });
+        var estilo='<style>text{font-family:Arial,Helvetica,sans-serif;fill:#333}'+
+          '.axm{font-size:9px;fill:#666}.axlab{font-size:10px;fill:#444}</style>';
+        txt=txt.replace(/^(<svg[^>]*>)/,'$1'+estilo+'<rect width="100%" height="100%" fill="#ffffff"/>');
+        var k=escala||2;
+        var img=new Image();
+        img.onload=function(){
+          var cv=document.createElement('canvas');
+          cv.width=Math.round(W*k); cv.height=Math.round(H*k);
+          var ctx=cv.getContext('2d');
+          ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cv.width,cv.height);
+          ctx.drawImage(img,0,0,cv.width,cv.height);
+          res(cv.toDataURL('image/png'));
+        };
+        img.onerror=function(){ res(null); };
+        img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(txt);
+      }catch(e){ res(null); }
+    });
+  }
+  /** Desenha num SVG fora da tela e devolve o PNG. desenhar(el) usa os mesmos renderizadores da tela. */
+  function relGraficoPng(desenhar,W,H){
+    var box=document.createElement('div');
+    box.style.cssText='position:absolute;left:-100000px;top:0;width:'+W+'px';
+    var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('class','chart');
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    box.appendChild(svg); document.body.appendChild(box);
+    try{ desenhar(svg); }catch(e){ box.remove(); return Promise.resolve(null); }
+    return relSvgParaPng(svg,W,H,2).then(function(d){ box.remove(); return d; });
+  }
+  /** Cola o PNG numa aba, com um título em cima. */
+  function relColaGrafico(wb,ws,dataUrl,linha,titulo,W,H){
+    if(titulo){
+      var t=ws.getRow(linha);
+      t.getCell(1).value=titulo;
+      t.getCell(1).font={bold:true,size:11};
+      linha++;
+    }
+    if(!dataUrl)return linha+1;
+    var id=wb.addImage({base64:dataUrl,extension:'png'});
+    ws.addImage(id,{tl:{col:0.2,row:linha-0.6},ext:{width:W,height:H}});
+    return linha+Math.ceil(H/18)+2;
+  }
+  /** "Macrofluxo" do modelo = o grupo do serviço, quando cadastrado. */
+  function relGrupo(sv){ return (sv&&sv.grupo)?String(sv.grupo):''; }
   function relSigla(sv){
     if(sv.codigo)return String(sv.codigo).trim().slice(0,6);
     return (typeof lbSiglaAuto==='function')?lbSiglaAuto(sv.n):String(sv.n||'').slice(0,3).toUpperCase();
@@ -9614,42 +9673,42 @@
 
     /* ---- Tarefas: um segmento por linha ---- */
     var wsT=wb.addWorksheet('Tarefas',{views:[{state:'frozen',ySplit:1}]});
-    relCabecalho(wsT,['Serviço','Sigla','Lote','Equipe','Início','Término','Duração (sem)','Duração (dias úteis)',
+    relCabecalho(wsT,['Macrofluxo','Serviço','Sigla','Lote','Equipe','Início','Término','Duração (sem)','Duração (dias úteis)',
       'Sem. início','Sem. término','Qtd','Unid','Executado (lote)','Ajustado'],
-      [26,8,16,10,12,12,13,16,12,13,13,8,15,10]);
+      [18,26,8,16,10,12,12,13,16,12,13,13,8,15,10]);
     segs.slice().sort(function(a,b){ return (a.si-b.si)||(a.start-b.start)||(a.li-b.li); }).forEach(function(g){
       var sv=SERV[g.si], fim=new Date(mondayOf(g.start+g.dur-1).getTime()); fim.setDate(fim.getDate()+4);
-      var r=wsT.addRow([sv.n,relSigla(sv),LOTS[g.li],teamLabel(sv.n,g.team),
+      var r=wsT.addRow([relGrupo(sv),sv.n,relSigla(sv),LOTS[g.li],teamLabel(sv.n,g.team),
         fmtDate(mondayOf(g.start)),fmtDate(fim),g.dur,g.dur*DIAS_SEM,
         relRotSem(g.start),relRotSem(g.start+g.dur-1),
         Math.round(g.qty),sv.u,Math.round(realTot[g.li+'::'+g.si]||0),g.adjusted?'sim':'']);
       r.font={size:10};
-      r.getCell(2).font={size:10,bold:true,color:{argb:'FF'+svcColor(sv).replace('#','').toUpperCase()}};
-      [11,13].forEach(function(i){ r.getCell(i).numFmt='#,##0'; });
+      r.getCell(3).font={size:10,bold:true,color:{argb:'FF'+svcColor(sv).replace('#','').toUpperCase()}};
+      [12,14].forEach(function(i){ r.getCell(i).numFmt='#,##0'; });
     });
 
     /* ---- Semana a semana ---- */
     var wsS=wb.addWorksheet('Semana a semana',{views:[{state:'frozen',ySplit:1}]});
-    relCabecalho(wsS,['Serviço','Sigla','Lote','Equipe','Semana','Rótulo','Data (segunda)','Mês','Qtd prevista','Unid','Executado (semana)'],
-      [26,8,16,10,9,11,14,10,13,8,17]);
+    relCabecalho(wsS,['Macrofluxo','Serviço','Sigla','Lote','Equipe','Semana','Rótulo','Data (segunda)','Mês','Qtd prevista','Unid','Executado (semana)'],
+      [18,26,8,16,10,9,11,14,10,13,8,17]);
     segs.slice().sort(function(a,b){ return (a.start-b.start)||(a.si-b.si)||(a.li-b.li); }).forEach(function(g){
       var sv=SERV[g.si];
       for(var i=0;i<g.dur;i++){
         if(!(g.wq[i]>0))continue;
         var w2=g.start+i;
-        var r=wsS.addRow([sv.n,relSigla(sv),LOTS[g.li],teamLabel(sv.n,g.team),w2,relRotSem(w2),
+        var r=wsS.addRow([relGrupo(sv),sv.n,relSigla(sv),LOTS[g.li],teamLabel(sv.n,g.team),w2,relRotSem(w2),
           fmtDate(mondayOf(w2)),relMes(w2),Math.round(g.wq[i]),sv.u,
           Math.round(realSem[w2+'::'+g.li+'::'+g.si]||0)]);
         r.font={size:10};
-        [9,11].forEach(function(c3){ r.getCell(c3).numFmt='#,##0'; });
+        [10,12].forEach(function(c3){ r.getCell(c3).numFmt='#,##0'; });
       }
     });
 
     /* ---- Serviços ---- */
     var wsSv=wb.addWorksheet('Serviços',{views:[{state:'frozen',ySplit:1}]});
-    relCabecalho(wsSv,['Serviço','Sigla','Unid','Equipes','Prod. cadastrada (equipe/sem)','Prod. total/sem',
+    relCabecalho(wsSv,['Macrofluxo','Serviço','Sigla','Unid','Equipes','Prod. cadastrada (equipe/sem)','Prod. total/sem',
       'Qtd prevista','Sem. início','Início','Sem. término','Término','Duração (sem)','Semanas com produção','Média efetiva/sem','Executado'],
-      [26,8,8,9,24,15,14,12,12,13,12,13,19,16,14]);
+      [18,26,8,8,9,24,15,14,12,12,13,12,13,19,16,14]);
     var sp=svcSpan();
     SERV.forEach(function(sv,si){
       var tot=0; lotIdxs.forEach(function(li){ tot+=QTY[li][si]||0; });
@@ -9657,33 +9716,33 @@
       var span=sp[si], dur=span.e>0?(span.e-span.s+1):0;
       var semProd={}; segs.forEach(function(g){ if(g.si!==si)return; for(var i=0;i<g.dur;i++)if(g.wq[i]>0)semProd[g.start+i]=1; });
       var nProd=Object.keys(semProd).length;
-      var r=wsSv.addRow([sv.n,relSigla(sv),sv.u,sv.eq,pnum(sv.p),pnum(sv.p)*(sv.eq||0),Math.round(tot),
+      var r=wsSv.addRow([relGrupo(sv),sv.n,relSigla(sv),sv.u,sv.eq,pnum(sv.p),pnum(sv.p)*(sv.eq||0),Math.round(tot),
         span.s?relRotSem(span.s):'',span.s?fmtDate(mondayOf(span.s)):'',
         span.e?relRotSem(span.e):'',span.e?fmtDate(mondayOf(span.e)):'',
         dur||'',nProd||'',nProd?Math.round(tot/nProd):'',Math.round(exec)]);
       r.font={size:10};
-      r.getCell(2).font={size:10,bold:true,color:{argb:'FF'+svcColor(sv).replace('#','').toUpperCase()}};
-      [5,6,7,14,15].forEach(function(c4){ r.getCell(c4).numFmt='#,##0'; });
+      r.getCell(3).font={size:10,bold:true,color:{argb:'FF'+svcColor(sv).replace('#','').toUpperCase()}};
+      [6,7,8,15,16].forEach(function(c4){ r.getCell(c4).numFmt='#,##0'; });
     });
 
     /* ---- Volumes por mês ---- */
     var meses=[], vistoM={};
     for(var wm=1;wm<=tw;wm++){ var mm=relMes(wm); if(!vistoM[mm]){ vistoM[mm]=1; meses.push({lab:mm,w:wm}); } }
     var wsV=wb.addWorksheet('Volumes',{views:[{state:'frozen',xSplit:3,ySplit:1}]});
-    relCabecalho(wsV,['Serviço','Sigla','Unid'].concat(meses.map(function(m){ return m.lab; })),
-      [26,8,8].concat(meses.map(function(){ return 11; })));
+    relCabecalho(wsV,['Macrofluxo','Serviço','Sigla','Unid'].concat(meses.map(function(m){ return m.lab; })),
+      [18,26,8,8].concat(meses.map(function(){ return 11; })));
     SERV.forEach(function(sv,si){
       var porMes={};
       segs.forEach(function(g){ if(g.si!==si)return; for(var i=0;i<g.dur;i++){ var mL=relMes(g.start+i); porMes[mL]=(porMes[mL]||0)+(g.wq[i]||0); } });
-      var r=wsV.addRow([sv.n,relSigla(sv),sv.u].concat(meses.map(function(m){ return porMes[m.lab]?Math.round(porMes[m.lab]):null; })));
+      var r=wsV.addRow([relGrupo(sv),sv.n,relSigla(sv),sv.u].concat(meses.map(function(m){ return porMes[m.lab]?Math.round(porMes[m.lab]):null; })));
       r.font={size:10};
-      r.eachCell(function(c,i){ if(i>3)c.numFmt='#,##0'; });
+      r.eachCell(function(c,i){ if(i>4)c.numFmt='#,##0'; });
     });
 
     /* ---- Produção semana a semana: previsto x linha de base x realizado ---- */
     var wsP=wb.addWorksheet('Produção · semanas',{views:[{state:'frozen',xSplit:2,ySplit:1}]});
-    relCabecalho(wsP,['Serviço','Sigla','Unid','Semana','Rótulo','Data (segunda)','Mês','Previsto (ativo)','Previsto (linha de base)','Realizado','Equipes ativas'],
-      [26,8,8,9,11,14,10,15,22,13,13]);
+    relCabecalho(wsP,['Macrofluxo','Serviço','Sigla','Unid','Semana','Rótulo','Data (segunda)','Mês','Previsto (ativo)','Previsto (linha de base)','Realizado','Equipes ativas'],
+      [18,26,8,8,9,11,14,10,15,22,13,13]);
     var atbw=activeTeamsByWeek();
     SERV.forEach(function(sv,si){
       var prev=[], lb=[], real=[];
@@ -9697,10 +9756,10 @@
       var times=(atbw.teamsByService&&atbw.teamsByService[si])||[];
       for(var w5=1;w5<=tw;w5++){
         if(!(prev[w5]>0||lb[w5]>0||real[w5]>0))continue;
-        var r=wsP.addRow([sv.n,relSigla(sv),sv.u,w5,relRotSem(w5),fmtDate(mondayOf(w5)),relMes(w5),
+        var r=wsP.addRow([relGrupo(sv),sv.n,relSigla(sv),sv.u,w5,relRotSem(w5),fmtDate(mondayOf(w5)),relMes(w5),
           Math.round(prev[w5]),segsLB?Math.round(lb[w5]):'',Math.round(real[w5]),times[w5-1]||0]);
         r.font={size:10};
-        [8,9,10].forEach(function(c5){ r.getCell(c5).numFmt='#,##0'; });
+        [9,10,11].forEach(function(c5){ r.getCell(c5).numFmt='#,##0'; });
       }
     });
 
@@ -9747,11 +9806,107 @@
     });
     if(wsC.rowCount===1)wsC.addRow(['(nenhuma equipe cadastrada no Histograma)']);
 
+    /* ---- Curva S ---- */
+    var dC=null;
+    try{ dC=curvaSData(); }catch(e){ dC=null; }
+    if(dC){
+      var wsCS=wb.addWorksheet('Curva S',{views:[{state:'frozen',ySplit:1}]});
+      relCabecalho(wsCS,['Semana','Rótulo','Data (segunda)','Mês','Previsto acum. (%)','Realizado acum. (%)','Linha de base acum. (%)','Desvio (pp)'],
+        [9,11,14,10,18,19,22,12]);
+      var ex=curveSeries(dC.executivo,'total')||[], re=curveSeries(dC.real,'total')||[], cl=curveSeries(dC.cliente,'total');
+      var hojeW=Math.max(1,Math.min(dC.hojeW||1,dC.tw));
+      for(var wc=1;wc<=dC.tw;wc++){
+        var pv=+(ex[wc]||0), rl=(wc<=hojeW)?+(re[wc]||0):null, lb2=cl?+(cl[wc]||0):null;
+        var r=wsCS.addRow([wc,relRotSem(wc),fmtDate(mondayOf(wc)),relMes(wc),
+          +pv.toFixed(2),(rl==null?'':+rl.toFixed(2)),(lb2==null?'':+lb2.toFixed(2)),
+          (rl==null?'':+(rl-pv).toFixed(2))]);
+        r.font={size:10};
+        [5,6,7,8].forEach(function(c7){ r.getCell(c7).numFmt='0.00'; });
+        if(wc===hojeW)r.font={size:10,bold:true};
+      }
+    }
+
+    /* ---- Histograma previsto x realizado ---- */
+    if(RECURSOS.length){
+      var h2=computeHistogram();
+      var wsHR=wb.addWorksheet('Histograma · prev x real',{views:[{state:'frozen',xSplit:2,ySplit:1}]});
+      var cabHR=['Recurso','Tipo'];
+      for(var wr=1;wr<=h2.tw;wr++)cabHR.push(relRotSem(wr)+' prev','·real');
+      relCabecalho(wsHR,cabHR,[28,14].concat(cabHR.slice(2).map(function(){ return 9; })));
+      RECURSOS.forEach(function(rc){
+        var serie=h2.byResource[rc.id]||[];
+        var linha=[rc.n,(rc.tipo==='equipamento'?'Equipamento':'Mão de obra')];
+        for(var i=0;i<h2.tw;i++){
+          var d2=calWeekDate(i+1).toISOString().slice(0,10);
+          linha.push(Math.round(serie[i]||0),Math.round(+REALIZADO_REC[rc.id+'::'+d2]||0));
+        }
+        var r=wsHR.addRow(linha); r.font={size:10};
+        r.eachCell(function(c,i){ if(i>2)c.numFmt='#,##0'; });
+      });
+    }
+
+    /* ---- Gráficos (imagens) ---- */
+    var GW=900, GH=280;
+    if(dC){
+      var wsG1=wb.addWorksheet('Curva S · gráfico');
+      wsG1.getColumn(1).width=120;
+      var pngC=await relGraficoPng(function(el){
+        var ex2=curveSeries(dC.executivo,'total')||[], re2=curveSeries(dC.real,'total')||[], cl2=curveSeries(dC.cliente,'total');
+        var hw=Math.max(1,Math.min(dC.hojeW||1,dC.tw));
+        var ser=[{values:ex2.slice(1),color:cssHex('--warn'),label:'Previsto'},
+                 {values:re2.slice(1,hw+1),color:cssHex('--accent'),label:'Realizado'}];
+        if(cl2)ser.unshift({values:cl2.slice(1),color:cssHex('--crit'),dashed:true,label:'Linha de base'});
+        lineChartSVG(el,ser,{W:GW,H:GH,dateFn:mondayOf,ymax:100,fmt:function(v){return Math.round(v)+'%';}});
+      },GW,GH);
+      relColaGrafico(wb,wsG1,pngC,1,'Curva S — avanço físico acumulado (%) · laranja previsto, azul realizado'+(dC.cliente?', vermelho linha de base':''),GW,GH);
+    }
+    if(RECURSOS.length){
+      var wsG2=wb.addWorksheet('Histograma · gráfico');
+      wsG2.getColumn(1).width=120;
+      var h3=computeHistogram();
+      var pngH=await relGraficoPng(function(el){
+        var mo=[], eq=[], acc=[], soma=0;
+        for(var w6=0;w6<h3.tw;w6++){
+          var a2=0,b2=0;
+          RECURSOS.forEach(function(rc){ var v=(h3.byResource[rc.id]||[])[w6]||0; if(rc.tipo==='equipamento')b2+=v; else a2+=v; });
+          mo.push(a2); eq.push(b2); soma+=a2+b2; acc.push(soma);
+        }
+        barsSVG(el,[{values:mo,color:cssHex('--c1'),label:'Mão de obra'},{values:eq,color:cssHex('--c2'),label:'Equipamentos'}],
+          {W:GW,H:GH,dateFn:calWeekDate,acc:{prev:acc,real:[]}});
+      },GW,GH);
+      relColaGrafico(wb,wsG2,pngH,1,'Histograma previsto — recursos mobilizados por semana',GW,GH);
+    }
+    /* ---- Produção por serviço: previsto x realizado, um gráfico por serviço ---- */
+    var wsG3=wb.addWorksheet('Produção · gráficos');
+    wsG3.getColumn(1).width=120;
+    var linhaG=1;
+    for(var gi=0;gi<SERV.length;gi++){
+      (function(){})();
+      var svG=SERV[gi], siG=gi;
+      var prevG=[], realG=[];
+      for(var w7=0;w7<=tw;w7++){ prevG[w7]=0; realG[w7]=0; }
+      segs.forEach(function(g){ if(g.si!==siG)return; for(var i=0;i<g.dur;i++)prevG[g.start+i]+=(g.wq[i]||0); });
+      Object.keys(realSem).forEach(function(k){ var pr=k.split('::'); if(+pr[2]!==siG)return; var w8=+pr[0]; if(w8<=tw)realG[w8]+=realSem[k]; });
+      var temG=false; for(var w9=1;w9<=tw;w9++)if(prevG[w9]>0||realG[w9]>0){ temG=true; break; }
+      if(!temG)continue;
+      var ini=0,fim=0;
+      for(var wA=1;wA<=tw;wA++){ if(prevG[wA]>0||realG[wA]>0){ if(!ini)ini=wA; fim=wA; } }
+      var a3=Math.max(1,ini-1), b3=Math.min(tw,fim+1);
+      var vp=[], vr=[];
+      for(var wB=a3;wB<=b3;wB++){ vp.push(prevG[wB]); vr.push(realG[wB]); }
+      var png=await relGraficoPng(function(el){
+        barsSVG(el,[{values:vp,color:svcColor(svG),label:'Previsto'},{values:vr,color:cssHex('--accent'),label:'Realizado'}],
+          {W:GW,H:240,dateFn:mondayOf,week0:a3});
+      },GW,240);
+      linhaG=relColaGrafico(wb,wsG3,png,linhaG,svG.n+' ('+svG.u+') — previsto × realizado por semana',GW,240);
+    }
+    if(linhaG===1)wsG3.getCell('A1').value='(sem produção prevista nem apontada)';
+
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a'); a.href=url;
-    a.download='tempo_caminho_'+(nome.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    a.download='tempo_caminho_'+(nome.replace(/[\\\\/:*?"<>|]+/g,'_').trim()||'obra')+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); },2000);
     toast('Relatório exportado.');
