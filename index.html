@@ -503,6 +503,29 @@
   .print-page .tcm-rain{font-size:7px}
   .print-page table.tcm td.sumname,.print-page table.tcm td.sumq{padding:1px 4px;font-size:8.5px}
   .print-page .tcm-badge{font-size:7px}
+  /* Pré-visualização da quebra de página do PDF, no espírito da do Excel: a matriz inteira em
+     miniatura, as páginas numeradas por cima e as linhas de corte arrastáveis. O fundo é branco
+     nos dois temas de propósito — ali é papel, não tela. */
+  .pdfprev{position:relative;height:280px;border:1px solid var(--line);border-radius:8px;background:var(--elev);overflow:hidden;user-select:none;touch-action:none}
+  .pdfprev .pp-mat{position:absolute;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
+  .pdfprev .pp-head{position:absolute;background:#dde5ef}
+  .pdfprev .pp-rot{position:absolute;background:#eef2f7}
+  .pdfprev .pp-seg{position:absolute;border-radius:1px}
+  .pdfprev .pp-pg{position:absolute;display:flex;align-items:center;justify-content:center;font:800 17px "Archivo",sans-serif;color:rgba(47,111,208,.5);text-shadow:0 0 7px #fff,0 0 3px #fff;pointer-events:none;box-sizing:border-box}
+  .pdfprev .pp-pg.estourou{background:rgba(214,69,69,.1);color:rgba(214,69,69,.5)}
+  .pdfprev .pp-lin{position:absolute;z-index:2}
+  .pdfprev .pp-lin.v{width:0;border-left:3px solid #2f6fd0}
+  .pdfprev .pp-lin.h{height:0;border-top:3px solid #2f6fd0}
+  .pdfprev .pp-lin.auto{border-color:#8aa9d6;border-left-width:2px;border-top-width:2px;border-left-style:dashed;border-top-style:dashed}
+  .pdfprev .pp-grab{position:absolute;z-index:3}
+  .pdfprev .pp-grab.v{width:11px;cursor:col-resize}
+  .pdfprev .pp-grab.h{height:11px;cursor:row-resize}
+  .pdfprev .pp-hint{position:absolute;left:0;right:0;bottom:0;padding:3px 8px;font-size:10.5px;color:var(--muted);background:var(--elev);border-top:1px solid var(--line)}
+  .pdfprev .pp-vazio{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted)}
+  .pp-menu{position:fixed;z-index:400;background:var(--elev);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.3);padding:4px;min-width:230px}
+  .pp-menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink);font:inherit;font-size:12.5px;padding:7px 10px;border-radius:6px;cursor:pointer}
+  .pp-menu button:hover{background:var(--line)}
+  .pp-menu button:disabled{opacity:.4;cursor:default}
   @media print{
     @page{size:landscape;margin:10mm}
     @page lbFolha{size:auto;margin:10mm}
@@ -9459,7 +9482,62 @@
    *  as semanas também são fatiadas: procura-se em quantas faixas de semanas e de lotes a folha
    *  fica mais cheia — ou seja, qual combinação permite a MAIOR escala.
    *  escFixa (em %) pula a procura e usa a escala pedida. */
-  function pdfPlanoFolhas(M,pageW,pageH,escFixa){
+  /** Quebras de página definidas à mão na pré-visualização. Guardadas com a assinatura da
+   *  matriz (lotes x semanas): se a obra mudar de tamanho, a quebra antiga cairia no lugar
+   *  errado, então ela é descartada em vez de ser aplicada torta. */
+  function pdfQuebras(M){
+    var sig=M.allIdxs.length+'x'+M.nSemRows;
+    var q=window._pdfQuebras;
+    if(!q||q.sig!==sig)q=window._pdfQuebras={sig:sig,lotes:[],semanas:[]};
+    return q;
+  }
+  function pdfTemQuebras(q){ return !!(q&&((q.lotes&&q.lotes.length)||(q.semanas&&q.semanas.length))); }
+  /** Converte o plano automático em lista de quebras explícitas. É o que acontece no primeiro
+   *  arrasto: igual ao Excel, mexer numa linha congela as outras onde estão. */
+  function pdfFixaQuebras(plano,q){
+    if(pdfTemQuebras(q))return;
+    var acc=0; q.lotes=[];
+    plano.chunks.forEach(function(c,i){ acc+=c.length; if(i<plano.chunks.length-1)q.lotes.push(acc); });
+    q.semanas=[];
+    plano.faixas.forEach(function(f,i){ if(i>0)q.semanas.push(f.de); });
+  }
+  function pdfOrdena(a){
+    var vis={}, out=[];
+    (a||[]).forEach(function(v){ if(!vis[v]){ vis[v]=1; out.push(+v); } });
+    return out.sort(function(x,y){ return x-y; });
+  }
+  function pdfCortaLotes(allIdxs,cortes){
+    var pts=[0].concat(pdfOrdena(cortes).filter(function(v){ return v>0&&v<allIdxs.length; }),[allIdxs.length]);
+    var out=[];
+    for(var i=1;i<pts.length;i++){ var c=allIdxs.slice(pts[i-1],pts[i]); if(c.length)out.push(c); }
+    return out.length?out:[allIdxs];
+  }
+  function pdfCortaSemanas(nSemRows,cortes){
+    var pts=[1].concat(pdfOrdena(cortes).filter(function(v){ return v>1&&v<=nSemRows; }),[nSemRows+1]);
+    var out=[];
+    for(var i=1;i<pts.length;i++)if(pts[i]>pts[i-1])out.push({de:pts[i-1],ate:pts[i]-1,ultima:false});
+    if(!out.length)out.push({de:1,ate:Math.max(1,nSemRows),ultima:false});
+    out[out.length-1].ultima=true;
+    return out;
+  }
+  /** Mede cada página do plano e marca a que não cabe no papel — é o que pinta de vermelho na
+   *  pré-visualização quando a quebra manual pede mais do que a folha aguenta. */
+  function pdfMarcaPaginas(M,chunks,faixas,scale,pageW,alturaUtil,manual){
+    var pags=[], n=0, estouro=0;
+    chunks.forEach(function(c,ci){
+      var w2=M.fixedW;
+      c.forEach(function(li){ w2+=M.lotWs[M.allIdxs.indexOf(li)]||60; });
+      faixas.forEach(function(f,fi){
+        var h2=M.theadH+(f.ate-f.de+1)*M.linhaH+(f.ultima?M.sumH:0);
+        var cabe=(w2*scale<=pageW*1.02)&&(h2*scale<=alturaUtil*1.02);
+        if(!cabe)estouro++;
+        pags.push({ci:ci,fi:fi,n:++n,cabe:cabe});
+      });
+    });
+    return {scale:scale,chunks:chunks,faixas:faixas,folhas:pags.length,paginas:pags,
+      estouro:estouro,manual:!!manual};
+  }
+  function pdfPlanoFolhas(M,pageW,pageH,escFixa,quebras){
     var headH=30, slack=14;                      // cabeçalho por folha + folga fixa
     var alturaUtil=pageH-headH-slack;
     function fatiaLotes(av,target){
@@ -9473,6 +9551,21 @@
       return out;
     }
     var totalW=M.lotWs.reduce(function(a,b){ return a+b; },0);
+    if(pdfTemQuebras(quebras)){
+      // Quebra manual: o corte é o que o usuário desenhou; o que o app ainda decide é a escala,
+      // e só quando ela é automática — aí encolhe o bastante pra MAIOR página caber.
+      var chM=pdfCortaLotes(M.allIdxs,quebras.lotes);
+      var fxM=pdfCortaSemanas(M.nSemRows,quebras.semanas);
+      var maiorWM=0;
+      chM.forEach(function(c){ var w3=0; c.forEach(function(li){ w3+=M.lotWs[M.allIdxs.indexOf(li)]||60; }); maiorWM=Math.max(maiorWM,w3); });
+      var maiorHM=0;
+      fxM.forEach(function(f){ maiorHM=Math.max(maiorHM,M.theadH+(f.ate-f.de+1)*M.linhaH+(f.ultima?M.sumH:0)); });
+      var escM;
+      if(escFixa)escM=Math.max(0.1,Math.min(2,escFixa/100));
+      else escM=Math.max(0.1,+(Math.min(1.25,pageW*0.97/Math.max(1,maiorWM+M.fixedW),
+        alturaUtil/Math.max(1,maiorHM))*0.97).toFixed(3));
+      return pdfMarcaPaginas(M,chM,fxM,escM,pageW,alturaUtil,true);
+    }
     var scale;
     if(escFixa)scale=Math.max(0.1,Math.min(2,escFixa/100));
     else{
@@ -9515,7 +9608,153 @@
     }
     if(!faixas.length)faixas.push({de:1,ate:M.nSemRows,ultima:true});
     faixas[faixas.length-1].ultima=true;
-    return {scale:scale,chunks:chunks,faixas:faixas,folhas:chunks.length*faixas.length};
+    return pdfMarcaPaginas(M,chunks,faixas,scale,pageW,alturaUtil,false);
+  }
+  /** Desenha a miniatura: a matriz esquematizada (cada atividade é um retângulo na cor do
+   *  serviço), as páginas numeradas por cima e as linhas de quebra. Tracejado = corte calculado
+   *  pelo app; cheio = corte definido por quem vai imprimir.
+   *  aoMudar() é chamado quando uma quebra é arrastada, inserida ou removida. */
+  function pdfDesenhaPrev(M,plano,quebras,aoMudar){
+    var box=document.getElementById('pdfPrev'); if(!box)return;
+    if(!M.allIdxs.length||!M.nSemRows){ box.innerHTML='<div class="pp-vazio">Nada pra prever.</div>'; return; }
+    var xs=[M.fixedW], i;
+    for(i=0;i<M.lotWs.length;i++)xs.push(xs[xs.length-1]+(M.lotWs[i]||60));
+    var totalW=xs[xs.length-1], totalH=M.theadH+M.nSemRows*M.linhaH+M.sumH;
+    var pad=12, rodape=20;
+    var bw=box.clientWidth||520, bh=(box.clientHeight||280)-rodape;
+    var k=Math.min((bw-2*pad)/Math.max(1,totalW),(bh-2*pad)/Math.max(1,totalH));
+    var ox=Math.round((bw-totalW*k)/2), oy=Math.round((bh-totalH*k)/2);
+    function X(v){ return ox+v*k; }
+    function linhaY(r){ return oy+(M.theadH+(r-1)*M.linhaH)*k; }   // topo da linha de semana r
+    var h=[];
+    h.push('<div class="pp-mat" style="left:'+ox+'px;top:'+oy+'px;width:'+(totalW*k)+'px;height:'+(totalH*k)+'px"></div>');
+    h.push('<div class="pp-rot" style="left:'+ox+'px;top:'+oy+'px;width:'+(M.fixedW*k)+'px;height:'+(totalH*k)+'px"></div>');
+    h.push('<div class="pp-head" style="left:'+ox+'px;top:'+oy+'px;width:'+(totalW*k)+'px;height:'+Math.max(2,M.theadH*k)+'px"></div>');
+    (M.segs||[]).forEach(function(g){
+      var c=M.allIdxs.indexOf(g.li); if(c<0||g.start<1||g.start>M.nSemRows)return;
+      var ate=Math.min(M.nSemRows,g.start+(g.dur||1)-1);
+      h.push('<div class="pp-seg" style="left:'+X(xs[c])+'px;top:'+linhaY(g.start)+'px;width:'+
+        Math.max(1,(xs[c+1]-xs[c])*k-1)+'px;height:'+Math.max(1.5,(ate-g.start+1)*M.linhaH*k)+'px;background:'+svcColor(SERV[g.si])+'"></div>');
+    });
+    var cAcc=[0];
+    plano.chunks.forEach(function(c){ cAcc.push(cAcc[cAcc.length-1]+c.length); });
+    var n=0;
+    plano.chunks.forEach(function(c,ci){
+      plano.faixas.forEach(function(f){
+        var pg=(plano.paginas||[])[n]||{cabe:true}; n++;
+        var y1=linhaY(f.de), y2=linhaY(f.ate+1)+(f.ultima?M.sumH*k:0);
+        h.push('<div class="pp-pg'+(pg.cabe?'':' estourou')+'" style="left:'+X(xs[cAcc[ci]])+'px;top:'+y1+
+          'px;width:'+(X(xs[cAcc[ci+1]])-X(xs[cAcc[ci]]))+'px;height:'+(y2-y1)+'px">'+n+'</div>');
+      });
+    });
+    var manual=plano.manual;
+    for(i=1;i<plano.chunks.length;i++){
+      var x=X(xs[cAcc[i]]);
+      h.push('<div class="pp-lin v'+(manual?'':' auto')+'" style="left:'+(x-1)+'px;top:'+oy+'px;height:'+(totalH*k)+'px"></div>');
+      h.push('<div class="pp-grab v" data-tipo="v" data-pos="'+cAcc[i]+'" title="Arraste pra mudar a quebra entre lotes" style="left:'+(x-6)+'px;top:'+oy+'px;height:'+(totalH*k)+'px"></div>');
+    }
+    for(i=1;i<plano.faixas.length;i++){
+      var y=linhaY(plano.faixas[i].de);
+      h.push('<div class="pp-lin h'+(manual?'':' auto')+'" style="left:'+ox+'px;top:'+(y-1)+'px;width:'+(totalW*k)+'px"></div>');
+      h.push('<div class="pp-grab h" data-tipo="h" data-pos="'+plano.faixas[i].de+'" title="Arraste pra mudar a quebra entre semanas" style="left:'+ox+'px;top:'+(y-6)+'px;width:'+(totalW*k)+'px"></div>');
+    }
+    h.push('<div class="pp-hint">Arraste as linhas azuis · botão direito insere ou remove uma quebra · arrastar pra fora da matriz remove</div>');
+    box.innerHTML=h.join('');
+
+    function colPerto(px){ var m=1,d=1e9; for(var c=1;c<xs.length-1;c++){ var dd=Math.abs(X(xs[c])-px); if(dd<d){d=dd;m=c;} } return m; }
+    function linPerto(py){ var m=2,d=1e9; for(var r=2;r<=M.nSemRows;r++){ var dd=Math.abs(linhaY(r)-py); if(dd<d){d=dd;m=r;} } return m; }
+    function dentro(px,py){ return px>=X(xs[0])-8&&px<=X(totalW)+8&&py>=oy-8&&py<=oy+totalH*k+8; }
+
+    /* O innerHTML é refeito a cada mudança, mas a CAIXA é sempre a mesma: registrar os eventos
+     * aqui dentro acumulava um ouvinte por redesenho — um clique direito abria vários menus de
+     * uma vez. Os ouvintes entram uma vez só e leem o estado atual daqui. */
+    box._pp={colPerto:colPerto,linPerto:linPerto,dentro:dentro,X:X,linhaY:linhaY,
+      xs:xs,M:M,plano:plano,quebras:quebras,aoMudar:aoMudar};
+    if(box._ppLigado)return;
+    box._ppLigado=1;
+    box.addEventListener('pointerdown',function(e){
+      var S=box._pp; if(!S)return;
+      var colPerto=S.colPerto,linPerto=S.linPerto,dentro=S.dentro,X=S.X,linhaY=S.linhaY,
+          xs=S.xs,M=S.M,plano=S.plano,quebras=S.quebras,aoMudar=S.aoMudar;
+      var g=e.target.closest&&e.target.closest('.pp-grab'); if(!g)return;
+      e.preventDefault();
+      pdfFixaQuebras(plano,quebras);          // mexeu numa linha, as outras congelam onde estão
+      var tipo=g.getAttribute('data-tipo'), de=+g.getAttribute('data-pos');
+      var lista=(tipo==='v')?quebras.lotes:quebras.semanas;
+      var r=box.getBoundingClientRect();
+      function destino(ev){
+        var px=ev.clientX-r.left, py=ev.clientY-r.top;
+        if(!dentro(px,py))return null;        // soltou fora: a quebra some
+        return (tipo==='v')?colPerto(px):linPerto(py);
+      }
+      function mv(ev){
+        var np=destino(ev); if(np==null)return;
+        if(tipo==='v')g.style.left=(X(xs[np])-6)+'px';
+        else g.style.top=(linhaY(np)-6)+'px';
+      }
+      function up(ev){
+        document.removeEventListener('pointermove',mv);
+        document.removeEventListener('pointerup',up);
+        var np=destino(ev);
+        var j=lista.indexOf(de); if(j>=0)lista.splice(j,1);
+        if(np!=null&&lista.indexOf(np)<0)lista.push(np);
+        if(tipo==='v')quebras.lotes=pdfOrdena(lista); else quebras.semanas=pdfOrdena(lista);
+        aoMudar();
+      }
+      document.addEventListener('pointermove',mv);
+      document.addEventListener('pointerup',up);
+    });
+
+    box.addEventListener('contextmenu',function(e){
+      var S=box._pp; if(!S)return;
+      var colPerto=S.colPerto,linPerto=S.linPerto,dentro=S.dentro,X=S.X,linhaY=S.linhaY,
+          xs=S.xs,M=S.M,plano=S.plano,quebras=S.quebras,aoMudar=S.aoMudar;
+      e.preventDefault();
+      var velho=document.querySelector('.pp-menu'); if(velho)velho.remove();
+      var r=box.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+      if(!dentro(px,py))return;
+      // coluna e linha SOB o cursor: a quebra entra antes delas, como o "inserir quebra" do Excel
+      var cSob=1; for(var c=1;c<xs.length;c++){ if(X(xs[c])>px){ cSob=c; break; } cSob=xs.length-1; }
+      var rSob=M.nSemRows; for(var w=1;w<=M.nSemRows;w++){ if(linhaY(w+1)>py){ rSob=w; break; } }
+      // Quebras que existem de fato no plano — só elas podem ser removidas, e some UMA por vez:
+      // o alvo é a linha mais perto do cursor, não "tudo que estiver por perto".
+      var cAcc=[0]; plano.chunks.forEach(function(c){ cAcc.push(cAcc[cAcc.length-1]+c.length); });
+      var vPos=cAcc.slice(1,-1), hPos=plano.faixas.slice(1).map(function(f){ return f.de; });
+      var alvoV=null,dV=1e9, alvoH=null,dH=1e9;
+      vPos.forEach(function(v){ var d=Math.abs(X(xs[v])-px); if(d<dV){ dV=d; alvoV=v; } });
+      hPos.forEach(function(v){ var d=Math.abs(linhaY(v)-py); if(d<dH){ dH=d; alvoH=v; } });
+      var rem=null;
+      if(alvoV!=null&&dV<10&&(alvoH==null||dH>=10||dV<=dH))rem={t:'v',p:alvoV};
+      else if(alvoH!=null&&dH<10)rem={t:'h',p:alvoH};
+      var itens=[];
+      if(cSob>0&&cSob<M.allIdxs.length&&vPos.indexOf(cSob)<0)
+        itens.push(['Inserir quebra antes do lote '+LOTS[M.allIdxs[cSob]],function(){ pdfFixaQuebras(plano,quebras); quebras.lotes=pdfOrdena(quebras.lotes.concat([cSob])); aoMudar(); }]);
+      if(rSob>1&&rSob<=M.nSemRows&&hPos.indexOf(rSob)<0)
+        itens.push(['Inserir quebra antes de '+fmtDate(mondayOf(rSob)),function(){ pdfFixaQuebras(plano,quebras); quebras.semanas=pdfOrdena(quebras.semanas.concat([rSob])); aoMudar(); }]);
+      if(rem)
+        itens.push([(rem.t==='v')?('Remover a quebra antes do lote '+LOTS[M.allIdxs[rem.p]])
+                                 :('Remover a quebra antes de '+fmtDate(mondayOf(rem.p))),function(){
+          pdfFixaQuebras(plano,quebras);
+          if(rem.t==='v')quebras.lotes=quebras.lotes.filter(function(v){ return v!==rem.p; });
+          else quebras.semanas=quebras.semanas.filter(function(v){ return v!==rem.p; });
+          aoMudar();
+        }]);
+      itens.push(['Voltar ao corte automático',function(){ quebras.lotes=[]; quebras.semanas=[]; aoMudar(); }]);
+      var m=document.createElement('div'); m.className='pp-menu';
+      m.style.left=Math.min(e.clientX,window.innerWidth-250)+'px';
+      m.style.top=Math.min(e.clientY,window.innerHeight-40-itens.length*34)+'px';
+      itens.forEach(function(it,ix){
+        var b=document.createElement('button'); b.textContent=it[0];
+        b.addEventListener('click',function(){ m.remove(); it[1](); });
+        m.appendChild(b);
+      });
+      document.body.appendChild(m);
+      setTimeout(function(){
+        document.addEventListener('pointerdown',function fora(ev){
+          if(!m.contains(ev.target)){ m.remove(); document.removeEventListener('pointerdown',fora); }
+        });
+      },0);
+    });
   }
   /** Diálogo de impressão com escolha de papel, igual ao do Excel: tamanho, orientação, margem e
    *  escala — e a conta de quantas folhas cada escolha dá, antes de imprimir.
@@ -9529,7 +9768,7 @@
     }).join('');
     var lab='font-size:12.5px;font-weight:600;color:var(--muted)';
     var back=document.createElement('div'); back.className='segmenu-backdrop';
-    back.innerHTML='<div class="segmenu-panel card" style="max-width:560px">'+
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:720px;max-height:92vh;overflow:auto">'+
       '<div class="eyebrow" style="margin-bottom:2px">Exportar PDF — configurar página</div>'+
       '<div class="note" style="margin-bottom:12px">Escolha o papel, a orientação e a escala. A matriz é dividida em folhas desse tamanho.</div>'+
       '<div style="display:grid;grid-template-columns:110px 1fr;gap:9px 10px;align-items:center">'+
@@ -9558,7 +9797,14 @@
             '<option value="fixa"'+(P.escala!=='auto'?' selected':'')+'>Escala fixa</option></select>'+
           '<input class="inp" id="pdfEscV" type="number" min="10" max="200" step="5" value="'+(P.escala==='auto'?100:P.escala)+'" style="width:84px"> %</div>'+
       '</div>'+
-      '<div id="pdfEstim" class="note" style="margin-top:13px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;line-height:1.5"></div>'+
+      '<div id="pdfPrevBox" style="margin-top:13px">'+
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
+          '<span class="eyebrow" style="margin:0">Quebra de página</span>'+
+          '<span class="note" id="pdfQbEstado"></span>'+
+          '<button class="btn" id="pdfQbReset" style="margin-left:auto;padding:4px 10px;font-size:11.5px">Voltar ao automático</button>'+
+        '</div>'+
+        '<div class="pdfprev" id="pdfPrev"></div></div>'+
+      '<div id="pdfEstim" class="note" style="margin-top:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;line-height:1.5"></div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
         '<button class="btn" id="pdfCancel">Cancelar</button>'+
         '<button class="btn primary" id="pdfOk">Imprimir</button></div></div>';
@@ -9590,22 +9836,29 @@
         b.classList.toggle('primary',b.getAttribute('data-ori')===ori);
       });
       var est=q('pdfEstim');
+      q('pdfPrevBox').style.display=unica?'none':'';
       if(unica){
         est.innerHTML='<b>Uma página só</b>, do tamanho exato da matriz. O papel e a redução ficam '+
           'pro diálogo de impressão (ou pra plotter) — serve pra "ajustar à página".';
         return;
       }
       if(!M)M=pdfMedeMatriz();
+      var qb=pdfQuebras(M);
       var mm=(ori==='retrato')?{w:o.w,h:o.h}:{w:o.h,h:o.w};
       var pxPerMm=96/25.4;
-      var pl=pdfPlanoFolhas(M,(mm.w-2*o.margem)*pxPerMm,(mm.h-2*o.margem)*pxPerMm,o.escala==='auto'?null:o.escala);
+      var pl=pdfPlanoFolhas(M,(mm.w-2*o.margem)*pxPerMm,(mm.h-2*o.margem)*pxPerMm,
+        o.escala==='auto'?null:o.escala,qb);
       var det=[];
       if(pl.chunks.length>1)det.push(pl.chunks.length+' faixa(s) de lotes');
       if(pl.faixas.length>1)det.push(pl.faixas.length+' faixa(s) de semanas');
       est.innerHTML='<b>'+pl.folhas+' folha'+(pl.folhas===1?'':'s')+'</b> · escala '+Math.round(pl.scale*100)+'% · '+
         o.n+' '+(ori==='retrato'?'retrato':'paisagem')+' '+cm(mm.w)+' × '+cm(mm.h)+' cm'+
         (det.length?('<br><span style="color:var(--muted)">'+det.join(' · ')+'</span>'):'')+
+        (pl.estouro?('<br><span style="color:var(--crit)">'+pl.estouro+' página(s) em vermelho não cabem no papel nessa escala — mova a quebra, use papel maior ou volte a escala pra "ajustar à folha".</span>'):'')+
         (pl.scale<0.45?'<br><span style="color:var(--warn)">Escala baixa: a letra vai sair miúda. Papel maior ou escala fixa deixa mais legível.</span>':'');
+      q('pdfQbEstado').textContent=pl.manual?'definida à mão':'calculada pelo app';
+      q('pdfQbReset').style.display=pl.manual?'':'none';
+      pdfDesenhaPrev(M,pl,qb,atualiza);
     }
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
@@ -9617,6 +9870,10 @@
       ori=b.getAttribute('data-ori'); atualiza();
     });
     q('pdfCancel').addEventListener('click',fecha);
+    q('pdfQbReset').addEventListener('click',function(){
+      var qb=pdfQuebras(M||(M=pdfMedeMatriz()));
+      qb.lotes=[]; qb.semanas=[]; atualiza();
+    });
     q('pdfOk').addEventListener('click',function(){
       window._pdfPapel=lePapel();
       fecha();
@@ -9747,7 +10004,7 @@
       estP.textContent='@media print{@page{size:'+folha.w+'mm '+folha.h+'mm;margin:'+margemMM+'mm}}';
       document.head.appendChild(estP);
       var M=pdfMedeMatriz(allIdxs,segsAll);
-      var plano=pdfPlanoFolhas(M,pageW,pageH,(P.escala==='auto'||!P.escala)?null:P.escala);
+      var plano=pdfPlanoFolhas(M,pageW,pageH,(P.escala==='auto'||!P.escala)?null:P.escala,pdfQuebras(M));
       var chunks=plano.chunks, faixas=plano.faixas, scale=plano.scale;
       var folhasHTML=[], total=chunks.length*faixas.length, n=0;
       chunks.forEach(function(chunk){
