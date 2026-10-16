@@ -9400,28 +9400,229 @@
     XLSX.writeFile(wb,nome+'_dados.xlsx');
     toast('Dados exportados.');
   }
-  /** Pergunta o formato antes de imprimir. Folha única sai numa página do tamanho exato da
-   *  matriz: o PDF fica com uma página só, e a escolha de papel e escala passa a ser do diálogo
-   *  de impressão (ou da plotter), em vez de o app decidir por quem imprime. */
+  /* Tamanhos de papel, como na lista do Excel. Medidas em mm e sempre em RETRATO
+   * (largura x altura); a orientação só troca os dois na hora de escrever o @page. */
+  var PDF_PAPEIS=[
+    {id:'carta',    n:'Carta',     w:215.9, h:279.4},
+    {id:'tabloide', n:'Tablóide',  w:279.4, h:431.8},
+    {id:'oficio',   n:'Ofício',    w:215.9, h:355.6},
+    {id:'extrato',  n:'Extrato',   w:139.7, h:215.9},
+    {id:'executivo',n:'Executivo', w:184.1, h:266.7},
+    {id:'a5',       n:'A5',        w:148,   h:210},
+    {id:'a4',       n:'A4',        w:210,   h:297},
+    {id:'a3',       n:'A3',        w:297,   h:420},
+    {id:'a2',       n:'A2',        w:420,   h:594},
+    {id:'a1',       n:'A1',        w:594,   h:841},
+    {id:'a0',       n:'A0',        w:841,   h:1189},
+    {id:'b4',       n:'B4 (JIS)',  w:257,   h:364},
+    {id:'b5',       n:'B5 (JIS)',  w:182,   h:257}
+  ];
+  function pdfPapel(id){ return PDF_PAPEIS.filter(function(x){ return x.id===id; })[0]||null; }
+  /** Escolha atual de papel. Fica na sessão: quem imprime duas vezes seguidas não reconfigura. */
+  function pdfPapelAtual(){
+    return window._pdfPapel||(window._pdfPapel={id:'a4',n:'A4',w:210,h:297,orient:'paisagem',margem:10,escala:'auto'});
+  }
+  /** Folha em mm já na orientação escolhida. */
+  function pdfFolhaMM(P){
+    P=P||pdfPapelAtual();
+    return (P.orient==='retrato')?{w:+P.w,h:+P.h}:{w:+P.h,h:+P.w};
+  }
+  /** Mede a matriz no formato COMPACTO de impressão (linhas mais baixas, sem grips/etiquetas de
+   *  equipe — estilos de .print-page), num elemento fora da tela. Medir a matriz da tela daria
+   *  uma altura maior que a real e a escala sairia menor do que podia.
+   *  A medida NÃO depende do papel — por isso dá pra medir uma vez e testar vários tamanhos. */
+  function pdfMedeMatriz(allIdxs,segsAll){
+    allIdxs=allIdxs||viewLotIdxs(); segsAll=segsAll||buildSchedule();
+    var probe=document.createElement('div');
+    probe.className='print-page';
+    probe.style.cssText='position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content';
+    probe.innerHTML=matrixTableCore(true,allIdxs,segsAll,{compacto:true});
+    document.body.appendChild(probe);
+    var ptable=probe.querySelector('table');
+    var naturalH=ptable.offsetHeight;
+    var theadH=(ptable.tHead?ptable.tHead.offsetHeight:0);
+    var corpo=ptable.querySelectorAll('tbody tr');
+    var linhaH=corpo.length?Math.max(6,(naturalH-theadH)/corpo.length):12;
+    var nSum=ptable.querySelectorAll('tbody tr.sumrow').length;
+    var ths=ptable.querySelectorAll('thead th');
+    var fixedW=(ths[0]?ths[0].offsetWidth:0)+(ths[1]?ths[1].offsetWidth:0);
+    var lotWs=[]; for(var ti=2;ti<ths.length;ti++)lotWs.push(ths[ti].offsetWidth||60);
+    probe.remove();
+    return {allIdxs:allIdxs,segs:segsAll,naturalH:naturalH,theadH:theadH,linhaH:linhaH,
+      nSum:nSum,nSemRows:corpo.length-nSum,sumH:nSum*linhaH,fixedW:fixedW,lotWs:lotWs};
+  }
+  /** Em quantas folhas daquele papel a matriz cabe, e com que escala.
+   *
+   *  A escala podia sair só da ALTURA, com os lotes fatiados na largura que sobrasse. Numa obra
+   *  com muitas semanas e poucos lotes a matriz é alta e estreita: ela encolhia pra caber na
+   *  altura (54% numa medição real) e metade da folha ficava em branco, com a letra miúda. Então
+   *  as semanas também são fatiadas: procura-se em quantas faixas de semanas e de lotes a folha
+   *  fica mais cheia — ou seja, qual combinação permite a MAIOR escala.
+   *  escFixa (em %) pula a procura e usa a escala pedida. */
+  function pdfPlanoFolhas(M,pageW,pageH,escFixa){
+    var headH=30, slack=14;                      // cabeçalho por folha + folga fixa
+    var alturaUtil=pageH-headH-slack;
+    function fatiaLotes(av,target){
+      var out=[], cur=[], curW=0;
+      for(var k=0;k<M.allIdxs.length;k++){
+        var wcol=M.lotWs[k]||60;
+        if(cur.length&&(curW+wcol>av||curW>=target)){ out.push(cur); cur=[]; curW=0; }
+        cur.push(M.allIdxs[k]); curW+=wcol;
+      }
+      if(cur.length)out.push(cur);
+      return out;
+    }
+    var totalW=M.lotWs.reduce(function(a,b){ return a+b; },0);
+    var scale;
+    if(escFixa)scale=Math.max(0.1,Math.min(2,escFixa/100));
+    else{
+      var melhor=null;
+      for(var nR=1;nR<=6&&nR<=Math.max(1,M.nSemRows);nR++){
+        var porFaixa=Math.ceil(M.nSemRows/nR);
+        // só a única faixa de semanas leva o resumo por serviço
+        var hFaixa=M.theadH+porFaixa*M.linhaH+(nR===1?M.sumH:0);
+        var escH=alturaUtil/Math.max(1,hFaixa);
+        var av=pageW/Math.min(1.25,escH)*0.97-M.fixedW;
+        if(av<=0)continue;
+        var cols=fatiaLotes(av,Infinity), maiorW=0;
+        cols.forEach(function(c){ var w2=0; for(var q=0;q<c.length;q++)w2+=M.lotWs[M.allIdxs.indexOf(c[q])]||60; maiorW=Math.max(maiorW,w2); });
+        var escW=pageW*0.97/Math.max(1,maiorW+M.fixedW);
+        var e2=Math.min(1.25,escH,escW), folhas=cols.length*nR;
+        if(!melhor||e2>melhor.esc+0.02||(Math.abs(e2-melhor.esc)<=0.02&&folhas<melhor.folhas))
+          melhor={esc:e2,folhas:folhas};
+      }
+      var bruta=melhor?melhor.esc:Math.max(0.12,alturaUtil/Math.max(1,M.naturalH));
+      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
+      // de semanas isso soma — sem a folga a última linha escorrega pra uma folha vazia.
+      scale=Math.max(0.1,Math.min(1.6,+(bruta*0.97).toFixed(3)));
+    }
+    var av2=pageW/scale*0.97-M.fixedW;
+    var chunks=fatiaLotes(av2,Infinity);
+    if(chunks.length>1){
+      var bal=fatiaLotes(av2,totalW/chunks.length);
+      if(bal.length===chunks.length)chunks=bal;
+    }
+    // Com a escala decidida, cada folha leva quantas semanas couberem de fato — dividir em
+    // partes iguais deixava sobra de altura em todas elas.
+    var cabem=Math.max(1,Math.floor((alturaUtil/scale-M.theadH)/Math.max(1,M.linhaH)));
+    var faixas=[], pos=1;
+    while(pos<=M.nSemRows){
+      var sobra=M.nSemRows-pos+1;
+      var cabeAqui=(sobra<=cabem-M.nSum)?sobra:Math.min(cabem,sobra);  // a última leva o resumo
+      var ate=Math.min(M.nSemRows,pos+cabeAqui-1);
+      faixas.push({de:pos,ate:ate,ultima:false});
+      pos=ate+1;
+    }
+    if(!faixas.length)faixas.push({de:1,ate:M.nSemRows,ultima:true});
+    faixas[faixas.length-1].ultima=true;
+    return {scale:scale,chunks:chunks,faixas:faixas,folhas:chunks.length*faixas.length};
+  }
+  /** Diálogo de impressão com escolha de papel, igual ao do Excel: tamanho, orientação, margem e
+   *  escala — e a conta de quantas folhas cada escolha dá, antes de imprimir.
+   *  "Sob medida" continua existindo: uma página só, do tamanho exato da matriz, pra plotter. */
   function exportPdfDialogo(){
     if(!LOTS.length||!SERV.length){ exportPdf('a4'); return; }
+    var P=pdfPapelAtual(), M=null;
+    function cm(mm){ return (mm/10).toFixed(1).replace('.',','); }
+    var opts=PDF_PAPEIS.map(function(x){
+      return '<option value="'+x.id+'"'+(P.id===x.id?' selected':'')+'>'+x.n+' — '+cm(x.w)+' × '+cm(x.h)+' cm</option>';
+    }).join('');
+    var lab='font-size:12.5px;font-weight:600;color:var(--muted)';
     var back=document.createElement('div'); back.className='segmenu-backdrop';
-    back.innerHTML='<div class="segmenu-panel card" style="max-width:470px">'+
-      '<div class="eyebrow" style="margin-bottom:2px">Exportar PDF</div>'+
-      '<div class="note" style="margin-bottom:12px">Como a matriz deve ser dividida no papel.</div>'+
-      '<div style="display:flex;flex-direction:column;gap:10px">'+
-        '<button class="btn" id="pdfA4" style="text-align:left;padding:10px 12px;height:auto">'+
-          '<b>A4 paisagem, várias folhas</b><br><span class="note">Pronto pra imprimir em impressora comum. O app escolhe a escala e divide por lotes e semanas.</span></button>'+
-        '<button class="btn" id="pdfUm" style="text-align:left;padding:10px 12px;height:auto">'+
-          '<b>Folha única, sob medida</b><br><span class="note">Uma página só, do tamanho da matriz inteira. Você ajusta papel e escala no diálogo de impressão — serve pra plotter ou pra "ajustar à página".</span></button>'+
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:560px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Exportar PDF — configurar página</div>'+
+      '<div class="note" style="margin-bottom:12px">Escolha o papel, a orientação e a escala. A matriz é dividida em folhas desse tamanho.</div>'+
+      '<div style="display:grid;grid-template-columns:110px 1fr;gap:9px 10px;align-items:center">'+
+        '<label style="'+lab+'">Tamanho</label>'+
+        '<select class="inp" id="pdfTam">'+
+          '<option value="unica"'+(P.id==='unica'?' selected':'')+'>Sob medida — folha única (tamanho da matriz)</option>'+
+          opts+
+          '<option value="custom"'+(P.id==='custom'?' selected':'')+'>Personalizado…</option>'+
+        '</select>'+
+        '<label style="'+lab+'" id="pdfOriLab">Orientação</label>'+
+        '<div id="pdfOri" style="display:flex;gap:6px">'+
+          '<button class="btn'+(P.orient!=='retrato'?' primary':'')+'" data-ori="paisagem" style="padding:6px 13px">Paisagem</button>'+
+          '<button class="btn'+(P.orient==='retrato'?' primary':'')+'" data-ori="retrato" style="padding:6px 13px">Retrato</button>'+
+        '</div>'+
+        '<label style="'+lab+'" id="pdfCustLab">Personalizado</label>'+
+        '<div id="pdfCustBox" style="display:flex;gap:6px;align-items:center;font-size:12.5px">'+
+          '<input class="inp" id="pdfCW" type="number" min="50" max="5000" step="1" value="'+(P.id==='custom'?P.w:420)+'" style="width:96px"> mm ×'+
+          '<input class="inp" id="pdfCH" type="number" min="50" max="5000" step="1" value="'+(P.id==='custom'?P.h:594)+'" style="width:96px"> mm'+
+          '<span class="note" style="margin-left:4px">(a orientação decide o lado deitado)</span></div>'+
+        '<label style="'+lab+'" id="pdfMargLab">Margem</label>'+
+        '<div style="font-size:12.5px"><input class="inp" id="pdfMarg" type="number" min="0" max="40" step="1" value="'+(P.margem==null?10:P.margem)+'" style="width:96px"> mm</div>'+
+        '<label style="'+lab+'" id="pdfEscLab">Escala</label>'+
+        '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">'+
+          '<select class="inp" id="pdfEscM" style="width:180px">'+
+            '<option value="auto"'+(P.escala==='auto'?' selected':'')+'>Ajustar à folha</option>'+
+            '<option value="fixa"'+(P.escala!=='auto'?' selected':'')+'>Escala fixa</option></select>'+
+          '<input class="inp" id="pdfEscV" type="number" min="10" max="200" step="5" value="'+(P.escala==='auto'?100:P.escala)+'" style="width:84px"> %</div>'+
       '</div>'+
-      '<div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" id="pdfCancel">Cancelar</button></div></div>';
+      '<div id="pdfEstim" class="note" style="margin-top:13px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;line-height:1.5"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="pdfCancel">Cancelar</button>'+
+        '<button class="btn primary" id="pdfOk">Imprimir</button></div></div>';
     document.body.appendChild(back);
+    var q=function(id){ return back.querySelector('#'+id); };
+    var ori=(P.orient==='retrato')?'retrato':'paisagem';
+    function lePapel(){
+      var id=q('pdfTam').value;
+      var o={id:id,orient:ori,margem:Math.max(0,Math.min(40,+q('pdfMarg').value||0)),
+        escala:(q('pdfEscM').value==='fixa')?Math.max(10,Math.min(200,+q('pdfEscV').value||100)):'auto'};
+      if(id==='custom'){
+        // Guardado sempre em retrato (menor x maior), igual aos papéis da tabela: quem decide
+        // qual lado fica deitado é o botão de orientação, não a ordem em que foi digitado.
+        var a=Math.max(50,+q('pdfCW').value||420), b=Math.max(50,+q('pdfCH').value||594);
+        o.n='Personalizado'; o.w=Math.min(a,b); o.h=Math.max(a,b);
+      }
+      else if(id!=='unica'){ var x=pdfPapel(id); o.n=x.n; o.w=x.w; o.h=x.h; }
+      return o;
+    }
+    function atualiza(){
+      var o=lePapel(), unica=(o.id==='unica'), cust=(o.id==='custom');
+      ['pdfOriLab','pdfOri','pdfMargLab','pdfEscLab','pdfEscM','pdfEscV'].forEach(function(k){
+        var e=q(k); if(e)e.style.opacity=unica?'.4':'1';
+      });
+      q('pdfMarg').disabled=false;
+      q('pdfEscV').style.display=(q('pdfEscM').value==='fixa'&&!unica)?'':'none';
+      ['pdfCustLab','pdfCustBox'].forEach(function(k){ q(k).style.display=cust?'':'none'; });
+      q('pdfOri').querySelectorAll('[data-ori]').forEach(function(b){
+        b.classList.toggle('primary',b.getAttribute('data-ori')===ori);
+      });
+      var est=q('pdfEstim');
+      if(unica){
+        est.innerHTML='<b>Uma página só</b>, do tamanho exato da matriz. O papel e a redução ficam '+
+          'pro diálogo de impressão (ou pra plotter) — serve pra "ajustar à página".';
+        return;
+      }
+      if(!M)M=pdfMedeMatriz();
+      var mm=(ori==='retrato')?{w:o.w,h:o.h}:{w:o.h,h:o.w};
+      var pxPerMm=96/25.4;
+      var pl=pdfPlanoFolhas(M,(mm.w-2*o.margem)*pxPerMm,(mm.h-2*o.margem)*pxPerMm,o.escala==='auto'?null:o.escala);
+      var det=[];
+      if(pl.chunks.length>1)det.push(pl.chunks.length+' faixa(s) de lotes');
+      if(pl.faixas.length>1)det.push(pl.faixas.length+' faixa(s) de semanas');
+      est.innerHTML='<b>'+pl.folhas+' folha'+(pl.folhas===1?'':'s')+'</b> · escala '+Math.round(pl.scale*100)+'% · '+
+        o.n+' '+(ori==='retrato'?'retrato':'paisagem')+' '+cm(mm.w)+' × '+cm(mm.h)+' cm'+
+        (det.length?('<br><span style="color:var(--muted)">'+det.join(' · ')+'</span>'):'')+
+        (pl.scale<0.45?'<br><span style="color:var(--warn)">Escala baixa: a letra vai sair miúda. Papel maior ou escala fixa deixa mais legível.</span>':'');
+    }
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
-    back.querySelector('#pdfCancel').addEventListener('click',fecha);
-    back.querySelector('#pdfA4').addEventListener('click',function(){ fecha(); exportPdf('a4'); });
-    back.querySelector('#pdfUm').addEventListener('click',function(){ fecha(); exportPdf('unica'); });
+    ['pdfTam','pdfMarg','pdfEscM','pdfEscV','pdfCW','pdfCH'].forEach(function(k){
+      q(k).addEventListener('change',atualiza); q(k).addEventListener('input',atualiza);
+    });
+    q('pdfOri').addEventListener('click',function(e){
+      var b=e.target.closest('[data-ori]'); if(!b)return;
+      ori=b.getAttribute('data-ori'); atualiza();
+    });
+    q('pdfCancel').addEventListener('click',fecha);
+    q('pdfOk').addEventListener('click',function(){
+      window._pdfPapel=lePapel();
+      fecha();
+      exportPdf(window._pdfPapel.id==='unica'?'unica':'a4');
+    });
+    atualiza();
   }
   function exportPdf(formato){
     window._pdfFormato=(formato==='unica')?'unica':'a4';
@@ -9491,31 +9692,11 @@
     var mat=document.getElementById('printMat');
     if(mat&&LOTS.length){
       var pxPerMm=96/25.4;
-      var pageW=(297-20)*pxPerMm, pageH=(210-20)*pxPerMm;
-      var headH=30, slack=14; // cabeçalho por folha + folga fixa
+      var P=pdfPapelAtual();
+      var folha=pdfFolhaMM(P), margemMM=(P.margem==null?10:+P.margem);
+      var pageW=(folha.w-2*margemMM)*pxPerMm, pageH=(folha.h-2*margemMM)*pxPerMm;
       var segsAll=buildSchedule();
       var allIdxs=viewLotIdxs(); // respeita o filtro global de lotes em exibição
-      // Mede a matriz no formato COMPACTO de impressão (linhas mais baixas, sem grips/etiquetas
-      // de equipe — estilos de .print-page), num elemento fora da tela. Medir a matriz da tela
-      // daria uma altura maior que a real e a escala sairia menor do que podia.
-      var probe=document.createElement('div');
-      probe.className='print-page';
-      probe.style.cssText='position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content';
-      probe.innerHTML=matrixTableCore(true,allIdxs,segsAll,{compacto:true});
-      document.body.appendChild(probe);
-      var ptable=probe.querySelector('table');
-      var naturalH=ptable.offsetHeight;
-      var theadH=(ptable.tHead?ptable.tHead.offsetHeight:0);
-      var corpo=ptable.querySelectorAll('tbody tr');
-      var linhaH=corpo.length?Math.max(6,(naturalH-theadH)/corpo.length):12;
-      var nSum=ptable.querySelectorAll('tbody tr.sumrow').length;
-      var nSemRows=corpo.length-nSum;             // linhas de semana (inclui paralisações)
-      var sumH=nSum*linhaH;
-      var ths=ptable.querySelectorAll('thead th');
-      var fixedW=(ths[0]?ths[0].offsetWidth:0)+(ths[1]?ths[1].offsetWidth:0);
-      var lotWs=[]; for(var ti=2;ti<ths.length;ti++)lotWs.push(ths[ti].offsetWidth||60);
-      probe.remove();
-      var alturaUtil=pageH-headH-slack;
       if(window._pdfFormato==='unica'){
         /* Uma página do tamanho exato do conteúdo. Escala 1 (nada de letra encolhida); papel e
          * redução ficam pro diálogo de impressão ou pra plotter.
@@ -9536,7 +9717,7 @@
         var realW=pg.offsetWidth, realH=pg.offsetHeight;
         mat.style.cssText=antes;
         // Teto de 5 m por lado: é o limite do próprio PDF (200 polegadas).
-        var margem=8, folgaMM=6;
+        var margem=margemMM||8, folgaMM=6;
         var escU=Math.min(1,(5000-2*margem)/Math.max(1,realW/pxPerMm),(5000-2*margem)/Math.max(1,realH/pxPerMm));
         var mmW=Math.ceil(realW*escU/pxPerMm)+2*margem+folgaMM;
         var mmH=Math.ceil(realH*escU/pxPerMm)+2*margem+folgaMM;
@@ -9559,64 +9740,15 @@
         document.head.appendChild(est);
         return;
       }
-      /* Antes a escala saía só da ALTURA e os lotes eram fatiados na largura que sobrasse. Numa
-       * obra com muitas semanas e poucos lotes a matriz é alta e estreita: ela encolhia pra caber
-       * na altura (54% numa medição real) e metade da folha ficava em branco, com a letra miúda.
-       * Agora as semanas também podem ser fatiadas: procura-se em quantas faixas de semanas e de
-       * lotes a folha fica mais cheia — ou seja, qual combinação permite a MAIOR escala. */
-      function fatiaLotes(av,target){
-        var out=[], cur=[], curW=0;
-        for(var k=0;k<allIdxs.length;k++){
-          var wcol=lotWs[k]||60;
-          if(cur.length&&(curW+wcol>av||curW>=target)){ out.push(cur); cur=[]; curW=0; }
-          cur.push(allIdxs[k]); curW+=wcol;
-        }
-        if(cur.length)out.push(cur);
-        return out;
-      }
-      var totalW=lotWs.reduce(function(a,b){return a+b;},0);
-      var melhor=null;
-      for(var nR=1;nR<=6&&nR<=Math.max(1,nSemRows);nR++){
-        var porFaixa=Math.ceil(nSemRows/nR);
-        // só a última faixa de semanas leva o resumo por serviço
-        var hFaixa=theadH+porFaixa*linhaH+(nR===1?sumH:0);
-        var escH=alturaUtil/Math.max(1,hFaixa);
-        var esc=Math.min(1.25,escH);
-        var av=pageW/esc*0.97-fixedW;
-        if(av<=0)continue;
-        var cols=fatiaLotes(av,Infinity);
-        // largura real da maior fatia, pra escala não estourar a folha
-        var maiorW=0, acc=0, idx0=0;
-        cols.forEach(function(c){ var w2=0; for(var q=0;q<c.length;q++)w2+=lotWs[allIdxs.indexOf(c[q])]||60; maiorW=Math.max(maiorW,w2); });
-        var escW=pageW*0.97/Math.max(1,maiorW+fixedW);
-        esc=Math.min(1.25,escH,escW);
-        var folhas=cols.length*nR;
-        if(!melhor||esc>melhor.esc+0.02||(Math.abs(esc-melhor.esc)<=0.02&&folhas<melhor.folhas))
-          melhor={nR:nR,esc:esc,cols:cols,folhas:folhas,porFaixa:porFaixa};
-      }
-      if(!melhor)melhor={nR:1,esc:Math.max(0.12,alturaUtil/Math.max(1,naturalH)),cols:[allIdxs],folhas:1,porFaixa:nSemRows};
-      var chunks=melhor.cols;
-      if(chunks.length>1){
-        var bal=fatiaLotes(pageW/melhor.esc*0.97-fixedW,totalW/chunks.length);
-        if(bal.length===chunks.length)chunks=bal;
-      }
-      // 3% a menos: o zoom fracionário arredonda cada linha pra cima em até 1px, e com dezenas
-      // de semanas isso soma — sem a folga a última linha pode escorregar pra uma folha vazia.
-      var scale=Math.max(0.12,Math.min(1.6,+(melhor.esc*0.97).toFixed(3)));
-      // Com a escala já decidida, cada folha leva quantas semanas couberem de fato — dividir em
-      // partes iguais deixava sobra de altura em todas elas.
-      var cabem=Math.max(1,Math.floor((alturaUtil/scale-theadH)/Math.max(1,linhaH)));
-      var faixas=[], pos=1;
-      while(pos<=nSemRows){
-        var sobra=nSemRows-pos+1;
-        // a última leva também o resumo por serviço, que ocupa algumas linhas
-        var cabeAqui=(sobra<=cabem-nSum)?sobra:Math.min(cabem,sobra);
-        var ate=Math.min(nSemRows,pos+cabeAqui-1);
-        faixas.push({de:pos,ate:ate,ultima:false});
-        pos=ate+1;
-      }
-      if(!faixas.length)faixas.push({de:1,ate:nSemRows,ultima:true});
-      faixas[faixas.length-1].ultima=true;
+      /* O papel é o escolhido no diálogo. O @page precisa ser escrito: a regra fixa do CSS é
+       * "landscape" genérico, e com ela o navegador imprimiria A4 mesmo com A3 pedido. */
+      var estP=document.getElementById('pdfPageSize')||document.createElement('style');
+      estP.id='pdfPageSize';
+      estP.textContent='@media print{@page{size:'+folha.w+'mm '+folha.h+'mm;margin:'+margemMM+'mm}}';
+      document.head.appendChild(estP);
+      var M=pdfMedeMatriz(allIdxs,segsAll);
+      var plano=pdfPlanoFolhas(M,pageW,pageH,(P.escala==='auto'||!P.escala)?null:P.escala);
+      var chunks=plano.chunks, faixas=plano.faixas, scale=plano.scale;
       var folhasHTML=[], total=chunks.length*faixas.length, n=0;
       chunks.forEach(function(chunk){
         faixas.forEach(function(fx){
