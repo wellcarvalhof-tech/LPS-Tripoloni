@@ -4887,7 +4887,10 @@
   window.MP_START=window.MP_START||HOJE_W;
   function mpWindowCells(){
     var segs=buildSchedule(); var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
-    var start=Math.max(1,Math.min(window.MP_START,tw)); var end=Math.min(tw,start+window.MP_WIN-1);
+    var win=window.MP_WIN;
+    var start,end;
+    if(win==='tudo'){ start=1; end=tw; }
+    else { start=Math.max(1,Math.min(window.MP_START,tw)); end=Math.min(tw,start+(+win||6)-1); }
     var cell={};
     segs.forEach(function(sg){ if(sg.start+sg.dur-1<start||sg.start>end)return;
       for(var w=Math.max(sg.start,start);w<=Math.min(sg.start+sg.dur-1,end);w++){
@@ -5470,15 +5473,19 @@
     });
     var abertas=MP.filter(function(r){return r.status!=='removida'&&r.status!=='cancelada';}).length;
     var top='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;margin-bottom:12px">'+
-      '<div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">Janela:</span>'+
-        '<button class="btn'+(window.MP_WIN===6?' primary':'')+'" data-mpwin="6" style="padding:5px 11px">6 semanas</button>'+
-        '<button class="btn'+(window.MP_WIN===8?' primary':'')+'" data-mpwin="8" style="padding:5px 11px">8 semanas</button></div>'+
-      '<div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">Início:</span>'+
+      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-weight:600;font-size:13px">Janela:</span>'+
+        [['4','4 sem'],['6','6 sem'],['8','8 sem'],['12','12 sem'],['tudo','Toda a matriz']].map(function(o){
+          var ativo=(String(window.MP_WIN)===o[0]);
+          return '<button class="btn'+(ativo?' primary':'')+'" data-mpwin="'+o[0]+'" style="padding:5px 11px">'+o[1]+'</button>';
+        }).join('')+'</div>'+
+      (window.MP_WIN==='tudo'?('<span class="mono" style="font-size:13px">Semanas 1 – '+wc.end+' <span style="color:var(--muted)">('+fmtDate(mondayOf(1))+' – '+fmtDate(mondayOf(wc.end))+')</span></span>')
+        :('<div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">Início:</span>'+
         '<button class="iconbtn" data-mpnav="-1">◀</button>'+
         '<span class="mono" style="font-size:13px">Semana '+wc.start+' – '+wc.end+' <span style="color:var(--muted)">('+fmtDate(mondayOf(wc.start))+' – '+fmtDate(mondayOf(wc.end))+')</span></span>'+
-        '<button class="iconbtn" data-mpnav="1">▶</button></div>'+
+        '<button class="iconbtn" data-mpnav="1">▶</button></div>'))+
       '<span class="pill mut" style="margin-left:auto">'+abertas+' em aberto / '+MP.length+' no total</span>'+
-      '<button class="btn" data-mpimport="1" style="padding:5px 11px">↥ Importar Excel</button></div>';
+      '<button class="btn" data-mpimport="1" style="padding:5px 11px">↥ Importar Excel</button>'+
+      '<button class="btn" data-mpexpmat="1" style="padding:5px 11px">↧ Exportar matriz</button></div>';
     var leg='<div class="legend" style="margin-bottom:12px"><span style="font-weight:600">Categorias:</span>'+
       MP_CATS.map(function(c){return '<span><span class="dot" style="background:'+c.color+'"></span>'+c.label+'</span>';}).join('')+
       '<span class="note" style="margin-left:auto">Clique numa célula — ou no nome do lote — pra lançar uma restrição ali.</span></div>';
@@ -5502,8 +5509,97 @@
       }
       body+='<tr><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td>'+tds+'</tr>';
     }
-    var matriz='<div class="tc-wrap" style="margin-bottom:14px"><table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+    var zm=window._matrixZoom||1;
+    var matriz=tcZoomBarHTML(true)+
+      '<div class="tc-wrap" id="tcWrap" style="margin-bottom:14px"><div class="tc-zoomin" style="zoom:'+zm+'">'+
+      '<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div></div>';
     return top+leg+(MP_FORM?mpFormHTML():'')+matriz;
+  }
+
+  /** Matriz do médio prazo em Excel: a mesma janela da tela, com as restrições na célula.
+   *  Duas abas — o quadro, pra leitura rápida, e a lista por célula, que é o que dá pra filtrar
+   *  e ordenar. Quadro sem a lista vira figura; lista sem o quadro perde o lugar no tempo. */
+  async function exportMatrizMedioPrazo(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
+    if(!LOTS.length){ alert('Cadastre lotes antes de exportar.'); return; }
+    var wc=mpWindowCells();
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    // restrições por célula (semana::lote::serviço::equipe), como na tela
+    var porCelula={}, lotIds=window._LOTIDS||[];
+    MP.forEach(function(r){
+      if(r.semana==null||!r.lote_id)return;
+      var li=lotIds.indexOf(r.lote_id); if(li<0)return;
+      var si=-1; SERV.forEach(function(x,i){ if(x.id===r.servico_id)si=i; });
+      var k=r.semana+'::'+li+'::'+si+'::'+(r.equipe||1);
+      (porCelula[k]||(porCelula[k]=[])).push(r);
+    });
+    var wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+
+    var ws=wb.addWorksheet('Quadro',{views:[{state:'frozen',xSplit:2,ySplit:1}]});
+    relCabecalho(ws,['Segunda-feira','Semana'].concat(LOTS.slice()),
+      [14,10].concat(LOTS.map(function(){ return 18; })));
+    for(var w=wc.end;w>=wc.start;w--){
+      var linha=[fmtDate(mondayOf(w)),'S'+isoWeek(mondayOf(w))];
+      var marca=[];
+      for(var li=0;li<LOTS.length;li++){
+        var subs=wc.cell[w+'::'+li]||[];
+        if(!subs.length){ linha.push(''); marca.push(null); continue; }
+        var txt=[], rs=[];
+        subs.forEach(function(sc){
+          var lista=porCelula[sc.key]||[];
+          var pend=lista.filter(function(r){ return r.status!=='removida'&&r.status!=='cancelada'; });
+          rs=rs.concat(pend);
+          txt.push(relSigla(SERV[sc.si])+' '+fmtBR(sc.qty)+(pend.length?(' ▲'+pend.length):''));
+        });
+        linha.push(txt.join(' | '));
+        marca.push({n:rs.length,cat:rs.length?catMeta(rs[0].categoria).color:'',cor:subs[0].color,
+          dica:rs.map(function(r){ return (r.codigo||'')+' '+(r.descricao||''); }).join(' / ')});
+      }
+      var row=ws.addRow(linha);
+      row.font={size:9};
+      marca.forEach(function(m,i){
+        if(!m)return;
+        var c=row.getCell(i+3);
+        var fundo=(m.n?m.cat:m.cor).replace('#','').toUpperCase();
+        c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF'+fundo}};
+        c.font={size:9,bold:!!m.n,color:{argb:pickFont('#'+fundo)==='#ffffff'?'FFFFFFFF':'FF0A0A0A'}};
+        c.alignment={horizontal:'center',wrapText:true};
+        if(m.n&&m.dica)c.note=m.dica.slice(0,400);
+      });
+    }
+
+    var wsR=wb.addWorksheet('Restrições na janela',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsR,['Semana','Rótulo','Data (segunda)','Lote','Serviço','Equipe','Código','Descrição',
+      'Categoria','Setor','Responsável','Situação','Identificada','Data de impacto','Prazo','Conclusão'],
+      [9,11,14,16,24,9,12,46,16,16,18,16,13,15,13,13]);
+    MP.slice().sort(function(a,b){ return (a.semana||0)-(b.semana||0); }).forEach(function(r){
+      if(r.semana==null||r.semana<wc.start||r.semana>wc.end)return;
+      var li=lotIds.indexOf(r.lote_id);
+      var sv=SERV.filter(function(x){ return x.id===r.servico_id; })[0];
+      var sit=MP_SITS[mpSit(r)]||{lab:''};
+      var lin=wsR.addRow([r.semana,'S'+isoWeek(mondayOf(r.semana)),fmtDate(mondayOf(r.semana)),
+        li>=0?LOTS[li]:'',sv?sv.n:'',r.equipe||'',r.codigo||'',r.descricao||'',
+        catMeta(r.categoria).label,r.setor||'',r.responsavel||'',sit.lab,
+        r.data_identificacao?brDate(r.data_identificacao):'',
+        r.data_impacto?brDate(r.data_impacto):'',
+        r.data_prazo?brDate(r.data_prazo):'',
+        r.data_conclusao?brDate(r.data_conclusao):'']);
+      lin.font={size:10};
+      var cc=catMeta(r.categoria).color.replace('#','').toUpperCase();
+      lin.getCell(9).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF'+cc}};
+      lin.getCell(9).font={size:10,color:{argb:pickFont('#'+cc)==='#ffffff'?'FFFFFFFF':'FF0A0A0A'}};
+    });
+    if(wsR.rowCount===1)wsR.addRow(['(nenhuma restrição nesta janela)']);
+
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='medio_prazo_'+(nome.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('Matriz do médio prazo exportada.');
   }
 
   /* ---------- Aba 2: Acompanhamento ---------- */
@@ -5709,7 +5805,14 @@
   }
 
   function mpWireJanela(root){
-    root.querySelectorAll('[data-mpwin]').forEach(function(b){ b.addEventListener('click',function(){ window.MP_WIN=+b.getAttribute('data-mpwin'); renderMedio(); }); });
+    root.querySelectorAll('[data-mpwin]').forEach(function(b){ b.addEventListener('click',function(){
+      var v=b.getAttribute('data-mpwin');
+      window.MP_WIN=(v==='tudo')?'tudo':+v;   // 'tudo' não passa por Number sem virar NaN
+      renderMedio();
+    }); });
+    wireMatrixZoom();
+    var expM=root.querySelector('[data-mpexpmat]');
+    if(expM)expM.addEventListener('click',function(){ comCarga(exportMatrizMedioPrazo); });
     root.querySelectorAll('[data-mpnav]').forEach(function(b){ b.addEventListener('click',function(){
       var wc=mpWindowCells();
       window.MP_START=Math.max(1,Math.min(wc.tw,window.MP_START+(+b.getAttribute('data-mpnav')))); renderMedio();
@@ -8237,7 +8340,28 @@
     [9000,36000,34000,300,0,1400],
     [4000,20000,18000,150,600,800]
   ];
-  var RESTR={'2::2':{n:1,cat:'#3b82f6',lab:'Material'},'0::1':{n:2,cat:'#a855f7',lab:'Projeto'}};
+  /* Restrições EM ABERTO por célula do tempo-caminho (semana::lote::serviço). Era um objeto de
+   * exemplo fixo; agora vem do Médio Prazo de verdade, pra marca na matriz significar alguma
+   * coisa. Só conta o que ainda não foi removido nem cancelado: restrição resolvida não precisa
+   * continuar pintando a célula. */
+  function restrMapa(){
+    var m={};
+    if(!MP||!MP.length)return m;
+    var lotIds=window._LOTIDS||[];
+    MP.forEach(function(r){
+      if(r.status==='removida'||r.status==='cancelada')return;
+      if(r.semana==null||!r.lote_id)return;
+      var li=lotIds.indexOf(r.lote_id); if(li<0)return;
+      var si=-1; SERV.forEach(function(x,i){ if(x.id===r.servico_id)si=i; });
+      if(si<0)return;
+      var k=r.semana+'::'+li+'::'+si;
+      var g=m[k]||(m[k]={n:0,cat:'',lab:''});
+      g.n++;
+      if(!g.cat){ var c=catMeta(r.categoria); g.cat=c.color; g.lab=c.label; }
+    });
+    return m;
+  }
+  var RESTR={};
 
   function ovrKey(li,si){var lid=(window._LOTIDS||[])[li],sid=SERV[si]&&SERV[si].id;return lid&&sid?(lid+'::'+sid):null;}
   function ovrGet(li,si){var k=ovrKey(li,si);return k?OVR[k]:null;}
@@ -11002,7 +11126,7 @@
         }
         var inner=subs.map(function(sc,i){
           var rk=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, r=RESTR[rk];
-          var badge=r?'<span class="tcm-badge" style="background:'+r.cat+'" title="'+r.lab+'">▲'+r.n+'</span>':'';
+          var badge=r?'<span class="tcm-badge" style="background:'+r.cat+'" title="'+escAttr(r.n+' restrição(ões) em aberto · '+r.lab)+'">▲'+r.n+'</span>':'';
           var overBadge=(sc.isEnd&&sc.sg.overTarget)?'<span class="tcm-badge" style="background:var(--crit)" title="Previsão de término depois da semana alvo">⚠</span>':'';
           var grip=sc.isStart?'<span class="tcm-grip">⋮</span>':'';
           var teamTag=sc.isStart?'<span class="tcm-team">'+teamLabel(sc.sg.name,sc.sg.team)+'</span>':'';
@@ -11044,13 +11168,13 @@
     return svcToggles+zoomBar+'<div class="tc-wrap" id="tcWrap"><div class="tc-zoomin" style="zoom:'+z+'">'+tableHtml+'</div></div>';
   }
   /** Barra de zoom + tela cheia. Compartilhada pela matriz automática e pela manual. */
-  function tcZoomBarHTML(){
+  function tcZoomBarHTML(semTelaCheia){
     var z=window._matrixZoom||1;
     return '<div class="tc-zoom"><button data-zoom="out" title="Diminuir">−</button><span class="lvl">'+Math.round(z*100)+'%</span><button data-zoom="in" title="Aumentar">+</button>'+
       '<button data-zoom="fit" title="Ajustar à tela" style="width:auto;padding:0 10px">Ajustar à tela</button>'+
       (z!==1?'<button data-zoom="reset" title="100%" style="width:auto;padding:0 10px">100%</button>':'')+
-      '<button data-zoom="full" title="Ver a matriz ocupando a tela toda (Esc sai)" style="width:auto;padding:0 10px;margin-left:auto">'+
-      (document.body.classList.contains('mat-fullscreen')?'✕ Sair da tela cheia':'⛶ Tela cheia')+'</button></div>';
+      (semTelaCheia?'':('<button data-zoom="full" title="Ver a matriz ocupando a tela toda (Esc sai)" style="width:auto;padding:0 10px;margin-left:auto">'+
+      (document.body.classList.contains('mat-fullscreen')?'✕ Sair da tela cheia':'⛶ Tela cheia')+'</button>'))+'</div>';
   }
   /** Quadro da matriz ocupa o que sobra da tela abaixo dele (com a página no topo), com mínimo
    *  de 320px — independe do zoom, que só escala o conteúdo por dentro. Em tela cheia o bloco é
@@ -12823,6 +12947,12 @@
   }
   function renderCrono(){
     var c=document.getElementById('cronoContent'); if(!c)return;
+    RESTR=restrMapa();
+    // O Médio Prazo não vem no carregamento da obra; busca uma vez pra matriz poder marcar as
+    // células com restrição em aberto.
+    if(!MP_LIDO&&!MP_CARREGANDO&&selectedObra&&SB){
+      mpCarregar().then(function(){ if(current==='cr-matriz')renderCrono(); });
+    }
     // Preserva a posição de rolagem da matriz (tcWrap rola tanto na vertical quanto na
     // horizontal) — cada ajuste substitui todo o innerHTML, o que por padrão zeraria a rolagem
     // e jogaria a tela de volta pro início da matriz a cada edição.
