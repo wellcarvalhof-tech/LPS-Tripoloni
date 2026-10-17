@@ -1936,8 +1936,8 @@
       '<div><div class="eyebrow">Relatório de planejamento executivo</div><div style="font-family:Archivo,sans-serif;font-weight:800;font-size:20px;line-height:1.15">'+escAttr(nome)+'</div>'+
       '<div class="note">Gerado em '+fmtDate(new Date())+' · '+(baseline?('linha de base '+baseline.revisao+' — '+escAttr(baseline.nome||'')):'rascunho (sem linha de base)')+filtro+'</div></div>'+
       '<div class="grid g4" style="flex:1;min-width:420px">'+
-        kpi('info','Início',fmtDate(inicio),'semana S'+isoWeek(inicio))+
-        kpi('accent','Término previsto',fmtDate(fim),'semana S'+isoWeek(mondayOf(tw)))+
+        kpi('info','Início',fmtDate(inicio),'semana '+rotSem(inicio))+
+        kpi('accent','Término previsto',fmtDate(fim),'semana '+rotSem(mondayOf(tw)))+
         kpi('good','Duração',tw+' sem','semanas de trabalho')+
         kpi('warn','Lotes × serviços',lotIdxs.length+' × '+SERV.length,'no cronograma')+
       '</div></div></div>';
@@ -1966,7 +1966,7 @@
       var cv=relFator(sv); if(!cv.ok)faltaSec++;
       var perTeam=pnum(sv.p)*cv.f, semanal=perTeam*(sv.eq||0), total=totalByServ[si]*cv.f;
       return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</td><td>'+escAttr(cv.u)+(cv.ok?'':' <span style="color:var(--warn)" title="Falta a secao transversal deste servico">&#9888;</span>')+'</td><td class="r mono">'+sv.eq+'</td><td class="r mono">'+fmtBR(perTeam)+'</td><td class="r mono">'+fmtBR(semanal)+'</td>'+
-        '<td class="r mono">'+(total>0?fmtBR(total):'—')+'</td><td class="mono">'+(span.s?('S'+isoWeek(mondayOf(span.s))+' · '+fmtDate(mondayOf(span.s))):'—')+'</td><td class="mono">'+(span.e?('S'+isoWeek(mondayOf(span.e))+' · '+fmtDate(mondayOf(span.e))):'—')+'</td><td class="r mono">'+(dur||'—')+'</td>'+
+        '<td class="r mono">'+(total>0?fmtBR(total):'—')+'</td><td class="mono">'+(span.s?(rotSem(mondayOf(span.s))+' · '+fmtDate(mondayOf(span.s))):'—')+'</td><td class="mono">'+(span.e?(rotSem(mondayOf(span.e))+' · '+fmtDate(mondayOf(span.e))):'—')+'</td><td class="r mono">'+(dur||'—')+'</td>'+
         '<td class="r mono">'+(semProd[si]||'—')+'</td>'+
         '<td class="r mono">'+(semProd[si]>0&&total>0?fmtBR(total/semProd[si]):'—')+'</td></tr>';
     }).join('');
@@ -2002,11 +2002,11 @@
     for(var g=0;g<=4;g++){var val=top*g/4;s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+fmtBR(val)+'</text>';}
     var passoS=labelStep(gap/Math.max(1,k),7);
     series.forEach(function(sr,j){ sr.values.forEach(function(v,i){ if(!(v>0))return; var x=pl+gap*i+gap*0.1+bw*j;
-      s+='<rect x="'+x.toFixed(1)+'" y="'+yy(v).toFixed(1)+'" width="'+Math.max(0.5,bw-0.6).toFixed(1)+'" height="'+Math.max(0,yy(0)-yy(v)).toFixed(1)+'" rx="1" fill="'+sr.color+'"><title>S'+isoWeek(dateFn(w0+i))+(sr.label?' · '+sr.label:'')+': '+fmtBR(v)+'</title></rect>';
+      s+='<rect x="'+x.toFixed(1)+'" y="'+yy(v).toFixed(1)+'" width="'+Math.max(0.5,bw-0.6).toFixed(1)+'" height="'+Math.max(0,yy(0)-yy(v)).toFixed(1)+'" rx="1" fill="'+sr.color+'"><title>'+rotSem(dateFn(w0+i))+(sr.label?' · '+sr.label:'')+': '+fmtBR(v)+'</title></rect>';
       if(i%passoS===0)s+=barLabelSVG(x+bw/2,yy(v),bw,v); }); });
     var wn=[]; for(var i2=0;i2<n;i2++)wn.push(w0+i2);
     s+=weekAxisSVG(wn,function(i){return pl+gap*i+gap/2;},gap,pt+ih,pl,W-pr,dateFn,{plotTop:pt});
-    if(opts.acc)s+=accLinesSVG(opts.acc,function(i){return pl+gap*i+gap/2;},W-pr,pt,ih,wn.map(function(w){return 'S'+isoWeek(dateFn(w));}));
+    if(opts.acc)s+=accLinesSVG(opts.acc,function(i){return pl+gap*i+gap/2;},W-pr,pt,ih,wn.map(function(w){return rotSem(dateFn(w));}));
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
   function execReportDraw(){
@@ -2280,7 +2280,7 @@
     var postos={}; ofiInit().plano.forEach(function(x){ if(x.li===li)postos[x.si]=(postos[x.si]||0)+1; });
     var cands=SERV.map(function(sv,si){ return {sv:sv,si:si,qty:(QTY[li]||[])[si]||0}; })
       .filter(function(c){ return c.qty>0&&(postos[c.si]||0)<Math.max(1,c.sv.eq||1); });
-    var itens=[{tit:LOTS[li]+' · S'+isoWeek(mondayOf(semana))}];
+    var itens=[{tit:LOTS[li]+' · '+rotSem(mondayOf(semana))}];
     if(!cands.length){
       itens.push({lab:'Nenhum serviço disponível aqui',off:true});
     } else {
@@ -2420,8 +2420,8 @@
         }
         var alvo=(sv.cfg&&sv.cfg.parallelWithPredecessor)?(pg.start+(sv.lag||0)):(pg.start+pg.dur+(sv.lag||0));
         if(g.start<alvo)
-          out.push({id:g.id,txt:sv.n+' em '+LOTS[g.li]+' começa na S'+isoWeek(mondayOf(g.start))+
-            ', antes do que a predecessora '+SERV[psi].n+' permite (S'+isoWeek(mondayOf(alvo))+').'});
+          out.push({id:g.id,txt:sv.n+' em '+LOTS[g.li]+' começa na '+rotSem(mondayOf(g.start))+
+            ', antes do que a predecessora '+SERV[psi].n+' permite ('+rotSem(mondayOf(alvo))+').'});
       });
     });
     for(var i=0;i<segs.length;i++)for(var j=i+1;j<segs.length;j++){
@@ -2437,8 +2437,8 @@
     // já estava lá. Melhor dizer do que deixar o bloco aparecer calado em outro lugar.
     segs.forEach(function(g){
       if(g.pedida&&g.start>g.pedida)
-        out.push({id:g.id,txt:g.name+' em '+LOTS[g.li]+' foi empurrado da S'+isoWeek(mondayOf(g.pedida))+
-          ' para a S'+isoWeek(mondayOf(g.start))+' porque '+teamLabel(g.name,g.team)+' está ocupada antes.'});
+        out.push({id:g.id,txt:g.name+' em '+LOTS[g.li]+' foi empurrado da '+rotSem(mondayOf(g.pedida))+
+          ' para a '+rotSem(mondayOf(g.start))+' porque '+teamLabel(g.name,g.team)+' está ocupada antes.'});
     });
     // Invariante: numa semana, uma equipe não produz mais do que a produtividade dela (reduzida
     // pela praticabilidade). Vale a checagem porque o estouro nasce da SOMA de dois segmentos da
@@ -2456,7 +2456,7 @@
       var teto=ofiProd(sv,team)*weekFactor(w,periods,cacheC);
       if(porEqSem[k]>teto+0.5)
         out.push({id:0,txt:teamLabel(sv.n,team)+' de '+sv.n+' produziria '+fmtBR(porEqSem[k])+' '+sv.u+
-          ' na S'+isoWeek(mondayOf(w))+', acima dos '+fmtBR(teto)+' que a equipe faz numa semana.'});
+          ' na '+rotSem(mondayOf(w))+', acima dos '+fmtBR(teto)+' que a equipe faz numa semana.'});
     });
     return out;
   }
@@ -2509,7 +2509,7 @@
       var m=[];
       if(melhor.r.predNomes.length)m.push('depende de '+melhor.r.predNomes.join(', '));
       if(melhor.r.porEquipe)m.push(teamLabel(sv.n,melhor.t)+' já ocupada');
-      toast(sv.n+' em '+LOTS[li]+' deslizou pra S'+isoWeek(mondayOf(melhor.r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
+      toast(sv.n+' em '+LOTS[li]+' deslizou pra '+rotSem(mondayOf(melhor.r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
     } else if(usadas.length){
       toast(sv.n+' em '+LOTS[li]+' agora com '+(usadas.length+1)+' equipes, rateadas pela produtividade — '+
         fmtBR(melhor.q)+' '+sv.u+' pra '+teamLabel(sv.n,melhor.t)+'.');
@@ -2539,7 +2539,7 @@
       var m=[];
       if(r.predNomes.length)m.push('depende de '+r.predNomes.join(', '));
       if(r.porEquipe)m.push(teamLabel(sv.n,it.team)+' já ocupada');
-      toast(sv.n+' caiu na S'+isoWeek(mondayOf(r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
+      toast(sv.n+' caiu na '+rotSem(mondayOf(r.semana))+(m.length?' — '+m.join(' e '):'')+'.');
     }
     ofiRedesenha();
   }
@@ -2618,7 +2618,7 @@
       return '<option value="'+c.si+'"'+(atual&&atual.si===c.si?' selected':'')+'>'+escAttr(c.sv.n)+' — '+fmtBR(c.qty)+' '+escAttr(c.sv.u)+'</option>';
     }).join('');
     back.innerHTML='<div class="segmenu-panel card" style="max-width:460px">'+
-      '<div class="eyebrow" style="margin-bottom:2px">'+(atual?'Mover':'Colocar')+' em '+escAttr(LOTS[li])+' · S'+isoWeek(mondayOf(semana))+'</div>'+
+      '<div class="eyebrow" style="margin-bottom:2px">'+(atual?'Mover':'Colocar')+' em '+escAttr(LOTS[li])+' · '+rotSem(mondayOf(semana))+'</div>'+
       '<div class="note" style="margin-bottom:12px">A duração não se digita: sai da quantidade do lote dividida pela produtividade da equipe, com a chuva reduzindo semana a semana. Se a semana escolhida não servir, o app desliza pra primeira que serve e diz por quê.</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+
         '<label>Serviço<select class="esel" id="ofiSvc">'+svcOpts+'</select></label>'+
@@ -2656,13 +2656,13 @@
       var sv=SERV[si], prod=ofiProd(sv,team);
       var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{});
       var fim=pk.start+pk.duration-1;
-      var txt='<b>S'+isoWeek(mondayOf(pk.start))+'</b> até <b>S'+isoWeek(mondayOf(fim))+'</b> — '+pk.duration+' semana(s), '+fmtBR(qty)+' '+escAttr(sv.u)+
+      var txt='<b>'+rotSem(mondayOf(pk.start))+'</b> até <b>'+rotSem(mondayOf(fim))+'</b> — '+pk.duration+' semana(s), '+fmtBR(qty)+' '+escAttr(sv.u)+
         (nEq>1?(' <span style="color:var(--warn)">(de '+fmtBR((QTY[li]||[])[si]||0)+' — rateado entre '+nEq+' equipes pela produtividade de cada uma)</span>'):'')+'.';
       var motivos=[];
       if(r.semana>semana){
         if(r.predNomes.length)motivos.push('depende de '+r.predNomes.join(', ')+' neste lote');
         if(r.porEquipe)motivos.push(escAttr(teamLabel(sv.n,team))+' já está ocupada antes');
-        txt+='<br><span style="color:var(--warn)">Deslizou da S'+isoWeek(mondayOf(semana))+' para a S'+isoWeek(mondayOf(r.semana))+
+        txt+='<br><span style="color:var(--warn)">Deslizou da '+rotSem(mondayOf(semana))+' para a '+rotSem(mondayOf(r.semana))+
           (motivos.length?' — '+motivos.join(' e '):'')+'.</span>';
       }
       prev.innerHTML=txt;
@@ -2704,7 +2704,7 @@
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
       if(entry.isHoliday){
-        body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td>'+
+        body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">'+rotSem(d)+'</td>'+
           '<td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
         continue;
       }
@@ -2723,7 +2723,7 @@
       }
       var ehHoje=ehSemanaDeHoje(d);
       var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
-      body+='<tr'+(cls?' class="'+cls+'"':'')+'><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
+      body+='<tr'+(cls?' class="'+cls+'"':'')+'><td class="dt">'+fmtDate(d)+'</td><td class="wk">'+rotSem(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
     var tabela='<table class="tcm"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
     // Na matriz o quadro usa o mesmo id/estrutura da matriz automática, pra herdar o zoom, o
@@ -2770,8 +2770,8 @@
     if(fimEstudo>0&&estudo){
       var dif=fimEstudo-fimAuto;
       cmp='<div class="grid g4" style="margin-bottom:12px">'+
-        kpi('accent','Seu estudo','S'+isoWeek(mondayOf(fimEstudo)),fimEstudo+' semanas de projeto')+
-        kpi('info','Cronograma automático','S'+isoWeek(mondayOf(fimAuto)),fimAuto+' semanas de projeto')+
+        kpi('accent','Seu estudo',rotSem(mondayOf(fimEstudo)),fimEstudo+' semanas de projeto')+
+        kpi('info','Cronograma automático',rotSem(mondayOf(fimAuto)),fimAuto+' semanas de projeto')+
         // Comparar um estudo pela metade com o cronograma inteiro daria uma vitória falsa: falta
         // serviço pra colocar, não é que o estudo seja mais rápido.
         (faltam
@@ -3405,7 +3405,7 @@
     for(var wA=0;wA<tw;wA++){ if(apoioP[wA]>0||apoioR[wA]>0){apoioHas=true;break;} }
     var spR=spr.realizado.semprev||[], spHas=spR.some(function(v){return v>0;});
     var w, th='<th style="min-width:150px">Serviço</th>';
-    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">S'+isoWeek(calWeekDate(w))+'</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="2">'+rotSem(calWeekDate(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600">P</th><th class="r" style="font-size:9px;font-weight:600">R</th>';
     var colspanAll=1+tw*2;
@@ -3574,8 +3574,8 @@
   }
   function mobilizacaoHTML(hist){
     var m=mobilizacaoData(hist); if(!m)return '';
-    var opts=function(sel){ var o=''; for(var w=1;w<=m.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
-    var lbP='S'+isoWeek(calWeekDate(m.semanaPrev)), lbR='S'+isoWeek(calWeekDate(m.semanaReal));
+    var opts=function(sel){ var o=''; for(var w=1;w<=m.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>'+rotSem(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
+    var lbP=rotSem(calWeekDate(m.semanaPrev)), lbR=rotSem(calWeekDate(m.semanaReal));
     var rows=m.linhas.sort(function(a,b){return b.dif-a.dif||(a.r.tipo+a.r.n).localeCompare(b.r.tipo+b.r.n);}).map(function(x){
       var d=Math.round(x.dif), acao=d>0?('<b style="color:var(--crit)">Mobilizar '+fmtBR(d)+'</b>'):(d<0?('<b style="color:var(--warn)">Desmobilizar '+fmtBR(-d)+'</b>'):'<span class="note">Manter</span>');
       return '<tr><td>'+x.r.n+' <span class="note">'+(x.r.tipo==='funcao'?(resClasse(x.r)?classeLabel(resClasse(x.r)):'Função'):'Equipamento')+'</span></td>'+
@@ -3608,7 +3608,7 @@
   function relatorioPeriodoHTML(hist){ // hist é usado também pelo plano de mobilização
     var d=relatorioPeriodoData(hist);
     if(!d)return sectionCard('relatorio','Relatório do período',null,null,'<div class="note">Cadastre serviços, equipe típica e o cronograma pra gerar o relatório.</div>');
-    var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
+    var opts=function(sel){ var o=''; for(var w=1;w<=d.tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>'+rotSem(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+'</option>'; return o; };
     var tipoBtns=['todos','funcao','equipamento'].map(function(f){
       var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
       return '<button class="subtab'+(REP_TIPO===f?' active':'')+'" data-reptipo="'+f+'">'+lbl+'</button>';
@@ -3629,7 +3629,7 @@
     if(REP_ORIGEM!=='todos')filtroTxt.push(REP_ORIGEM==='direto'?'só o alocado em serviços':'só o alocado no apoio');
     if(REP_CLASSE!=='todas')filtroTxt.push(REP_CLASSE==='sem'?'só funções sem classificação':'só mão de obra '+(REP_CLASSE==='direto'?'direta':(REP_CLASSE==='indireto'?'indireta':'terceirizada')));
     if(REP_CLASSE_EQ!=='todos')filtroTxt.push('realizado de equipamento '+(REP_CLASSE_EQ==='proprio'?'só da frota Tripoloni':'só de terceiros'));
-    var periodoTxt=d.from===d.to?('Semana S'+isoWeek(calWeekDate(d.from))+' ('+fmtDate(calWeekDate(d.from))+')'):('S'+isoWeek(calWeekDate(d.from))+' a S'+isoWeek(calWeekDate(d.to))+' ('+fmtDate(calWeekDate(d.from))+' – '+fmtDate(calWeekDate(d.to))+', '+d.weeks.length+' semanas)');
+    var periodoTxt=d.from===d.to?('Semana '+rotSem(calWeekDate(d.from))+' ('+fmtDate(calWeekDate(d.from))+')'):(rotSem(calWeekDate(d.from))+' a '+rotSem(calWeekDate(d.to))+' ('+fmtDate(calWeekDate(d.from))+' – '+fmtDate(calWeekDate(d.to))+', '+d.weeks.length+' semanas)');
     var diff=d.R-d.P;
     var kpis='<div class="grid g4" style="margin:10px 0 14px">'+
       kpi('info','Previsto no período',fmtBR(d.P),'recurso × semana')+
@@ -3702,7 +3702,7 @@
       groups[cat].push(r);
     });
     var w, th='<th style="min-width:150px">Recurso</th>';
-    for(w=1;w<=tw;w++)th+='<th class="r" colspan="4">S'+isoWeek(calWeekDate(w))+'</th>';
+    for(w=1;w<=tw;w++)th+='<th class="r" colspan="4">'+rotSem(calWeekDate(w))+'</th>';
     var th2='<th></th>';
     for(w=1;w<=tw;w++)th2+='<th class="r" style="font-size:9px;font-weight:600" title="Previsto">P</th>'+
       '<th class="r" style="font-size:9px;font-weight:600" title="Realizado com recurso próprio">Próp</th>'+
@@ -4057,8 +4057,8 @@
       pacotes.map(function(p){return '<option value="'+escAttr(p)+'"'+(window._curvaSPacote===p?' selected':'')+'>'+p+'</option>';}).join('')+'</select>'):'';
     var weekSel='';
     if(data.tw>0){
-      var opts='<option value="auto">Hoje'+(data.hojeW>0?' (S'+isoWeek(mondayOf(data.hojeW))+')':'')+'</option>';
-      for(var w=1;w<=data.tw;w++)opts+='<option value="'+w+'">S'+isoWeek(mondayOf(w))+'</option>';
+      var opts='<option value="auto">Hoje'+(data.hojeW>0?' ('+rotSem(mondayOf(data.hojeW))+')':'')+'</option>';
+      for(var w=1;w<=data.tw;w++)opts+='<option value="'+w+'">'+rotSem(mondayOf(w))+'</option>';
       weekSel='<select class="esel" id="cvWeekSel" style="height:28px">'+opts+'</select>';
     }
     return '<div class="cv-compact" id="cvRoot">'+
@@ -4525,15 +4525,15 @@
     var boost='<span class="ed-team"><em>Equipe:</em>'+teamSel+'<em>A partir do lote:</em>'+lotSel+'<em>Nova prod.:</em>'+tinp(pnum(s.p),'82px','number')+'<em>'+s.u+'/sem</em><button class="iconbtn">✕</button></span>';
     var cfg=s.cfg||{};
     var queueOn=!!cfg.pullFromQueue;
-    var minStartVal=cfg.minStartWeek>0?isoWeek(mondayOf(cfg.minStartWeek)):'';
-    var targetVal=cfg.targetEndWeek>0?isoWeek(mondayOf(cfg.targetEndWeek)):'';
+    var minStartVal=cfg.minStartWeek>0?rotSem(mondayOf(cfg.minStartWeek)):'';
+    var targetVal=cfg.targetEndWeek>0?rotSem(mondayOf(cfg.targetEndWeek)):'';
     var targetInfo='';
     if(cfg.targetEndWeek>0){
       var svcSegs=buildSchedule().filter(function(sg){return sg.si===si;});
       var maxEnd=0; svcSegs.forEach(function(sg){maxEnd=Math.max(maxEnd,sg.start+sg.dur-1);});
       if(maxEnd>0){
         var over=maxEnd>cfg.targetEndWeek;
-        targetInfo='<div class="note" style="margin-top:6px;'+(over?'color:var(--crit)':'color:var(--good)')+'">'+(over?'⚠ ':'✓ ')+'Previsão de término atual: S'+isoWeek(mondayOf(maxEnd))+(over?(' — '+(maxEnd-cfg.targetEndWeek)+' semana(s) depois da meta'):' — dentro da meta')+'</div>';
+        targetInfo='<div class="note" style="margin-top:6px;'+(over?'color:var(--crit)':'color:var(--good)')+'">'+(over?'⚠ ':'✓ ')+'Previsão de término atual: '+rotSem(mondayOf(maxEnd))+(over?(' — '+(maxEnd-cfg.targetEndWeek)+' semana(s) depois da meta'):' — dentro da meta')+'</div>';
       }
     }
     return '<div class="ed-sec"><span class="lab">Lote inicial de cada equipe</span>'+startLots+'</div>'+
@@ -4544,8 +4544,8 @@
         '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
         '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua — evita equipe ociosa; chuva ainda reduz produção)</label>'+
         '<label><input type="checkbox" data-cfgbool="seqManual" data-si="'+si+'"'+(cfg.seqManual?' checked':'')+'>Seguir a sequência de lotes definida (em Ajuste manual) em vez de reordenar automaticamente</label>'+
-        '<label>Semana do ano de início: <input class="einp" type="number" data-cfgcalweek="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:70px"> <span style="color:var(--muted)">(não inicia antes desta semana, ex.: 37 = S37)</span></label>'+
-        '<label>Semana do ano alvo de término: <input class="einp" type="number" data-cfgcalweek="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:70px"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
+        '<label>Semana do ano de início: <input class="einp" type="text" data-cfgcalweek="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:92px" placeholder="S37-26"> <span style="color:var(--muted)">(não inicia antes desta semana — escreva com o ano, ex.: S37-26)</span></label>'+
+        '<label>Semana do ano alvo de término: <input class="einp" type="text" data-cfgcalweek="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:92px" placeholder="S45-27"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
       '</div>'+
       (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
       (cfg.seqManual?'<div class="note" style="margin-top:6px">Sequência manual ligada: os lotes deste serviço são executados exatamente na ordem definida em <b>Ajuste manual → Lotes e sequência de execução por equipe</b>'+(queueOn?' (a equipe de cada lote continua sendo escolhida pelo app)':'')+'. A equipe pode ficar ociosa esperando um lote liberar — é o preço de fixar a ordem.</div>':'')+
@@ -4614,9 +4614,9 @@
   function weekAxisSVG(weekNums,xAt,gap,yTop,xl,xr,dateFn,opts){
     dateFn=dateFn||calWeekDate; opts=opts||{};
     var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-    var rot=gap<22, s='';
+    var rot=gap<30, s='';   // o rótulo com ano só cabe deitado a partir de ~30px por semana
     weekNums.forEach(function(w,i){
-      var lbl='S'+isoWeek(dateFn(w)), x=xAt(i);
+      var lbl=rotSem(dateFn(w)), x=xAt(i);
       if(rot)s+='<text class="axm" font-size="'+(gap<12?7:8)+'" transform="translate('+(x+3).toFixed(1)+','+(yTop+4)+') rotate(90)" text-anchor="start">'+lbl+'</text>';
       else s+='<text class="axm" x="'+x.toFixed(1)+'" y="'+(yTop+12)+'" text-anchor="middle">'+lbl+'</text>';
     });
@@ -5190,7 +5190,7 @@
       var s=mpSit(r); if(s!=='rem_prazo'&&s!=='rem_atraso'&&s!=='atrasada')return;
       var lim=mpLimite(r); if(!lim)return;
       var d=new Date(lim+'T00:00:00'), k=d.getFullYear()+'-'+('0'+isoWeek(d)).slice(-2);
-      var g=porSem[k]||(porSem[k]={lab:'S'+isoWeek(d),prazo:0,tot:0});
+      var g=porSem[k]||(porSem[k]={lab:rotSem(d),prazo:0,tot:0});
       g.tot++; if(s==='rem_prazo')g.prazo++;
     });
     var ks=Object.keys(porSem).sort(); if(!ks.length)return '<div class="note">Nenhuma restrição com prazo já vencido no período.</div>';
@@ -5536,7 +5536,7 @@
         }).join('');
         tds+='<td class="cell"><div class="tcm-row" style="min-height:34px">'+inner+'</div></td>';
       }
-      body+='<tr><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+'</td>'+tds+'</tr>';
+      body+='<tr><td class="dt">'+fmtDate(d)+'</td><td class="wk">'+rotSem(d)+'</td>'+tds+'</tr>';
     }
     var zm=window._matrixZoom||1;
     var matriz=tcZoomBarHTML(true)+
@@ -5569,7 +5569,7 @@
     relCabecalho(ws,['Segunda-feira','Semana'].concat(LOTS.slice()),
       [14,10].concat(LOTS.map(function(){ return 18; })));
     for(var w=wc.end;w>=wc.start;w--){
-      var linha=[fmtDate(mondayOf(w)),'S'+isoWeek(mondayOf(w))];
+      var linha=[fmtDate(mondayOf(w)),rotSem(mondayOf(w))];
       var marca=[];
       for(var li=0;li<LOTS.length;li++){
         var subs=wc.cell[w+'::'+li]||[];
@@ -5607,7 +5607,7 @@
       var li=lotIds.indexOf(r.lote_id);
       var sv=SERV.filter(function(x){ return x.id===r.servico_id; })[0];
       var sit=MP_SITS[mpSit(r)]||{lab:''};
-      var lin=wsR.addRow([r.semana,'S'+isoWeek(mondayOf(r.semana)),fmtDate(mondayOf(r.semana)),
+      var lin=wsR.addRow([r.semana,rotSem(mondayOf(r.semana)),fmtDate(mondayOf(r.semana)),
         li>=0?LOTS[li]:'',sv?sv.n:'',r.equipe||'',r.codigo||'',r.descricao||'',
         catMeta(r.categoria).label,r.setor||'',r.responsavel||'',sit.lab,
         r.data_identificacao?brDate(r.data_identificacao):'',
@@ -5970,8 +5970,8 @@
   function progSemanaInfo(w){
     var seg=mondayOf(w), dom=new Date(seg.getTime()); dom.setDate(dom.getDate()+6);
     var dm=function(d){ var p=function(n){return (n<10?'0':'')+n;}; return p(d.getDate())+'/'+p(d.getMonth()+1); };
-    return {w:w,iso:'S'+isoWeek(seg)+'/'+seg.getFullYear(),
-      rotulo:'S'+isoWeek(seg)+'/'+seg.getFullYear()+' ('+dm(seg)+' a '+dm(dom)+')',
+    return {w:w,iso:rotSem(seg),
+      rotulo:rotSem(seg)+' ('+dm(seg)+' a '+dm(dom)+')',
       ini:seg.toISOString().slice(0,10),fim:dom.toISOString().slice(0,10),seg:seg};
   }
   function progSemanaDoPlano(p){
@@ -6953,7 +6953,7 @@
     }).join('');
     back.innerHTML='<div class="segmenu-panel card" style="max-width:420px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Lançar produção</div>'+
-      '<div class="note" style="margin-bottom:10px">'+escAttr(LOTS[li])+' · semana S'+isoWeek(seg)+' ('+fmtDate(seg)+' a '+fmtDate(fim)+')</div>'+
+      '<div class="note" style="margin-bottom:10px">'+escAttr(LOTS[li])+' · semana '+rotSem(seg)+' ('+fmtDate(seg)+' a '+fmtDate(fim)+')</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+
         '<label>Serviço<select class="esel" id="pcServ" style="width:100%">'+svcOpts+'</select></label>'+
         '<div class="note" id="pcCtx" style="min-height:2.4em"></div>'+
@@ -7156,10 +7156,10 @@
     var W=opts.W||760,rowH=opts.rowH||28,H=SERV.length*rowH+40,pl=160,pr=16,iw=W-pl-pr;
     var xx=function(w){return pl+iw*(w-1)/Math.max(1,tw-1);};
     var s='';
-    for(var g=1;g<=tw;g+=Math.ceil(tw/12)){s+='<line x1="'+xx(g)+'" y1="20" x2="'+xx(g)+'" y2="'+(H-16)+'" stroke="var(--line)"/><text class="axm" x="'+xx(g)+'" y="14" text-anchor="middle">S'+isoWeek(mondayOf(g))+'<title>'+fmtDate(mondayOf(g))+'</title></text>';}
+    for(var g=1;g<=tw;g+=Math.ceil(tw/12)){s+='<line x1="'+xx(g)+'" y1="20" x2="'+xx(g)+'" y2="'+(H-16)+'" stroke="var(--line)"/><text class="axm" x="'+xx(g)+'" y="14" text-anchor="middle">'+rotSem(mondayOf(g))+'<title>'+fmtDate(mondayOf(g))+'</title></text>';}
     SERV.forEach(function(sv,si){var y=24+si*rowH,x1=xx(sp[si].s||1),x2=xx((sp[si].e||1)+1);
       s+='<text class="axm" x="8" y="'+(y+rowH/2+1)+'" style="fill:var(--ink);font-size:'+(rowH<22?9:11)+'px">'+sv.n+'</text>';
-      s+='<rect x="'+x1.toFixed(1)+'" y="'+(y+(rowH<22?2:4))+'" width="'+Math.max(4,x2-x1).toFixed(1)+'" height="'+(rowH-(rowH<22?5:10))+'" rx="3" fill="'+svcColor(sv)+'"><title>'+sv.n+': S'+isoWeek(mondayOf(sp[si].s||1))+' ('+fmtDate(mondayOf(sp[si].s||1))+') – S'+isoWeek(mondayOf(sp[si].e||1))+'</title></rect>';});
+      s+='<rect x="'+x1.toFixed(1)+'" y="'+(y+(rowH<22?2:4))+'" width="'+Math.max(4,x2-x1).toFixed(1)+'" height="'+(rowH-(rowH<22?5:10))+'" rx="3" fill="'+svcColor(sv)+'"><title>'+sv.n+': '+rotSem(mondayOf(sp[si].s||1))+' ('+fmtDate(mondayOf(sp[si].s||1))+') – '+rotSem(mondayOf(sp[si].e||1))+'</title></rect>';});
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:700px'+(opts.maxH?';max-height:'+opts.maxH:'')+'">'+s+'</svg>';
   }
   function ganttHTML(){
@@ -7358,9 +7358,10 @@
       });
       document.querySelectorAll('[data-cfgcalweek]').forEach(function(inp){
         inp.addEventListener('change',function(){
-          var calWeek=inp.value===''?null:Math.max(1,parseInt(inp.value,10)||0);
-          var projWeek=calWeek?projWeekForCalWeek(calWeek):null;
-          if(calWeek&&!projWeek){alert('Semana do ano inválida.');inp.value='';return;}
+          var r=inp.value.trim()===''?null:leRotSem(inp.value);
+          if(inp.value.trim()!==''&&!r){alert('Semana inválida. Escreva como S37-26 (semana e ano).');inp.value='';return;}
+          var projWeek=r?projWeekForCalWeek(r.semana,r.ano):null;
+          if(r&&!projWeek){alert('Essa semana não existe dentro do cronograma.');inp.value='';return;}
           saveSvcCfgField(+inp.getAttribute('data-si'),inp.getAttribute('data-cfgcalweek'),projWeek);
         });
       });
@@ -7632,7 +7633,7 @@
         if(rd){
           var accP=[], accR=[], sP=0, sR=0;
           rd.weeks.forEach(function(w){ sP+=rd.prevW[w]||0; sR+=rd.realW[w]||0; accP.push(sP); accR.push(sR); });
-          barLine(repSvg,rd.weeks.map(function(w){return 'S'+isoWeek(calWeekDate(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR},rd.from);
+          barLine(repSvg,rd.weeks.map(function(w){return rotSem(calWeekDate(w));}),rd.weeks.map(function(w){return rd.realW[w];}),rd.weeks.map(function(w){return rd.prevW[w];}),cssHex('--accent'),{prev:accP,real:accR},rd.from);
         }
       }
       var repFrom=document.getElementById('repFrom'), repTo=document.getElementById('repTo');
@@ -7928,9 +7929,9 @@
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
     var s='';
     for(var g=0;g<=100;g+=25){s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" '+afs+' x="'+(pl-5)+'" y="'+(yy(g)+2.5)+'" text-anchor="end">'+g+'</text>';}
-    var stepLbl=Math.max(1,Math.ceil((n-1)/13));
-    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" '+afs+' x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(i))+'</text>';}
-    if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(tw)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(mondayOf(tw))+'</text>';
+    var stepLbl=Math.max(1,Math.ceil((n-1)/9));   // "S45-26" é bem mais largo que "S45"
+    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" '+afs+' x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">'+rotSem(mondayOf(i))+'</text>';}
+    if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(tw)+'" y="'+(H-6)+'" text-anchor="middle">'+rotSem(mondayOf(tw))+'</text>';
     function path(a){if(!a)return '';var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
     var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
     var cProj=data.projetado?curveSeries(data.projetado,sel):null;
@@ -7966,7 +7967,7 @@
     var vReal=(cReal&&cReal[wSel]!=null)?cReal[wSel]:0;
     var idpCliente=(vCliente!=null&&vCliente>0)?(vReal/vCliente):null;
     var idpExec=vExec>0?(vReal/vExec):null;
-    var atWk=wSel>0?'S'+isoWeek(mondayOf(wSel)):'antes do início';
+    var atWk=wSel>0?rotSem(mondayOf(wSel)):'antes do início';
 
     var cardsEl=document.getElementById('cvCards');
     if(cardsEl){
@@ -7979,7 +7980,7 @@
       if(data.projetado){
         var cProjArr=curveSeries(data.projetado,sel), doneWeek=null;
         if(cProjArr)for(var wq=0;wq<cProjArr.length;wq++){ if(cProjArr[wq]>=99.95){doneWeek=wq;break;} }
-        var projTxt=doneWeek!=null?('S'+isoWeek(mondayOf(doneWeek))):'além do horizonte atual';
+        var projTxt=doneWeek!=null?(rotSem(mondayOf(doneWeek))):'além do horizonte atual';
         html+=kpiCardCv('mut','Previsão de término','🔮 '+projTxt,'ritmo '+(data.projMode==='historico'?'histórico':'previsto')+' a partir de hoje');
       }
       cardsEl.innerHTML=html;
@@ -8009,7 +8010,7 @@
     var s='';
     for(var g=0;g<=3;g++){var val=maxV*g/3; s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text x="'+(pl-4)+'" y="'+(yy(val)+2.5)+'" text-anchor="end" font-size="7" fill="var(--muted)">'+val.toFixed(0)+'</text>';}
     vals.forEach(function(v,i){
-      var x0=xx(i), wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
+      var x0=xx(i), wLbl=v.w>=1?(rotSem(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
       s+='<text x="'+(x0+grpW/2)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
       if(v.w<1||v.w>data.tw)return;
       function bar(idx,val,color,label){
@@ -8052,7 +8053,7 @@
     s+='<path d="'+path('cli')+'" fill="none" stroke="var(--ink)" stroke-width="1.6"/>';
     s+='<path d="'+path('exe')+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
     vals.forEach(function(v,i){
-      var wLbl=v.w>=1?('S'+isoWeek(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
+      var wLbl=v.w>=1?(rotSem(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
       s+='<text x="'+xx(i)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
       if(v.cli!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.cli)+'" r="2.2" fill="var(--ink)"/><text x="'+xx(i)+'" y="'+(yy(v.cli)-4)+'" text-anchor="middle" font-size="6.5" fill="var(--ink)">'+v.cli.toFixed(2)+'</text>';
       if(v.exe!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.exe)+'" r="2.2" fill="var(--crit)"/><text x="'+xx(i)+'" y="'+(yy(v.exe)+9)+'" text-anchor="middle" font-size="6.5" fill="var(--crit)">'+v.exe.toFixed(2)+'</text>';
@@ -8095,13 +8096,13 @@
     var wnAll=[]; for(var wi=0;wi<tw;wi++)wnAll.push(wi+1);
     s+=weekAxisSVG(wnAll,function(i){return xx(i)+grpW/2;},iw/tw,pt+ih,pl,W-pr);
     var hol=hist.isHoliday||[];
-    for(var wh=0;wh<tw;wh++){ if(hol[wh])s+='<rect x="'+xx(wh).toFixed(1)+'" y="'+pt+'" width="'+(iw/tw).toFixed(1)+'" height="'+ih+'" fill="var(--warn)" opacity="0.10"><title>Recesso / feriado — S'+isoWeek(calWeekDate(wh+1))+' (recursos mobilizados, sem produção)</title></rect>'; }
+    for(var wh=0;wh<tw;wh++){ if(hol[wh])s+='<rect x="'+xx(wh).toFixed(1)+'" y="'+pt+'" width="'+(iw/tw).toFixed(1)+'" height="'+ih+'" fill="var(--warn)" opacity="0.10"><title>Recesso / feriado — '+rotSem(calWeekDate(wh+1))+' (recursos mobilizados, sem produção)</title></rect>'; }
     // Rótulos de dados: um por barra quando há espaço; em obra longa, um por semana
     // ("previsto·realizado", na vertical) a cada N semanas, pra não virar borrão.
     var parCabe=barW>=7, fsLbl=parCabe?0:6, passoLbl=parCabe?1:labelStep(iw/tw,fsLbl);
     for(var w4=0;w4<tw;w4++){
       var pv=prevWeek[w4], rv=realWeek[w4]; if(pv<=0&&rv<=0)continue;
-      var x0=xx(w4), wkLbl='S'+isoWeek(calWeekDate(w4+1));
+      var x0=xx(w4), wkLbl=rotSem(calWeekDate(w4+1));
       if(parCabe){
         s+=barLabelSVG(x0+barW/2,yy(pv),barW,pv);
         s+=barLabelSVG(x0+barW*1.15+barW/2,yy(rv),barW,rv);
@@ -8126,7 +8127,7 @@
     var lastReal=-1; for(var w5=0;w5<tw;w5++){ if(realWeek[w5]>0)lastReal=w5; }
     var accP=[], accR=[], sP=0, sR=0;
     for(var w6=0;w6<tw;w6++){ sP+=prevWeek[w6]; accP.push(sP); if(w6<=lastReal){ sR+=realWeek[w6]; accR.push(sR); } }
-    var wkLabels=[]; for(var w7=0;w7<tw;w7++)wkLabels.push('S'+isoWeek(calWeekDate(w7+1)));
+    var wkLabels=[]; for(var w7=0;w7<tw;w7++)wkLabels.push(rotSem(calWeekDate(w7+1)));
     s+=accLinesSVG({prev:accP,real:accR},function(i){return xx(i)+grpW/2;},W-pr,pt,ih,wkLabels);
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
     if(legEl)legEl.innerHTML='<span><span class="swatch" style="background:var(--line-2);border:1px solid var(--muted)"></span>Previsto</span>'+
@@ -8214,7 +8215,7 @@
     var cells='', marks='';
     for(var r=0;r<tw;r++){
       var w=tw-r, y=labelH+r*ch;
-      if((w-1)%stepW===0)s+='<text class="axm" x="'+(labelW-3)+'" y="'+(y+ch*0.5+wkFs*0.35)+'" text-anchor="end" style="font-size:'+wkFs+'px">S'+isoWeek(mondayOf(w))+'</text>';
+      if((w-1)%stepW===0)s+='<text class="axm" x="'+(labelW-3)+'" y="'+(y+ch*0.5+wkFs*0.35)+'" text-anchor="end" style="font-size:'+wkFs+'px">'+rotSem(mondayOf(w))+'</text>';
       for(var c=0;c<n;c++){
         var li=lotIdxs[c], k=w+'::'+li, arr=d.cell[k], x=labelW+c*cw;
         if(arr&&arr.length){
@@ -8243,9 +8244,9 @@
     var s='';
     for(var g=0;g<=4;g++){ var v=ymax*g/4; s+='<line x1="'+pl+'" y1="'+yy(v)+'" x2="'+(W-pr)+'" y2="'+yy(v)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(v)+3)+'" text-anchor="end">'+(opts.fmt||fmtBR)(v)+'</text>'; }
     var step=Math.max(1,Math.ceil(n/8));
-    for(var i=0;i<n;i+=step){ s+='<text class="axm" x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">S'+isoWeek(dateFn(w0+i))+'</text>'; }
+    for(var i=0;i<n;i+=step){ s+='<text class="axm" x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">'+rotSem(dateFn(w0+i))+'</text>'; }
     series.forEach(function(sr){ s+='<path d="'+path(sr.values)+'" fill="none" stroke="'+sr.color+'" stroke-width="2"'+(sr.dashed?' stroke-dasharray="6 4"':'')+'/>';
-      if(sr.dots)sr.values.forEach(function(v,j){ s+='<circle cx="'+xx(j).toFixed(1)+'" cy="'+yy(v||0).toFixed(1)+'" r="2.5" fill="'+sr.color+'"><title>S'+isoWeek(dateFn(w0+j))+' · '+(opts.fmt||fmtBR)(v||0)+'</title></circle>'; }); });
+      if(sr.dots)sr.values.forEach(function(v,j){ s+='<circle cx="'+xx(j).toFixed(1)+'" cy="'+yy(v||0).toFixed(1)+'" r="2.5" fill="'+sr.color+'"><title>'+rotSem(dateFn(w0+j))+' · '+(opts.fmt||fmtBR)(v||0)+'</title></circle>'; }); });
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
   /** Histograma comparativo entre cenários (aba Cenários): total de recursos mobilizados por
@@ -8350,13 +8351,34 @@
   }
   function fmtDate(d){var p=function(n){return (n<10?'0':'')+n;};return p(d.getDate())+'/'+p(d.getMonth()+1)+'/'+d.getFullYear();}
   function isoWeek(d){var t=new Date(d.getTime());t.setHours(0,0,0,0);t.setDate(t.getDate()+3-((t.getDay()+6)%7));var w1=new Date(t.getFullYear(),0,4);return 1+Math.round(((t-w1)/864e5-3+((w1.getDay()+6)%7))/7);}
-  /** Converte uma semana do calendário (ex.: "37", igual ao "S37" mostrado na matriz) pra semana
-   * do projeto (1 = primeira semana do cronograma) — procura a primeira semana do projeto cujo
-   * S-do-ano bate com a informada. Usado pra campos como "Semana de início"/"Semana alvo de
-   * término", que o usuário pensa em semana do calendário, não em semana relativa do projeto. */
-  function projWeekForCalWeek(calWeek){
+  /** Ano ISO da semana — não é o ano da data. A semana que começa em 28/12/2026 é a S1 de 2027,
+   *  e usar getFullYear() ali escreveria "S1-26". O ano é o da quinta-feira da semana. */
+  function isoAno(d){var t=new Date(d.getTime());t.setHours(0,0,0,0);t.setDate(t.getDate()+3-((t.getDay()+6)%7));return t.getFullYear();}
+  /** Rótulo da semana em TODO o app: S45-26. Sem o ano, a S45 de 2026 e a S45 de 2027 ficam
+   *  idênticas na tela — numa obra que vira o ano, é a mesma linha falando de coisas diferentes. */
+  function rotSem(d){ return 'S'+isoWeek(d)+'-'+String(isoAno(d)).slice(2); }
+  /** Lê um rótulo de semana escrito à mão: "S45-26", "45-26", "S45/2026", "45".
+   *  Sem o ano devolve ano null — e aí a busca cai na primeira semana com esse número, que é o
+   *  comportamento antigo (serve pra obra que não vira o ano). */
+  function leRotSem(txt){
+    var m=String(txt==null?'':txt).trim().match(/^[sS]?\s*(\d{1,2})\s*(?:[-\/.\s]\s*(\d{2}|\d{4}))?$/);
+    if(!m)return null;
+    var sem=+m[1]; if(!(sem>=1&&sem<=53))return null;
+    var ano=(m[2]==null)?null:(+m[2]<100?2000+(+m[2]):+m[2]);
+    return {semana:sem,ano:ano};
+  }
+  /** Converte uma semana do calendário (ex.: "S45-26", igual ao que a matriz mostra) pra semana
+   * do projeto (1 = primeira semana do cronograma). Usado pra campos como "Semana de início"/
+   * "Semana alvo de término", que o usuário pensa em semana do calendário, não em semana
+   * relativa do projeto.
+   * Sem o ano a conta é ambígua: numa obra de dois anos, "45" acha a PRIMEIRA S45 e pode ser a
+   * do ano errado. Por isso o ano entra junto e os campos já vêm preenchidos com ele. */
+  function projWeekForCalWeek(calWeek,ano){
     if(!(calWeek>0))return 0;
-    for(var w=1;w<=520;w++){ if(isoWeek(mondayOf(w))===calWeek)return w; }
+    for(var w=1;w<=520;w++){
+      var d=mondayOf(w);
+      if(isoWeek(d)===calWeek&&(ano==null||isoAno(d)===ano))return w;
+    }
     return 0;
   }
 
@@ -9256,13 +9278,13 @@
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
       if(entry.isHoliday){
-        var hr=ws.addRow([fmtDate(d),'⏸ S'+isoWeek(d)+' — paralisada'].concat(LOTS.map(function(){return '';})));
+        var hr=ws.addRow([fmtDate(d),'⏸ '+rotSem(d)+' — paralisada'].concat(LOTS.map(function(){return '';})));
         ws.mergeCells(hr.number,2,hr.number,2+Math.max(1,LOTS.length)-1);
         hr.eachCell(function(c){ c.font={italic:true,color:{argb:'FF999999'}}; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF3F3F3'}}; });
         continue;
       }
       var w=entry.working;
-      var row=ws.addRow([fmtDate(d),'S'+isoWeek(d)].concat(LOTS.map(function(){return '';})));
+      var row=ws.addRow([fmtDate(d),rotSem(d)].concat(LOTS.map(function(){return '';})));
       for(var li=0;li<LOTS.length;li++){
         var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0;});
         if(!subs.length)continue;
@@ -10172,7 +10194,7 @@
     if(sv.codigo)return String(sv.codigo).trim().slice(0,6);
     return (typeof lbSiglaAuto==='function')?lbSiglaAuto(sv.n):String(sv.n||'').slice(0,3).toUpperCase();
   }
-  function relRotSem(w){ var d=mondayOf(w); return 'S'+isoWeek(d)+'-'+String(d.getFullYear()).slice(2); }
+  function relRotSem(w){ return rotSem(mondayOf(w)); }
   function relMes(w){
     var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
     var d=mondayOf(w); return MES[d.getMonth()]+'/'+String(d.getFullYear()).slice(2);
@@ -10567,7 +10589,7 @@
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
     var hist=computeHistogram(), tw=hist.tw;
     var wb=XLSX.utils.book_new();
-    var header=['Recurso','Categoria','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push('S'+isoWeek(calWeekDate(w)));
+    var header=['Recurso','Categoria','Tipo','Unidade','Pico']; for(var w=1;w<=tw;w++)header.push(rotSem(calWeekDate(w)));
     var rows=[header];
     RECURSOS.forEach(function(r){
       var row=[r.n,r.cat||'',r.tipo==='funcao'?'Função':'Equipamento',r.u,hist.peakByResource[r.id]||0];
@@ -10711,9 +10733,13 @@
       for(var w=1;w<=tw;w++){ if(calWeekDate(w).toISOString().slice(0,10)===mon)return w; }
       return 0;
     }
-    var m=String(label||'').match(/(\d{1,2})/);
-    if(m){ var n=+m[1];
-      for(var w2=1;w2<=tw;w2++){ if(isoWeek(calWeekDate(w2))===n)return w2; }
+    // "S45-26" na planilha vale mais que "45": com o ano, a semana é única.
+    var r=leRotSem(label);
+    if(r){
+      for(var w2=1;w2<=tw;w2++){
+        var d2=calWeekDate(w2);
+        if(isoWeek(d2)===r.semana&&(r.ano==null||isoAno(d2)===r.ano))return w2;
+      }
     }
     return 0;
   }
@@ -10734,13 +10760,13 @@
     return new Promise(function(resolve){
       var tw=cfg.tw, jaTem=semanasComApontamento(tw), hoje=hojeCalWeek(tw)||0;
       var back=document.createElement('div'); back.className='segmenu-backdrop';
-      function opcoes(sel){ var o=''; for(var w=1;w<=tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>S'+isoWeek(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+(jaTem[w]?' · já apontada':'')+'</option>'; return o; }
+      function opcoes(sel){ var o=''; for(var w=1;w<=tw;w++)o+='<option value="'+w+'"'+(w===sel?' selected':'')+'>'+rotSem(calWeekDate(w))+' · '+fmtDate(calWeekDate(w))+(jaTem[w]?' · já apontada':'')+'</option>'; return o; }
       back.innerHTML='<div class="segmenu-panel card" style="max-width:620px;max-height:88vh;overflow:auto">'+
         '<div class="eyebrow" style="margin-bottom:4px">'+cfg.titulo+'</div>'+
         (cfg.nota?'<div class="note" style="margin-bottom:10px">'+cfg.nota+'</div>':'')+
         (cfg.mostrarInicio?'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><span class="note">Primeira coluna =</span><select class="esel" id="impStart" style="max-width:280px">'+opcoes(cfg.inicioPadrao)+'</select></div>':'')+
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px"><span class="note">Atualizar até a semana</span><select class="esel" id="impAte" style="max-width:280px">'+opcoes(cfg.ateDefault)+'</select>'+
-          (hoje?'<span class="note">hoje: <b>S'+isoWeek(calWeekDate(hoje))+'</b></span>':'')+'</div>'+
+          (hoje?'<span class="note">hoje: <b>'+rotSem(calWeekDate(hoje))+'</b></span>':'')+'</div>'+
         '<div class="note" style="margin-bottom:10px" id="impRange"></div>'+
         '<div style="border-top:1px solid var(--line);padding-top:10px">'+
           '<div class="eyebrow" style="margin-bottom:4px">Semanas já apontadas</div>'+
@@ -10754,11 +10780,11 @@
       function refresh(){
         var ini=selIni?+selIni.value:1, ate=+selAte.value;
         if(ate<ini){ ate=ini; selAte.value=String(ini); }
-        rng.innerHTML=(selIni?'Entra da semana <b>S'+isoWeek(calWeekDate(ini))+'</b> até <b>S'+isoWeek(calWeekDate(ate))+'</b>':'Vai até <b>S'+isoWeek(calWeekDate(ate))+'</b>')+'. O que estiver depois disso não é tocado.';
+        rng.innerHTML=(selIni?'Entra da semana <b>'+rotSem(calWeekDate(ini))+'</b> até <b>'+rotSem(calWeekDate(ate))+'</b>':'Vai até <b>'+rotSem(calWeekDate(ate))+'</b>')+'. O que estiver depois disso não é tocado.';
         var chips='';
         for(var w=ini;w<=ate;w++){ if(!jaTem[w])continue;
           var marcado=box.querySelector('[data-imw="'+w+'"]');
-          chips+='<label class="lotchip"><input type="checkbox" data-imw="'+w+'"'+(marcado&&marcado.checked?' checked':'')+'>S'+isoWeek(calWeekDate(w))+'</label>';
+          chips+='<label class="lotchip"><input type="checkbox" data-imw="'+w+'"'+(marcado&&marcado.checked?' checked':'')+'>'+rotSem(calWeekDate(w))+'</label>';
         }
         box.innerHTML=chips||'<span class="note">Nenhuma semana do intervalo tem apontamento ainda — tudo entra.</span>';
       }
@@ -10816,8 +10842,8 @@
     }
     HIST_OPEN.realizado=true;
     go('cr-hist');
-    var puladasTxt=Object.keys(semanasPuladas).map(function(w){return 'S'+isoWeek(calWeekDate(+w));}).join(', ');
-    var msg=applied+' apontamento(s) importado(s) de S'+isoWeek(calWeekDate(escolha.startWeek))+' até S'+isoWeek(calWeekDate(escolha.ateWeek))+'.'+
+    var puladasTxt=Object.keys(semanasPuladas).map(function(w){return rotSem(calWeekDate(+w));}).join(', ');
+    var msg=applied+' apontamento(s) importado(s) de '+rotSem(calWeekDate(escolha.startWeek))+' até '+rotSem(calWeekDate(escolha.ateWeek))+'.'+
       (protegidos?' '+protegidos+' valor(es) preservados em semanas que já tinham apontamento ('+puladasTxt+') — pra atualizar, importe de novo marcando essas semanas.':'')+
       (foraDoPrazo?' '+foraDoPrazo+' valor(es) ficaram fora do período escolhido e não entraram.':'')+
       (semRec.length?'\n\nSem recurso correspondente no cadastro (ignorados): '+semRec.slice(0,12).join(', ')+(semRec.length>12?' e mais '+(semRec.length-12):'')+'.':'')+
@@ -11003,8 +11029,8 @@
     HIST_OPEN.realizado=true;
     go('cr-hist');
     var resumo=sources.map(function(src){return src.label+': '+src.rowsOk+' linhas'+(src.semData?' ('+src.semData+' linhas sem data de entrada, ignoradas)':'');}).join(' · ');
-    var puladasTxtD=Object.keys(semanasPuladas).map(function(w){return 'S'+isoWeek(calWeekDate(+w));}).join(', ');
-    var msg=nRes+' recurso(s) preenchidos até S'+isoWeek(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+
+    var puladasTxtD=Object.keys(semanasPuladas).map(function(w){return rotSem(calWeekDate(+w));}).join(', ');
+    var msg=nRes+' recurso(s) preenchidos até '+rotSem(calWeekDate(lastW))+' ('+lastW+' semanas). '+resumo+'.'+
       (protegidos?' '+protegidos+' valor(es) preservados em semanas que já tinham apontamento ('+puladasTxtD+') — pra atualizar, importe de novo marcando essas semanas.':'')+(nClasse?' '+nCats+' categoria(s) de mão de obra classificadas pela coluna TIPO ('+nClasse+' função(ões)).':'')+
       (temLocador?' A parcela de terceiros veio da coluna Locador (TRIPOLONI = frota própria)'+(totTerc>0?' — '+fmtBR(totTerc)+' equipamento×semana de terceiros':'')+'.':' A planilha não tem coluna Locador, então tudo entrou como próprio.')+(ignored.length?' Sem recurso correspondente (ignorados): '+ignored.slice(0,12).join(', ')+(ignored.length>12?' e mais '+(ignored.length-12):'')+'.':'')+(problems.length?'\n\n'+problems.join('\n'):'')+'\n\nConfira a tabela Realizado e clique em "Salvar apontamentos" pra confirmar.';
     alert(msg);
@@ -11561,7 +11587,7 @@
         }
       }
       if(entry.isHoliday){
-        body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehSemanaDeHoje(d)?'<span class="tcm-hojetag">hoje</span>':'')+'</td><td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
+        body+='<tr class="tcm-holrow'+(ehSemanaDeHoje(d)?' tcm-hoje':'')+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">'+rotSem(d)+(ehSemanaDeHoje(d)?'<span class="tcm-hojetag">hoje</span>':'')+'</td><td class="tcm-holcell" colspan="'+Math.max(1,lotIdxs.length)+'">⏸ Semana paralisada — produção 0</td></tr>';
         continue;
       }
       var w=entry.working, tds='';
@@ -11605,7 +11631,7 @@
       }
       var ehHoje=ehSemanaDeHoje(d);
       var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
-      body+='<tr'+(cls?' class="'+cls+'"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">S'+isoWeek(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
+      body+='<tr'+(cls?' class="'+cls+'"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">'+rotSem(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
     if(withSummary&&!opts.semSumario){
       body+=SERV.map(function(s,si){
@@ -12374,9 +12400,9 @@
     for(var k=0;k<=semanas;k+=passo){
       var x=xx(k*DIAS_SEM);
       s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>'+
-        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
+        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">'+rotSem(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
     }
-    s+='<text class="axm" x="'+pl+'" y="'+(pt+ih+30)+'" style="font-size:9px">dia 0 = início do serviço (S'+isoWeek(mondayOf(c.inicio||1))+') · '+DIAS_SEM+' dias úteis por semana</text>';
+    s+='<text class="axm" x="'+pl+'" y="'+(pt+ih+30)+'" style="font-size:9px">dia 0 = início do serviço ('+rotSem(mondayOf(c.inicio||1))+') · '+DIAS_SEM+' dias úteis por semana</text>';
     // faixas por etapa
     var porEtapa={};
     calc.itens.forEach(function(it){ (porEtapa[it.eid]||(porEtapa[it.eid]=[])).push(it); });
@@ -12445,7 +12471,7 @@
     for(var k=0;k<=semanas;k+=passo){
       var x=xx(k*DIAS_SEM);
       s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>'+
-        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
+        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">'+rotSem(mondayOf(lbDiaParaSemana(k*DIAS_SEM,c.inicio)))+'</text>';
     }
     var loteAnterior=null;
     linhas.forEach(function(L,i){
@@ -12645,10 +12671,10 @@
     var s='';
     for(var g=0;g<=100;g+=25)s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(g)+3)+'" text-anchor="end">'+g+'%</text>';
     var passo=Math.max(1,Math.ceil(semanas/22));
-    for(var k2=0;k2<=semanas;k2+=passo)s+='<text class="axm" x="'+xx(k2).toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">S'+isoWeek(mondayOf(lbDiaParaSemana(k2*DIAS_SEM,c.inicio)))+'</text>';
+    for(var k2=0;k2<=semanas;k2+=passo)s+='<text class="axm" x="'+xx(k2).toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">'+rotSem(mondayOf(lbDiaParaSemana(k2*DIAS_SEM,c.inicio)))+'</text>';
     var d=vals.map(function(v,i){ return (i?'L':'M')+xx(i).toFixed(1)+' '+yy(v).toFixed(1); }).join(' ');
     s+='<path d="'+d+'" fill="none" stroke="var(--accent)" stroke-width="2.5"/>';
-    vals.forEach(function(v,i){ if(semanas<=40||i%passo===0)s+='<circle cx="'+xx(i).toFixed(1)+'" cy="'+yy(v).toFixed(1)+'" r="2.5" fill="var(--accent)"><title>S'+isoWeek(mondayOf(lbDiaParaSemana(i*DIAS_SEM,c.inicio)))+': '+Math.round(v)+'%</title></circle>'; });
+    vals.forEach(function(v,i){ if(semanas<=40||i%passo===0)s+='<circle cx="'+xx(i).toFixed(1)+'" cy="'+yy(v).toFixed(1)+'" r="2.5" fill="var(--accent)"><title>'+rotSem(mondayOf(lbDiaParaSemana(i*DIAS_SEM,c.inicio)))+': '+Math.round(v)+'%</title></circle>'; });
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:820px">'+s+'</svg>';
   }
 
@@ -13239,7 +13265,7 @@
     var lotesTxt=nView<LOTS.length?(nView+' de '+LOTS.length+' lotes em exibição'):(LOTS.length+' lotes');
     var kpis='<div class="grid g4" style="margin-bottom:14px">'+
       kpi('info','Prazo total',tw+' sem','~'+Math.round(tw/4.33)+' meses'+(nView<LOTS.length?' · obra inteira: '+twAll+' sem':''))+
-      kpi('accent','Término previsto',fmtDate(mondayOf(tw)),'semana S'+isoWeek(mondayOf(tw)))+
+      kpi('accent','Término previsto',fmtDate(mondayOf(tw)),'semana '+rotSem(mondayOf(tw)))+
       kpi('good','Pico de frentes',pico,'atividades simultâneas')+
       kpi('warn','Serviços',SERV.length,lotesTxt)+'</div>';
     if(!SERV.length||!tw)return kpis+'<div class="note">Cadastre serviços e quantidades pra ver o quantitativo semanal.</div>';
@@ -13253,7 +13279,7 @@
         cells+='<td class="r mono">'+(v>0?fmtBR(v):'—')+'</td><td class="r mono" style="color:var(--muted)">'+fmtBR(accum[si])+'</td>';
       });
       totalAccum+=rowTotal;
-      rows+='<tr><td class="mono">'+fmtDate(d)+'</td><td class="mono">S'+isoWeek(d)+'</td>'+cells+
+      rows+='<tr><td class="mono">'+fmtDate(d)+'</td><td class="mono">'+rotSem(d)+'</td>'+cells+
         '<td class="r mono" style="font-weight:600">'+(rowTotal>0?fmtBR(rowTotal):'—')+'</td><td class="r mono" style="font-weight:600">'+fmtBR(totalAccum)+'</td></tr>';
     }
     var th1=SERV.map(function(s){var hex=svcColor(s);return '<th colspan="2" class="r" style="background:'+hex+';color:'+pickFont(hex)+'">'+s.n+' ('+s.u+')</th>';}).join('');
@@ -13399,7 +13425,7 @@
         '<div class="banner" style="margin-bottom:10px;border-color:'+(dd>0?'var(--crit)':(dd<0?'var(--good)':'var(--line)'))+'">'+
           '<b>Projeção pelo ritmo real.</b> O que já foi apontado sai do saldo, e o que falta é refeito na produtividade que cada frente vem mostrando: '+
           'quem produz mais que o previsto antecipa, quem produz menos estende. '+
-          (fim?('Término projetado <b>S'+isoWeek(mondayOf(fim))+'</b> contra S'+isoWeek(mondayOf(fimP))+' no planejado — '+
+          (fim?('Término projetado <b>'+rotSem(mondayOf(fim))+'</b> contra '+rotSem(mondayOf(fimP))+' no planejado — '+
             (dd>0?('<b style="color:var(--crit)">'+dd+' semana(s) a mais</b>'):(dd<0?('<b style="color:var(--good)">'+(-dd)+' semana(s) a menos</b>'):'sem diferença'))+'.')
             :'Nada apontado ainda — a projeção repete o planejado.')+
           ' Esta vista é só leitura: nem o plano nem a linha de base mudam.</div>'+
@@ -13496,7 +13522,7 @@
     var s=SERV[si]; if(!s)return;
     var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
     if(!seg)return;
-    var calStart=isoWeek(mondayOf(seg.start));
+    var calStart=rotSem(mondayOf(seg.start));
     var teams=[]; for(var t=1;t<=s.eq;t++)teams.push(t);
     var lotOpts=LOTS.map(function(l,li2){return '<option value="'+li2+'"'+(li2===li?' selected':'')+'>'+l+'</option>';}).join('');
     var teamOpts=teams.map(function(t){return '<option value="'+t+'"'+(t===seg.team?' selected':'')+'>Equipe '+t+'</option>';}).join('');
@@ -13508,7 +13534,7 @@
       '<div style="display:flex;flex-direction:column;gap:10px">'+
         '<label>Lote<select class="esel" id="smLote">'+lotOpts+'</select></label>'+
         '<label>Equipe<select class="esel" id="smTeam">'+teamOpts+'</select></label>'+
-        '<label>Semana do ano de início<input class="einp" type="number" id="smStart" value="'+calStart+'"></label>'+
+        '<label>Semana do ano de início<input class="einp" type="text" id="smStart" value="'+calStart+'" placeholder="S37-26"></label>'+
         '<div class="note" id="smPreview" style="min-height:1.4em"></div>'+
       '</div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
@@ -13545,16 +13571,16 @@
     }
     function refreshPreview(){
       var newLi=+loteSel.value, newTeam=+teamSel.value;
-      var calWeek=Math.max(1,parseInt(startInp.value,10)||calStart);
-      var projWeek=projWeekForCalWeek(calWeek);
+      var r0=leRotSem(startInp.value)||leRotSem(calStart);
+      var projWeek=r0?projWeekForCalWeek(r0.semana,r0.ano):0;
       var qty=QTY[newLi][si]||0;
-      if(!projWeek){ preview.textContent='Semana do ano inválida.'; return; }
+      if(!projWeek){ preview.textContent='Semana inválida — escreva como S37-26.'; return; }
       if(!(qty>0)){ preview.textContent='Esse lote não tem quantidade cadastrada pra "'+s.n+'".'; return; }
       var p=previewSeg(newLi,newTeam,projWeek);
       if(!p.result){ preview.textContent='Não deu pra calcular — confira os dados.'; return; }
       var result=p.result;
       preview.innerHTML='Quantidade: <b>'+fmtBR(qty)+' '+s.u+'</b> — duração calculada: <b>'+result.dur+' semana(s)</b>'+
-        ' (S'+isoWeek(mondayOf(result.start))+' a S'+isoWeek(mondayOf(result.start+result.dur-1))+')'+
+        ' ('+rotSem(mondayOf(result.start))+' a '+rotSem(mondayOf(result.start+result.dur-1))+')'+
         (p.conflicts.length?'<br><b style="color:var(--crit)">⚠ Impossível: Equipe '+newTeam+' já está em '+p.conflicts.map(function(c){return LOTS[c.li];}).join(', ')+' nesse período.</b>':'');
     }
     loteSel.addEventListener('change',refreshPreview);
@@ -13568,9 +13594,9 @@
     });
     document.getElementById('smApply').addEventListener('click',function(){
       var newLi=+loteSel.value, newTeam=+teamSel.value;
-      var calWeek=Math.max(1,parseInt(startInp.value,10)||calStart);
-      var projWeek=projWeekForCalWeek(calWeek);
-      if(!projWeek){alert('Semana do ano inválida.');return;}
+      var r1=leRotSem(startInp.value)||leRotSem(calStart);
+      var projWeek=r1?projWeekForCalWeek(r1.semana,r1.ano):0;
+      if(!projWeek){alert('Semana inválida — escreva como S37-26.');return;}
       if(!(QTY[newLi][si]>0)){alert('O lote "'+LOTS[newLi]+'" não tem quantidade cadastrada pra "'+s.n+'".');return;}
       var kOld=ovrKey(li,si), kNew=ovrKey(newLi,si);
       if(!kNew)return;
@@ -13631,7 +13657,7 @@
    *  ajuste. */
   function openOverlapWarning(svcName,team,conflicts,onChoice){
     var list=conflicts.map(function(c){
-      return '<li>'+LOTS[c.li]+' — S'+isoWeek(mondayOf(c.start))+' a S'+isoWeek(mondayOf(c.start+c.dur-1))+'</li>';
+      return '<li>'+LOTS[c.li]+' — '+rotSem(mondayOf(c.start))+' a '+rotSem(mondayOf(c.start+c.dur-1))+'</li>';
     }).join('');
     var backdrop=document.createElement('div');
     backdrop.className='segmenu-backdrop';
@@ -14056,7 +14082,7 @@
       var segsReal=buildSchedule().filter(function(sg){return sg.si===si;}).sort(function(a,b){return a.start-b.start;});
       var realRows=segsReal.map(function(sg){
         return '<div class="seqrow" style="cursor:default"><span class="seqname">'+LOTS[sg.li]+'</span>'+
-          '<span class="note" style="margin-left:auto;white-space:nowrap">Equipe '+sg.team+' · S'+isoWeek(mondayOf(sg.start))+'–S'+isoWeek(mondayOf(sg.start+sg.dur-1))+'</span></div>';
+          '<span class="note" style="margin-left:auto;white-space:nowrap">Equipe '+sg.team+' · '+rotSem(mondayOf(sg.start))+'–'+rotSem(mondayOf(sg.start+sg.dur-1))+'</span></div>';
       }).join('');
       p.innerHTML='<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">'+
         asgBtn('panel')+'<span class="lab">Lotes e sequência de execução por equipe</span>'+svcSelHtml0+'</div>'+
