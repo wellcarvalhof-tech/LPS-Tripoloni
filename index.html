@@ -545,6 +545,12 @@
     .print-head h2{font-family:"Archivo",sans-serif;font-size:16px;margin:0}
     body.printing-mat .print-head,
     body.printing-mat #cronoContent{display:none!important}
+    /* Imprimir a matriz = imprimir SÓ a matriz. Esconder um elemento de cada vez não escala:
+       sempre sobra um que ficou de fora da lista — numa folha real vazaram a barra do modo
+       campo e as abas da tela. Na hora de imprimir, as folhas vão pra raiz do body e TUDO o
+       que não for #printCarry some, seja o que for. */
+    body.printing-mat>*:not(#printCarry){display:none!important}
+    body.printing-mat #printCarry{display:block}
     /* Relatório do período (Histograma): imprime só o card do relatório, sem os controles */
     body.printing-lb>*:not(#lbPrint){display:none!important}
     body.printing-lb #lbPrint{display:block;padding:0}
@@ -9537,6 +9543,9 @@
     return {scale:scale,chunks:chunks,faixas:faixas,folhas:pags.length,paginas:pags,
       estouro:estouro,manual:!!manual};
   }
+  /* Teto da ampliação automática. Letra grande é bom; letra gigante numa folha quase vazia
+   * não é — e acima disso o ganho de leitura some. */
+  var PDF_TETO=2.2;
   function pdfPlanoFolhas(M,pageW,pageH,escFixa,quebras){
     var headH=30, slack=14;                      // cabeçalho por folha + folga fixa
     var alturaUtil=pageH-headH-slack;
@@ -9562,7 +9571,7 @@
       fxM.forEach(function(f){ maiorHM=Math.max(maiorHM,M.theadH+(f.ate-f.de+1)*M.linhaH+(f.ultima?M.sumH:0)); });
       var escM;
       if(escFixa)escM=Math.max(0.1,Math.min(2,escFixa/100));
-      else escM=Math.max(0.1,+(Math.min(1.25,pageW*0.97/Math.max(1,maiorWM+M.fixedW),
+      else escM=Math.max(0.1,+(Math.min(PDF_TETO,pageW*0.97/Math.max(1,maiorWM+M.fixedW),
         alturaUtil/Math.max(1,maiorHM))*0.97).toFixed(3));
       return pdfMarcaPaginas(M,chM,fxM,escM,pageW,alturaUtil,true);
     }
@@ -9608,6 +9617,17 @@
     }
     if(!faixas.length)faixas.push({de:1,ate:M.nSemRows,ultima:true});
     faixas[faixas.length-1].ultima=true;
+    if(!escFixa){
+      /* A busca acima escolhe EM QUANTAS fatias cortar, e pra isso o teto de 1,25 é proposital:
+       * sem ele, uma escala maior pediria mais fatias e o número de folhas subiria. Com o corte
+       * já decidido, porém, crescer não muda folha nenhuma — e "ajustar à folha" tem que encher
+       * a folha, senão escolher papel maior não adianta e sobra meia página em branco. */
+      var maiorW2=0, maiorH2=0;
+      chunks.forEach(function(c){ var w4=M.fixedW; c.forEach(function(li){ w4+=M.lotWs[M.allIdxs.indexOf(li)]||60; }); maiorW2=Math.max(maiorW2,w4); });
+      faixas.forEach(function(f){ maiorH2=Math.max(maiorH2,M.theadH+(f.ate-f.de+1)*M.linhaH+(f.ultima?M.sumH:0)); });
+      var cheia=Math.min(pageW*0.98/Math.max(1,maiorW2),alturaUtil/Math.max(1,maiorH2));
+      scale=Math.max(scale,Math.max(0.1,Math.min(PDF_TETO,+(cheia*0.97).toFixed(3))));
+    }
     return pdfMarcaPaginas(M,chunks,faixas,scale,pageW,alturaUtil,false);
   }
   /** Desenha a miniatura: a matriz esquematizada (cada atividade é um retângulo na cor do
@@ -9790,6 +9810,10 @@
           '<span class="note" style="margin-left:4px">(a orientação decide o lado deitado)</span></div>'+
         '<label style="'+lab+'" id="pdfMargLab">Margem</label>'+
         '<div style="font-size:12.5px"><input class="inp" id="pdfMarg" type="number" min="0" max="40" step="1" value="'+(P.margem==null?10:P.margem)+'" style="width:96px"> mm</div>'+
+        '<label style="'+lab+'" id="pdfResLab">Conteúdo</label>'+
+        '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer" id="pdfResBox">'+
+          '<input type="checkbox" id="pdfResumo"'+(P.resumo?' checked':'')+'>'+
+          'Incluir o quadro-resumo dos serviços (sai depois da matriz, em folha à parte)</label>'+
         '<label style="'+lab+'" id="pdfEscLab">Escala</label>'+
         '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">'+
           '<select class="inp" id="pdfEscM" style="width:180px">'+
@@ -9805,6 +9829,8 @@
         '</div>'+
         '<div class="pdfprev" id="pdfPrev"></div></div>'+
       '<div id="pdfEstim" class="note" style="margin-top:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;line-height:1.5"></div>'+
+      '<div class="note" style="margin-top:7px;font-size:11.5px;line-height:1.5">No diálogo de impressão do navegador, deixe <b>Margens: Padrão</b> e <b>desmarque “Cabeçalhos e rodapés”</b>. '+
+        'O cabeçalho do navegador (data, título, endereço) é desenhado por fora do que o app controla e rouba altura da folha.</div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
         '<button class="btn" id="pdfCancel">Cancelar</button>'+
         '<button class="btn primary" id="pdfOk">Imprimir</button></div></div>';
@@ -9814,6 +9840,7 @@
     function lePapel(){
       var id=q('pdfTam').value;
       var o={id:id,orient:ori,margem:Math.max(0,Math.min(40,+q('pdfMarg').value||0)),
+        resumo:q('pdfResumo').checked,
         escala:(q('pdfEscM').value==='fixa')?Math.max(10,Math.min(200,+q('pdfEscV').value||100)):'auto'};
       if(id==='custom'){
         // Guardado sempre em retrato (menor x maior), igual aos papéis da tabela: quem decide
@@ -9826,7 +9853,7 @@
     }
     function atualiza(){
       var o=lePapel(), unica=(o.id==='unica'), cust=(o.id==='custom');
-      ['pdfOriLab','pdfOri','pdfMargLab','pdfEscLab','pdfEscM','pdfEscV'].forEach(function(k){
+      ['pdfOriLab','pdfOri','pdfMargLab','pdfEscLab','pdfEscM','pdfEscV','pdfResLab','pdfResBox'].forEach(function(k){
         var e=q(k); if(e)e.style.opacity=unica?'.4':'1';
       });
       q('pdfMarg').disabled=false;
@@ -9853,6 +9880,7 @@
       if(pl.faixas.length>1)det.push(pl.faixas.length+' faixa(s) de semanas');
       est.innerHTML='<b>'+pl.folhas+' folha'+(pl.folhas===1?'':'s')+'</b> · escala '+Math.round(pl.scale*100)+'% · '+
         o.n+' '+(ori==='retrato'?'retrato':'paisagem')+' '+cm(mm.w)+' × '+cm(mm.h)+' cm'+
+        (o.resumo?' + 1 folha com o quadro-resumo':'')+
         (det.length?('<br><span style="color:var(--muted)">'+det.join(' · ')+'</span>'):'')+
         (pl.estouro?('<br><span style="color:var(--crit)">'+pl.estouro+' página(s) em vermelho não cabem no papel nessa escala — mova a quebra, use papel maior ou volte a escala pra "ajustar à folha".</span>'):'')+
         (pl.scale<0.45?'<br><span style="color:var(--warn)">Escala baixa: a letra vai sair miúda. Papel maior ou escala fixa deixa mais legível.</span>':'');
@@ -9862,7 +9890,7 @@
     }
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
-    ['pdfTam','pdfMarg','pdfEscM','pdfEscV','pdfCW','pdfCH'].forEach(function(k){
+    ['pdfTam','pdfMarg','pdfEscM','pdfEscV','pdfCW','pdfCH','pdfResumo'].forEach(function(k){
       q(k).addEventListener('change',atualiza); q(k).addEventListener('input',atualiza);
     });
     q('pdfOri').addEventListener('click',function(e){
@@ -9899,11 +9927,21 @@
     // "Cabeçalhos e rodapés" no diálogo de impressão, não dá pra remover via código).
     document.title='Tempo Caminho - '+nome;
     buildPrintPages(nome,gerado,tw);
+    // #printMat mora dentro do card da tela; tirado de lá, a regra de impressão pode apagar o
+    // resto do documento sem depender de uma lista de classes. Guardo onde estava pra devolver:
+    // renderCrono() redesenha só #cronoContent e não recriaria estes dois.
+    var pm=document.getElementById('printMat'), pf=document.getElementById('printFoot');
+    var paiPrint=pm&&pm.parentNode, apos=pf?pf.nextSibling:(pm?pm.nextSibling:null);
+    var carry=document.getElementById('printCarry');
+    if(!carry){ carry=document.createElement('div'); carry.id='printCarry'; carry.className='print-only'; document.body.appendChild(carry); }
+    if(pm)carry.appendChild(pm);
+    if(pf)carry.appendChild(pf);
     document.body.classList.add('printing-mat');
     window.onafterprint=function(){
       document.body.classList.remove('printing-mat');
       window._matrixZoom=prevZoom; document.title=prevTitle;
-      var m=document.getElementById('printMat'); if(m)m.innerHTML='';
+      if(paiPrint){ if(pm)paiPrint.insertBefore(pm,apos); if(pf)paiPrint.insertBefore(pf,apos); }
+      if(pm)pm.innerHTML=''; if(pf)pf.innerHTML='';
       var pg=document.getElementById('pdfPageSize'); if(pg)pg.remove();
       renderCrono(); window.onafterprint=null;
     };
@@ -9915,7 +9953,9 @@
     // Legenda de serviços compacta (lista em linha, fonte pequena) — antes era uma tabela que
     // comia boa parte da folha e deixava a matriz minúscula.
     var foot=document.getElementById('printFoot');
-    if(foot){
+    // O quadro-resumo é material de apoio, não é a matriz: entra só se for pedido no diálogo.
+    if(foot&&!pdfPapelAtual().resumo)foot.innerHTML='';
+    else if(foot){
       // Tabela-resumo por serviço: nº de equipes e produção total (todas as equipes) por dia,
       // semana e mês — normal e reduzida pela praticabilidade. O fator de redução é o pior
       // (menor) entre os períodos chuvosos cadastrados: (1 − %produção) × (1 − %dias), o mesmo
@@ -10022,6 +10062,43 @@
         });
       });
       mat.innerHTML=folhasHTML.join('');
+      /* Conferência no papel, não na conta. O zoom é fracionário e o navegador arredonda cada
+       * linha pra cima; com dezenas de semanas isso soma e a folha monta mais alta do que o
+       * cálculo previu. Como .print-page tem break-inside:avoid, o que passa do papel não vai
+       * pra folha seguinte: é CORTADO — foi assim que as últimas semanas sumiram. Aqui o bloco
+       * já montado é medido como vai sair e, se passou, o zoom cai até caber. */
+      var escFixa=!(P.escala==='auto'||!P.escala);
+      var antesM=mat.style.cssText;
+      for(var tent=0;tent<4;tent++){
+        /* Medir com a LARGURA DA FOLHA, não com width:max-content. Com max-content quem definia
+         * a largura era o texto do cabeçalho da folha ("...— lotes X a Y — folha 1/3"), que é
+         * longo e não quebra: a medida dava 645px fixos, não reagia ao zoom, e a correção
+         * entrava em parafuso encolhendo a matriz à toa. A largura que importa é a da matriz
+         * (.print-zoom); a altura é a da folha montada, já com o cabeçalho quebrado como vai
+         * sair no papel. */
+        mat.style.cssText='display:block;position:absolute;left:-100000px;top:0;visibility:hidden;width:'+Math.floor(pageW)+'px';
+        var maxW=0,maxH=0;
+        Array.prototype.forEach.call(mat.querySelectorAll('.print-page'),function(pg2){
+          maxH=Math.max(maxH,pg2.offsetHeight);
+        });
+        Array.prototype.forEach.call(mat.querySelectorAll('.print-zoom'),function(z2){
+          maxW=Math.max(maxW,z2.getBoundingClientRect().width);
+        });
+        mat.style.cssText=antesM;
+        var f=Math.min(pageW/Math.max(1,maxW),(pageH-8)/Math.max(1,maxH));
+        if(f>=1)break;                      // coube: nada a corrigir
+        if(escFixa){
+          // Escala fixa é escolha de quem imprime: encolher por conta própria seria desobedecer.
+          // Então libera a quebra — folha a mais é recuperável, semana cortada não.
+          // só a quebra INTERNA é liberada: .print-page.brk continua forçando folha nova entre
+          // as fatias, senão duas fatias cairiam na mesma página.
+          estP.textContent+='@media print{body.printing-mat .print-page{break-inside:auto!important;'+
+            'page-break-inside:auto!important}}';
+          break;
+        }
+        scale=Math.max(0.06,+(scale*f*0.985).toFixed(3));
+        Array.prototype.forEach.call(mat.querySelectorAll('.print-zoom'),function(z){ z.style.zoom=scale; });
+      }
     }
   }
 
