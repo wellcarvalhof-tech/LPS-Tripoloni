@@ -4135,7 +4135,7 @@
     }).join('');
     return sectionCard('realizado','Realizado (previsto × realizado)',
       'Cada semana tem <b>P</b> (previsto), <b>Próp</b> e <b>Terc</b> (realizado com recurso próprio e de terceiro — os dois editáveis) e <b>Total</b> (soma, comparada com o previsto: acima fica vermelho, abaixo amarelo, igual verde). O previsto é geral — no planejamento não se sabe o que será locado.'+(realDirty?' <b style="color:var(--warn)">Há apontamentos não salvos.</b>':''),
-      filtBtns+'<button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn" id="histDpCeqImp" title="Planilha de acompanhamento com as abas Dados EFETIVO DP e DADOS Realizado CEQ">↥ Importar DP + CEQ</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
+      filtBtns+'<button class="btn" id="histExp" title="Planilha com o quadro previsto × realizado, o fechamento por semana e por categoria, o previsto × realizado por serviço e os gráficos">↧ Exportar histograma</button><button class="btn" id="histRealImp">↥ Importar realizado</button><button class="btn" id="histDpCeqImp" title="Planilha de acompanhamento com as abas Dados EFETIVO DP e DADOS Realizado CEQ">↥ Importar DP + CEQ</button><button class="btn primary" id="saveRealizado"'+(realDirty?'':' disabled')+'>💾 Salvar apontamentos</button>',
       list.length?'<div class="tbl-wrap"><table class="edtbl" style="font-size:11px"><thead><tr>'+th+'</tr><tr>'+th2+'</tr></thead><tbody>'+rows+'</tbody></table></div>':'<div class="note">Nenhum recurso com previsto ou realizado apontado ainda.</div>'
     );
   }
@@ -8055,6 +8055,8 @@
       });
       var saveReal=document.getElementById('saveRealizado');
       if(saveReal)saveReal.addEventListener('click',saveRealizadoAll);
+      var histExp=document.getElementById('histExp');
+      if(histExp)histExp.addEventListener('click',function(){ comCarga(exportHistogramaExcel); });
       var realImp=document.getElementById('histRealImp');
       if(realImp)realImp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importRealizadoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       var dpImp=document.getElementById('histDpCeqImp');
@@ -10582,6 +10584,301 @@
       c.border={bottom:{style:'thin',color:{argb:'FF9AA7B0'}}};
     });
     return r;
+  }
+  /* ================= Exportar histograma em Excel =================
+   * O que vai: o quadro previsto × realizado como está na tela (P / Próprio / Terceiro / Total,
+   * por categoria), as mesmas séries em grade limpa pra dinâmica, o fechamento por categoria e
+   * por classificação, o previsto × realizado por SERVIÇO e os gráficos.
+   *
+   * Sobre o "por serviço": o apontamento de recurso é por recurso e semana, sem serviço. O
+   * previsto por serviço é exato (vem da equipe típica × equipes ativas na semana); o realizado
+   * é RATEADO entre os serviços que previam aquele recurso naquela semana, proporcional ao
+   * previsto de cada um — a mesma regra do relatório do período da tela. Recurso apontado numa
+   * semana em que nenhum serviço o previa não some: vai pra linha "Sem serviço previsto".
+   *
+   * A planilha escreve dados, não gráficos nativos — os gráficos entram como imagem dos mesmos
+   * SVGs da tela, e a aba de dados ao lado tem o número que gerou cada um. */
+  var HIST_XLS_ACIMA='FFFBE3E3', HIST_XLS_ABAIXO='FFFDF3DC', HIST_XLS_IGUAL='FFE6F5EA';
+  function histXlsCor(real,prev){
+    if(real>prev)return HIST_XLS_ACIMA;
+    if(real<prev)return HIST_XLS_ABAIXO;
+    return HIST_XLS_IGUAL;
+  }
+  /** Cabeçalho de dois andares: a semana em cima, P/Próp/Terc/Total embaixo. */
+  function histXlsCabecalhoSemanas(ws,tw,primeira,largPrim){
+    ws.columns=[{width:largPrim||30}].concat((function(){
+      var a=[]; for(var i=0;i<tw*4;i++)a.push({width:8}); return a;
+    })());
+    var r1=ws.addRow([primeira].concat((function(){
+      var a=[];
+      for(var w=1;w<=tw;w++){ a.push(rotSem(calWeekDate(w)),'','',''); }
+      return a;
+    })()));
+    var r2=ws.addRow([''].concat((function(){
+      var a=[];
+      for(var w=1;w<=tw;w++)a.push('P','Próp','Terc','Total');
+      return a;
+    })()));
+    [r1,r2].forEach(function(r){
+      r.font={bold:true,size:9,color:{argb:'FFFFFFFF'}};
+      r.alignment={horizontal:'center',vertical:'middle'};
+      r.eachCell(function(c){ c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F3A4D'}}; });
+    });
+    r1.height=18; r2.height=15;
+    r1.getCell(1).alignment={horizontal:'left',vertical:'middle'};
+    for(var w=0;w<tw;w++)ws.mergeCells(1,2+w*4,1,5+w*4);
+    ws.mergeCells(1,1,2,1);
+    ws.views=[{state:'frozen',xSplit:1,ySplit:2}];
+    return 2;
+  }
+  /** Dados do histograma prontos pra planilha e pros gráficos. */
+  function histXlsDados(){
+    var hist=computeHistogram(), tw=hist.tw||0;
+    var datas=[]; for(var w=1;w<=tw;w++)datas.push(calWeekDate(w).toISOString().slice(0,10));
+    // só recursos que têm previsto ou realizado — o catálogo inteiro encheria a planilha de zeros
+    var recs=RECURSOS.filter(function(r){
+      var a=hist.byResource[r.id]||[];
+      for(var i=0;i<tw;i++){ if((a[i]||0)>0)return true; if(realRec(r.id,datas[i],'todos')>0)return true; }
+      return false;
+    });
+    var linhas=recs.map(function(r){
+      var a=hist.byResource[r.id]||[], P=[],PR=[],TE=[],TO=[];
+      for(var i=0;i<tw;i++){
+        P.push(a[i]||0);
+        PR.push(realRec(r.id,datas[i],'proprio'));
+        TE.push(realRec(r.id,datas[i],'terceiro'));
+        TO.push(realRec(r.id,datas[i],'todos'));
+      }
+      return {r:r,cat:r.cat||'Sem categoria',P:P,PR:PR,TE:TE,TO:TO,
+        somaP:P.reduce(function(x,y){return x+y;},0),somaR:TO.reduce(function(x,y){return x+y;},0),
+        pico:P.reduce(function(m,v){return Math.max(m,v);},0)};
+    });
+    function soma(filtro){
+      var P=[],PR=[],TE=[],TO=[];
+      for(var i=0;i<tw;i++){P.push(0);PR.push(0);TE.push(0);TO.push(0);}
+      linhas.filter(filtro).forEach(function(L){
+        for(var i=0;i<tw;i++){ P[i]+=L.P[i]; PR[i]+=L.PR[i]; TE[i]+=L.TE[i]; TO[i]+=L.TO[i]; }
+      });
+      return {P:P,PR:PR,TE:TE,TO:TO};
+    }
+    var cats=[], porCat={};
+    linhas.forEach(function(L){ if(!porCat[L.cat]){porCat[L.cat]=[];cats.push(L.cat);} porCat[L.cat].push(L); });
+    return {hist:hist,tw:tw,datas:datas,linhas:linhas,cats:cats,porCat:porCat,soma:soma,
+      geral:soma(function(){return true;}),
+      mo:soma(function(L){return L.r.tipo==='funcao';}),
+      eq:soma(function(L){return L.r.tipo==='equipamento';})};
+  }
+  async function exportHistogramaExcel(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
+    var D=histXlsDados();
+    if(!D.tw||!D.linhas.length){ alert('Nada pra exportar: cadastre recursos nas equipes e gere o cronograma.'); return; }
+    var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var tw=D.tw, wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+    var num=function(r,de,ate){ for(var i=de;i<=ate;i++)r.getCell(i).numFmt='#,##0'; };
+    // A ordem das abas é a de criação: o resumo nasce aqui pra abrir primeiro, e só é preenchido
+    // no fim, quando os totais já existem.
+    var wsR=wb.addWorksheet('Resumo');
+
+    /* ---- Quadro previsto × realizado (o que está na tela) ---- */
+    var ws=wb.addWorksheet('Previsto x realizado');
+    histXlsCabecalhoSemanas(ws,tw,'Recurso',32);
+    function linhaQuadro(rotulo,S,negrito,fundo){
+      var vals=[rotulo];
+      for(var i=0;i<tw;i++)vals.push(S.P[i]||null,S.PR[i]||null,S.TE[i]||null,S.TO[i]||null);
+      var r=ws.addRow(vals);
+      r.font={size:9,bold:!!negrito};
+      num(r,2,1+tw*4);
+      for(var w=0;w<tw;w++){
+        r.getCell(5+w*4).fill={type:'pattern',pattern:'solid',fgColor:{argb:histXlsCor(S.TO[w]||0,S.P[w]||0)}};
+        r.getCell(5+w*4).font={size:9,bold:true};
+      }
+      if(fundo)for(var c=1;c<=1+tw*4;c++)if(!r.getCell(c).fill||c===1||((c-1)%4)!==0)
+        r.getCell(c).fill={type:'pattern',pattern:'solid',fgColor:{argb:fundo}};
+      return r;
+    }
+    D.cats.forEach(function(cat){
+      var S=D.soma(function(L){ return L.cat===cat; });
+      linhaQuadro(cat,S,true,'FFEFF3F7');
+      D.porCat[cat].forEach(function(L){ linhaQuadro('   '+L.r.n,L,false,null); });
+    });
+    linhaQuadro('TOTAL GERAL',D.geral,true,'FFDDE5EC');
+
+    /* ---- Grades limpas, pra dinâmica ---- */
+    function gradeSimples(titulo,pega,unidadeCol){
+      var w2=wb.addWorksheet(titulo,{views:[{state:'frozen',xSplit:3,ySplit:1}]});
+      var cab=['Recurso','Tipo','Categoria'];
+      for(var w=1;w<=tw;w++)cab.push(rotSem(calWeekDate(w)));
+      cab.push('Total');
+      relCabecalho(w2,cab,[30,13,18].concat((function(){var a=[];for(var i=0;i<tw;i++)a.push(9);a.push(11);return a;})()));
+      D.linhas.forEach(function(L){
+        var arr=pega(L), tot=0, lin=[L.r.n,(L.r.tipo==='equipamento'?'Equipamento':'Mão de obra'),L.cat];
+        for(var i=0;i<tw;i++){ lin.push(arr[i]||0); tot+=arr[i]||0; }
+        lin.push(tot);
+        var r=w2.addRow(lin); r.font={size:10}; num(r,4,4+tw);
+      });
+      return w2;
+    }
+    gradeSimples('Previsto',function(L){ return L.P; });
+    gradeSimples('Realizado',function(L){ return L.TO; });
+    gradeSimples('Realizado · terceiro',function(L){ return L.TE; });
+
+    /* ---- Fechamento por semana ---- */
+    var wsS=wb.addWorksheet('Semana a semana',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsS,['Semana','Segunda-feira','Previsto','Realizado próprio','Realizado terceiro','Realizado total',
+      'Desvio','IAH (%)','Mão de obra prev.','Mão de obra real.','Equip. prev.','Equip. real.'],
+      [11,14,12,17,17,15,11,11,16,16,13,13]);
+    for(var w=0;w<tw;w++){
+      var P=D.geral.P[w], R=D.geral.TO[w];
+      var r=wsS.addRow([rotSem(calWeekDate(w+1)),fmtDate(calWeekDate(w+1)),P,D.geral.PR[w],D.geral.TE[w],R,
+        R-P,P>0?+(100*R/P).toFixed(1):null,D.mo.P[w],D.mo.TO[w],D.eq.P[w],D.eq.TO[w]]);
+      r.font={size:10}; num(r,3,7); num(r,9,12);
+      if(P>0)r.getCell(8).numFmt='0.0';
+      r.getCell(6).fill={type:'pattern',pattern:'solid',fgColor:{argb:histXlsCor(R,P)}};
+    }
+
+    /* ---- Por categoria ---- */
+    var wsC=wb.addWorksheet('Por categoria',{views:[{state:'frozen',xSplit:1,ySplit:2}]});
+    histXlsCabecalhoSemanas(wsC,tw,'Categoria',28);
+    D.cats.forEach(function(cat){
+      var S=D.soma(function(L){ return L.cat===cat; });
+      var vals=[cat];
+      for(var i=0;i<tw;i++)vals.push(S.P[i]||null,S.PR[i]||null,S.TE[i]||null,S.TO[i]||null);
+      var r=wsC.addRow(vals); r.font={size:9}; num(r,2,1+tw*4);
+      for(var w3=0;w3<tw;w3++)r.getCell(5+w3*4).fill={type:'pattern',pattern:'solid',fgColor:{argb:histXlsCor(S.TO[w3]||0,S.P[w3]||0)}};
+    });
+
+    /* ---- Previsto × realizado por serviço ---- */
+    var spr=computeServicePR(computeHistogram(),'todos','todas','todos');
+    var wsV=wb.addWorksheet('Serviços · prev x real',{views:[{state:'frozen',xSplit:2,ySplit:1}]});
+    var cabV=['Serviço','Medida'];
+    for(var wv=1;wv<=tw;wv++)cabV.push(rotSem(calWeekDate(wv)));
+    cabV.push('Total');
+    relCabecalho(wsV,cabV,[34,12].concat((function(){var a=[];for(var i=0;i<tw;i++)a.push(9);a.push(11);return a;})()));
+    function parServico(rotulo,chave,cor){
+      var pa=spr.previsto[chave]||[], ra=spr.realizado[chave]||[];
+      var temP=0,temR=0;
+      for(var i=0;i<tw;i++){ temP+=pa[i]||0; temR+=ra[i]||0; }
+      if(temP<=0&&temR<=0)return;
+      [['Previsto',pa,temP],['Realizado',ra,temR]].forEach(function(par){
+        var lin=[rotulo,par[0]];
+        for(var i=0;i<tw;i++)lin.push(Math.round((par[1][i]||0)*100)/100);
+        lin.push(Math.round(par[2]*100)/100);
+        var r=wsV.addRow(lin); r.font={size:10,bold:par[0]==='Realizado'};
+        for(var c=3;c<=3+tw;c++)r.getCell(c).numFmt='#,##0.0';
+        if(cor)r.getCell(1).font={size:10,color:{argb:cor}};
+      });
+    }
+    SERV.forEach(function(s,si){ parServico(s.n,'s'+si,null); });
+    parServico('Apoio Administrativo (indireto)','apoio',null);
+    parServico('Sem serviço previsto (mobilizado fora do previsto)','semprev','FFB03030');
+    if(wsV.rowCount===1)wsV.addRow(['(nenhum serviço com recurso previsto ou apontado)']);
+    wsV.addRow([]);
+    var notaV=wsV.addRow(['O previsto por serviço vem da equipe típica × equipes ativas na semana. O realizado é apontado por recurso e semana, sem serviço: aqui ele é rateado entre os serviços que previam aquele recurso na semana, proporcional ao previsto de cada um. O que foi apontado sem nenhum serviço prevendo aparece em "Sem serviço previsto".']);
+    notaV.font={size:9,italic:true};
+
+    /* ---- Equipe típica de cada serviço ---- */
+    var wsE=wb.addWorksheet('Serviços · equipe típica',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsE,['Serviço','Equipes','Recurso','Tipo','Categoria','Qtd por equipe','Total mobilizado'],
+      [34,10,30,14,18,16,17]);
+    SERV.forEach(function(s){
+      ((s.cfg&&s.cfg.crew)||[]).forEach(function(item){
+        var rc=RECURSOS.filter(function(x){ return x.id===item.resourceId; })[0];
+        if(!rc)return;
+        var q=+item.qtyPerTeam||0, eq=+s.eq||0;
+        var r=wsE.addRow([s.n,eq,rc.n,(rc.tipo==='equipamento'?'Equipamento':'Mão de obra'),rc.cat||'',q,q*eq]);
+        r.font={size:10}; num(r,6,7);
+      });
+    });
+    if(wsE.rowCount===1)wsE.addRow(['(nenhuma equipe típica montada)']);
+
+    /* ---- Gráficos ---- */
+    var GW=940, GH=270;
+    var wsG=wb.addWorksheet('Gráficos'); wsG.getColumn(1).width=130;
+    var linha=1;
+    function serieBarras(el,P,R,corP,corR,w0,n){
+      barsSVG(el,[{values:P.slice(0,n),color:corP,label:'Previsto'},
+                  {values:R.slice(0,n),color:corR,label:'Realizado'}],
+        {W:GW,H:GH,dateFn:calWeekDate,week0:w0||1});
+    }
+    var corPrev=cssHex('--warn'), corReal=cssHex('--accent');
+    var blocos=[['Histograma geral — previsto × realizado por semana',D.geral],
+                ['Mão de obra — previsto × realizado',D.mo],
+                ['Equipamentos — previsto × realizado',D.eq]];
+    for(var bi=0;bi<blocos.length;bi++){
+      var S=blocos[bi][1], tem=false;
+      for(var i2=0;i2<tw;i2++)if(S.P[i2]>0||S.TO[i2]>0){tem=true;break;}
+      if(!tem)continue;
+      var png=await (function(S2){ return relGraficoPng(function(el){ serieBarras(el,S2.P,S2.TO,corPrev,corReal,1,tw); },GW,GH); })(S);
+      linha=relColaGrafico(wb,wsG,png,linha,blocos[bi][0],GW,GH);
+    }
+    // próprio × terceiro
+    var temTerc=false; for(var i3=0;i3<tw;i3++)if(D.geral.TE[i3]>0){temTerc=true;break;}
+    if(temTerc){
+      var pngT=await relGraficoPng(function(el){
+        barsSVG(el,[{values:D.geral.PR,color:cssHex('--c1'),label:'Próprio'},
+                    {values:D.geral.TE,color:cssHex('--c4'),label:'Terceiro'}],
+          {W:GW,H:GH,dateFn:calWeekDate});
+      },GW,GH);
+      linha=relColaGrafico(wb,wsG,pngT,linha,'Realizado — recurso próprio × de terceiro',GW,GH);
+    }
+    // os recursos de maior pico
+    var topo=D.linhas.slice().sort(function(a,b){ return b.pico-a.pico; }).slice(0,8);
+    for(var ti=0;ti<topo.length;ti++){
+      var L=topo[ti];
+      if(!L.pico&&!L.somaR)continue;
+      var pngR=await (function(L2){ return relGraficoPng(function(el){ serieBarras(el,L2.P,L2.TO,corPrev,corReal,1,tw); },GW,240); })(L);
+      linha=relColaGrafico(wb,wsG,pngR,linha,L.r.n+' ('+(L.r.tipo==='equipamento'?'equipamento':'mão de obra')+') — previsto × realizado',GW,240);
+    }
+    // por serviço
+    var wsGS=wb.addWorksheet('Serviços · gráficos'); wsGS.getColumn(1).width=130;
+    var linhaS=1;
+    for(var si2=0;si2<SERV.length;si2++){
+      var pa=spr.previsto['s'+si2]||[], ra=spr.realizado['s'+si2]||[];
+      var temS=false; for(var i4=0;i4<tw;i4++)if((pa[i4]||0)>0||(ra[i4]||0)>0){temS=true;break;}
+      if(!temS)continue;
+      var pngS=await (function(p2,r2,cor){ return relGraficoPng(function(el){
+        barsSVG(el,[{values:p2,color:cor,label:'Previsto'},{values:r2,color:corReal,label:'Realizado (rateado)'}],
+          {W:GW,H:240,dateFn:calWeekDate});
+      },GW,240); })(pa,ra,svcColor(SERV[si2]));
+      linhaS=relColaGrafico(wb,wsGS,pngS,linhaS,SERV[si2].n+' — recursos previstos × realizados por semana',GW,240);
+    }
+    if(linhaS===1)wsGS.getCell('A1').value='(nenhum serviço com recurso previsto ou apontado)';
+
+    /* ---- Resumo ---- */
+    wsR.columns=[{width:42},{width:26}];
+    var somaP=0,somaR=0,picoP=0,picoR=0,semanasApont=0;
+    for(var w4=0;w4<tw;w4++){
+      somaP+=D.geral.P[w4]; somaR+=D.geral.TO[w4];
+      picoP=Math.max(picoP,D.geral.P[w4]); picoR=Math.max(picoR,D.geral.TO[w4]);
+      if(D.geral.TO[w4]>0)semanasApont++;
+    }
+    [['Obra',nome],['Gerado em',new Date().toLocaleString('pt-BR')],
+     ['Semanas do cronograma',tw],['Semanas com apontamento',semanasApont],
+     ['Recursos com previsto ou realizado',D.linhas.length],
+     ['Mão de obra',D.linhas.filter(function(L){return L.r.tipo==='funcao';}).length],
+     ['Equipamentos',D.linhas.filter(function(L){return L.r.tipo==='equipamento';}).length],
+     ['Pico previsto (semana)',picoP],['Pico realizado (semana)',picoR],
+     ['Recurso×semana previsto',Math.round(somaP)],['Recurso×semana realizado',Math.round(somaR)],
+     ['IAH acumulado (%)',somaP>0?+(100*somaR/somaP).toFixed(1):'—']
+    ].forEach(function(l){
+      var r=wsR.addRow(l);
+      r.getCell(1).font={bold:true,size:10};
+      r.getCell(2).font={size:10};
+      if(typeof l[1]==='number')r.getCell(2).numFmt='#,##0.#';
+    });
+    wsR.addRow([]);
+    var nota=wsR.addRow(['Exporta todos os recursos com previsto ou realizado, independente do filtro aberto na tela. O previsto sai do cronograma × equipe típica; o realizado, dos apontamentos semanais por recurso.']);
+    nota.font={size:9,italic:true};
+
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='histograma_'+(nome.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('Histograma exportado.');
   }
   async function exportRelatorioExcel(){
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
