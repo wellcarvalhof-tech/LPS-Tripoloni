@@ -1130,7 +1130,8 @@
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
     ORC=(obra.orcamento&&typeof obra.orcamento==='object'&&obra.orcamento.itens)?obra.orcamento:null;
     ORC_DIRTY=false; ORC_OPEN={}; AVA_CORTE=null; AVA_TAB='painel';
-    ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
+    ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; CENARIO_VISTA=null; TC_VISTA=null;
+    SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; ESTACA_VOL={}; EST_OPEN={};
     REC_DIRTY={}; REALIZADO_DIRTY={}; APOIO_DIRTY={}; APOIO_SELECTED={};
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
@@ -3138,7 +3139,7 @@
     // O cronograma ao vivo não muda enquanto se desenha aqui, e buildSchedule() a cada pincelada
     // deixaria o clique lento numa obra grande. Calcula uma vez por sessão da oficina.
     if(OFI.fimAuto==null){
-      var fa=0; buildSchedule().forEach(function(g){ fa=Math.max(fa,g.start+g.dur-1); });
+      var fa=0; buildScheduleVivo().forEach(function(g){ fa=Math.max(fa,g.start+g.dur-1); });
       OFI.fimAuto=fa;
     }
     var fimAuto=OFI.fimAuto;
@@ -4402,7 +4403,9 @@
       var st=scenarioStats(c.snap);
       var isActive=ACTIVE_CENARIO&&ACTIVE_CENARIO.id===c.id;
       var estado=c.tipo==='baseline'?('<span class="pill '+(c.ativo?'good':'mut')+'">'+c.revisao+(c.ativo?' · ativa':'')+'</span>'):'<span class="pill '+(isActive?'warn':'mut')+'">'+(isActive?'✏ editando agora':'rascunho')+'</span>';
-      var acoes='<button class="btn" data-cnload="'+c.id+'">Carregar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
+      var vendo=!!(CENARIO_VISTA&&CENARIO_VISTA.id===c.id);
+      var acoes='<button class="btn'+(vendo?' primary':'')+'" data-cnver="'+c.id+'" title="Mostra este cenário na matriz e nos relatórios sem alterar nada da obra">'+(vendo?'● Vendo':'👁 Ver')+'</button>'+
+        '<button class="btn" data-cnload="'+c.id+'" title="Abre o cenário no editor — o que você salvar vai pra ele, não pra obra">✎ Editar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
         '<button class="btn" style="color:var(--crit)" data-cnapply="'+c.id+'" title="Substitui o cronograma ao vivo da obra por este cenário">⬆ Aplicar ao cronograma ao vivo</button>'+
         (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button><button class="iconbtn" data-cndel="'+c.id+'">✕</button>':'');
       return '<tr'+(isActive?' style="outline:2px solid var(--accent);outline-offset:-2px"':'')+'><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
@@ -4918,7 +4921,7 @@
     var targetVal=cfg.targetEndWeek>0?rotSem(mondayOf(cfg.targetEndWeek)):'';
     var targetInfo='';
     if(cfg.targetEndWeek>0){
-      var svcSegs=buildSchedule().filter(function(sg){return sg.si===si;});
+      var svcSegs=buildScheduleVivo().filter(function(sg){return sg.si===si;});
       var maxEnd=0; svcSegs.forEach(function(sg){maxEnd=Math.max(maxEnd,sg.start+sg.dur-1);});
       if(maxEnd>0){
         var over=maxEnd>cfg.targetEndWeek;
@@ -7572,7 +7575,18 @@
   }
 
   /* ---------- charts after render ---------- */
+  var VIEWS_COM_CENARIO={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-hist':1,'cr-cenarios':1,
+    'ac-curvas':1,'ac-ava':1,'cr-massas':1,'cr-prod':1,'lp-medio':1};
   function afterRender(view){
+    if(CENARIO_VISTA&&VIEWS_COM_CENARIO[view]){
+      var c=document.getElementById('content');
+      if(c&&!document.getElementById('cnSair')){
+        var d=document.createElement('div');
+        d.innerHTML=cenarioBannerHTML();
+        if(d.firstChild)c.insertBefore(d.firstChild,c.firstChild);
+        cenarioBannerWire();
+      }
+    }
     if(view==='torre'){setupTorre();}
     if(view==='cad-orc'){ orcWire(); }
     if(view==='ac-ava'){ avaWire(); }
@@ -7662,6 +7676,16 @@
       if(liveBase)liveBase.addEventListener('click',function(){ gerarLinhaDeBase(captureLiveSnapshot(),null); });
       var backLive=document.getElementById('cnBackLive');
       if(backLive)backLive.addEventListener('click',exitCenarioEdit);
+      document.querySelectorAll('[data-cnver]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var id=b.getAttribute('data-cnver');
+          if(CENARIO_VISTA&&CENARIO_VISTA.id===id){ cenarioSair(); return; }
+          var c=CENARIOS.filter(function(x){return x.id===id;})[0]; if(!c)return;
+          CENARIO_VISTA={id:c.id,nome:c.nome,snap:c.snap||null};
+          toast('Vendo o cenário "'+c.nome+'" — a obra não foi alterada.');
+          go('cr-matriz');
+        });
+      });
       document.querySelectorAll('[data-cnload]').forEach(function(b){
         b.addEventListener('click',function(){
           var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnload');})[0]; if(!c)return;
@@ -9030,7 +9054,40 @@
     var wq=[]; for(var w=start;w<=end;w++)wq.push(perWeek[w]||0);
     return {start:start,end:end,duration:end-start+1,endPos:endPos,wq:wq};
   }
+  /* ================= Cronograma de REFERÊNCIA =================
+   * Uma vez congelada, a linha de base é o previsto do app inteiro: matriz, Curva S, histograma,
+   * relatórios e AVA leem ela, não o rascunho em edição. Mexer na matriz depois de destravar não
+   * reescreve a referência em silêncio — pra mudar o previsto, gera-se uma revisão nova.
+   *
+   * Precedência: cenário em visualização > linha de base ativa > cronograma ao vivo.
+   *
+   * O desenho é por DENTRO: buildSchedule() passou a ser a leitura de referência e
+   * buildScheduleVivo() é o motor cru. Assim o certo é o padrão em todas as dezenas de pontos
+   * que leem o cronograma, e só o editor — que precisa ver o que está sendo editado — chama a
+   * versão ao vivo de propósito. O contrário (marcar os leitores um a um) deixaria qualquer
+   * ponto esquecido mostrando o rascunho como se fosse o compromisso. */
+  var CENARIO_VISTA=null;   // {id,nome,snap} — cenário sendo visualizado; não altera a obra
+  var REF_DENTRO=0;         // >0: já estamos dentro de um withSnapshot, não empilhar outro
+  function snapRef(){
+    if(CENARIO_VISTA)return CENARIO_VISTA.snap||null;
+    var b=activeBaseline();
+    return (b&&b.snap)?b.snap:null;
+  }
+  function refAtiva(){ return !REF_DENTRO&&!!snapRef(); }
+  /** O que está valendo como referência agora, pra escrever na tela. */
+  function refRotulo(){
+    if(CENARIO_VISTA)return 'cenário "'+CENARIO_VISTA.nome+'"';
+    var b=activeBaseline();
+    return b?('linha de base '+(b.revisao||'')).trim():'cronograma ao vivo';
+  }
   function buildSchedule(){
+    return refAtiva()?withSnapshot(snapRef(),buildScheduleVivo):buildScheduleVivo();
+  }
+  function computeHistogram(modo){
+    return refAtiva()?withSnapshot(snapRef(),function(){ return computeHistogramVivo(modo); })
+                     :computeHistogramVivo(modo);
+  }
+  function buildScheduleVivo(){
     var segs=[], startByKey={}, endByKey={};
     // No modo manual o cronograma é SÓ o que foi desenhado: lote sem colocação não entra na
     // fila automática, senão o app voltaria a preencher sozinho o que o usuário deixou de fora.
@@ -9479,6 +9536,7 @@
    *  pro histograma (computeHistogram), que leem SERV/OVR/feriados por baixo. */
   function withSnapshot(snap,fn){
     if(!snap)return fn();
+    REF_DENTRO++;
     var savedOVR=OVR, savedSERV=SERV, savedFeriados=window._OBRA?window._OBRA.feriados:null;
     OVR=snap.ovr||{};
     if(snap.servicos&&snap.servicos.length){
@@ -9492,10 +9550,12 @@
     finally{
       OVR=savedOVR; SERV=savedSERV;
       if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:savedFeriados});
+      REF_DENTRO--;
     }
   }
-  function scheduleWithSnapshot(snap){ return withSnapshot(snap,buildSchedule); }
-  function histogramWithSnapshot(snap){ return withSnapshot(snap,computeHistogram); }
+  // Dentro de withSnapshot o estado já é o do snapshot: usar o motor cru, senão empilharia outro.
+  function scheduleWithSnapshot(snap){ return withSnapshot(snap,buildScheduleVivo); }
+  function histogramWithSnapshot(snap){ return withSnapshot(snap,function(){ return computeHistogramVivo(); }); }
   /* Com linha de base congelada, a matriz fica trancada: o plano virou compromisso e mexer nele
    * sem querer apaga a referência de quem está atrasado. A liberação é explícita e fica gravada
    * (em ajustes_manuais, junto do resto), pra equipe toda ver que o cronograma está aberto. */
@@ -9505,16 +9565,62 @@
     if(v)OVR.__editavel=true; else delete OVR.__editavel;
     adjDirty();
   }
-  /* 'plano' = o cronograma como está planejado; 'projecao' = o mesmo cronograma reprojetado no
-   * ritmo que os apontamentos mostram. A linha de base não entra nessa conta: ela é o retrato
-   * congelado, e é justamente contra ela que a projeção se compara. */
-  var TC_VISTA='plano';
+  /* 'base' = a linha de base congelada, que é o previsto do app inteiro; 'plano' = o rascunho em
+   * edição, que só existe quando alguém destravou a matriz; 'projecao' = a referência reprojetada
+   * no ritmo que os apontamentos mostram. Com linha de base ativa, 'base' é o padrão. */
+  var TC_VISTA=null;
+  function tcVistaAtual(){
+    var temBase=!!activeBaseline();
+    if(TC_VISTA==='projecao')return 'projecao';
+    if(!temBase)return 'plano';                       // sem linha de base só existe o plano
+    return (TC_VISTA==='plano')?'plano':'base';
+  }
   function tcVistaBotoesHTML(){
-    return [['plano','Planejado'],['projecao','Projeção pelo ritmo real']].map(function(o){
-      return '<button class="subtab'+(TC_VISTA===o[0]?' active':'')+'" data-tcvista="'+o[0]+'"'+
-        (o[0]==='projecao'?' title="Refaz as datas do saldo com a produtividade que os apontamentos mostram — quem produz mais antecipa, quem produz menos estende"':'')+
-        '>'+o[1]+'</button>';
+    var atual=tcVistaAtual(), temBase=!!activeBaseline();
+    var opts=temBase
+      ? [['base','Linha de base'],['plano','Planejado (em edição)'],['projecao','Projeção pelo ritmo real']]
+      : [['plano','Planejado'],['projecao','Projeção pelo ritmo real']];
+    var dicas={base:'O retrato congelado da linha de base — é ele que alimenta a Curva S, o histograma e os relatórios',
+      plano:'O cronograma como está em edição agora. Só vira previsto quando uma nova revisão da linha de base for gerada',
+      projecao:'Refaz as datas do saldo com a produtividade que os apontamentos mostram — quem produz mais antecipa, quem produz menos estende'};
+    return opts.map(function(o){
+      return '<button class="subtab'+(atual===o[0]?' active':'')+'" data-tcvista="'+o[0]+'" title="'+dicas[o[0]]+'">'+o[1]+'</button>';
     }).join('');
+  }
+  /** Quantas semanas o rascunho em edição está longe da linha de base. 0 = idênticos. */
+  function tcDesvioDaBase(){
+    var b=activeBaseline(); if(!b||!b.snap)return null;
+    function fim(segs){ var f=0; (segs||[]).forEach(function(g){ f=Math.max(f,g.start+g.dur-1); }); return f; }
+    try{
+      var fb=fim(scheduleWithSnapshot(b.snap)), fv=fim(buildScheduleVivo());
+      return {base:fb,vivo:fv,dif:fv-fb};
+    }catch(e){ return null; }
+  }
+  /** Sai da visualização de cenário e volta pra referência da obra. */
+  function cenarioSair(){
+    if(!CENARIO_VISTA)return;
+    var nome=CENARIO_VISTA.nome;
+    CENARIO_VISTA=null;
+    toast('Saiu do cenário "'+nome+'" — de volta à '+refRotulo()+'.');
+    go(current||'cr-matriz');
+  }
+  /** Faixa fixa avisando que o que está na tela é um cenário, e não a obra. Entra em todas as
+   *  telas de leitura, porque o cenário muda a matriz, a Curva S, o histograma e os relatórios
+   *  ao mesmo tempo — ver o aviso só na tela de cenários não ajudaria ninguém. */
+  function cenarioBannerHTML(){
+    if(!CENARIO_VISTA)return '';
+    return '<div class="banner" style="margin-bottom:12px;border-color:var(--accent)">'+
+      '<b>Vendo o cenário "'+escAttr(CENARIO_VISTA.nome)+'".</b> Matriz, curvas, histograma e relatórios estão mostrando ele. '+
+      'A obra não foi alterada. '+
+      '<button class="btn" id="cnSair" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Sair do cenário</button>'+
+      '<button class="btn" id="cnEditar" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Editar este cenário</button>'+
+      '</div>';
+  }
+  function cenarioBannerWire(){
+    var a=document.getElementById('cnSair');
+    if(a)a.addEventListener('click',cenarioSair);
+    var b=document.getElementById('cnEditar');
+    if(b)b.addEventListener('click',function(){ CENARIO_VISTA=null; go('cr-cenarios'); toast('Use "✎ Editar" na linha do cenário pra abrir no editor.'); });
   }
   function activeBaseline(){
     return CENARIOS.filter(function(c){return c.tipo==='baseline'&&c.ativo;})[0]||null;
@@ -9607,7 +9713,7 @@
    * esses itens não têm equipes/cronograma próprio (indireto). byResource é a soma dos dois —
    * byResourceDireto/byResourceIndireto ficam disponíveis à parte pra quem quiser decompor
    * (gráfico, filtro por origem). */
-  function computeHistogram(modo){
+  function computeHistogramVivo(modo){
     var atbw=activeTeamsByWeek(modo), tw=atbw.tw, teamsByService=atbw.teamsByService, isHoliday=atbw.isHoliday||[];
     var byResource={}, byResourceDireto={}, byResourceIndireto={};
     RECURSOS.forEach(function(r){
@@ -15432,8 +15538,8 @@
         undoBotoesHTML()+'<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
-      '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false);
-    if(tab==='tc'&&TC_VISTA==='projecao'){
+      '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false,buildScheduleVivo());
+    if(tab==='tc'&&tcVistaAtual()==='projecao'){
       var proj=buildProjectedSchedule('historico');
       var fim=0; proj.forEach(function(g){ fim=Math.max(fim,g.start+g.dur-1); });
       var plan=buildSchedule(), fimP=0; plan.forEach(function(g){ fimP=Math.max(fimP,g.start+g.dur-1); });
@@ -15447,6 +15553,15 @@
             :'Nada apontado ainda — a projeção repete o planejado.')+
           ' Esta vista é só leitura: nem o plano nem a linha de base mudam.</div>'+
         matrixTableHTML(true,proj);
+    }
+    if(tab==='tc'&&tcVistaAtual()==='plano'&&activeBaseline()){
+      var dv=tcDesvioDaBase();
+      var aviso='<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
+        '<b>Planejado (em edição).</b> Este é o rascunho da matriz, não a referência da obra. '+
+        'A Curva S, o histograma, a AVA e os relatórios continuam lendo a <b>'+escAttr(refRotulo())+'</b>'+
+        (dv&&dv.dif?(' — hoje o rascunho termina '+Math.abs(dv.dif)+' semana(s) '+(dv.dif>0?'depois':'antes')+' dela'):' — hoje os dois terminam na mesma semana')+
+        '. Pra isto virar o previsto, gere uma nova revisão da linha de base.</div>';
+      return fsBarHTML()+aviso+avFalta+(tcManual()?ofiLousaHTML(false):(undoBarraHTML()+matrixTableHTML(true,buildScheduleVivo())));
     }
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+avFalta+ofiLousaHTML(false); }
     if(tab==='equipe') return fsBarHTML()+avFalta+undoBarraHTML()+editarPorEquipeHTML();
@@ -15537,7 +15652,7 @@
    *  ajuste" volta ao cálculo automático normal. */
   function openSegMenu(li,si){
     var s=SERV[si]; if(!s)return;
-    var seg=buildSchedule().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
+    var seg=buildScheduleVivo().filter(function(sg){return sg.li===li&&sg.si===si;})[0];
     if(!seg)return;
     var calStart=rotSem(mondayOf(seg.start));
     var teams=[]; for(var t=1;t<=s.eq;t++)teams.push(t);
@@ -15575,7 +15690,7 @@
       var kNew=ovrKey(newLi,si); if(!kNew)return null;
       var had=Object.prototype.hasOwnProperty.call(OVR,kNew), saved=OVR[kNew];
       OVR[kNew]={pinned:true,pins:[{team:newTeam,startWeek:projWeek}]};
-      var dryRun=buildSchedule();
+      var dryRun=buildScheduleVivo();
       if(had)OVR[kNew]=saved; else delete OVR[kNew];
       var result=dryRun.filter(function(sg){return sg.li===newLi&&sg.si===si&&sg.team===newTeam;})[0]||null;
       // O motor já divide sozinho a semana de transição entre lotes vizinhos da mesma equipe —
@@ -15705,7 +15820,7 @@
     // nos dois lugares, em vez de recalcular o cronograma inteiro a cada clique/soltar (ficava
     // lento/travava em obras com muitos lotes, já que o cálculo é recalculado do zero).
     var _wdmSegs=null;
-    function wdmSchedule(){ if(!_wdmSegs)_wdmSegs=buildSchedule(); return _wdmSegs; }
+    function wdmSchedule(){ if(!_wdmSegs)_wdmSegs=buildScheduleVivo(); return _wdmSegs; }
     // Pointer events em vez de drag-and-drop nativo (mesmo motivo do seqrow — DnD nativo pode
     // simplesmente não iniciar em certos contextos, sem erro, deixando a coluna "presa").
     document.querySelectorAll('th[data-lotcol]').forEach(function(th){
@@ -15864,7 +15979,7 @@
           // O teste tem que considerar que a equipe está SAINDO do lote de origem — senão ela
           // aparece "ocupada" lá e o app acusa conflito dela com ela mesma.
           if(moveOrig)cleanupOrigin(kOrig);
-          var dryRun=buildSchedule();
+          var dryRun=buildScheduleVivo();
           if(hadDst)OVR[kDst]=savedDst; else delete OVR[kDst];
           if(moveOrig){ if(hadOrig)OVR[kOrig]=savedOrig; else delete OVR[kOrig]; }
           var placed=dryRun.filter(function(sg){return sg.si===si&&sg.team===team&&sg.li===destLi;})[0];
@@ -16096,7 +16211,7 @@
       // cedo) — a lista de "sequência por equipe" abaixo (baseada em round-robin) não bate com
       // isso e confunde. Mostra em vez disso a ordem REAL que o cronograma calculou, só leitura.
       var svcSelHtml0='<label style="font-size:12.5px;display:flex;align-items:center;gap:6px">Serviço: <select id="assignSvc">'+svcOpts+'</select></label>';
-      var segsReal=buildSchedule().filter(function(sg){return sg.si===si;}).sort(function(a,b){return a.start-b.start;});
+      var segsReal=buildScheduleVivo().filter(function(sg){return sg.si===si;}).sort(function(a,b){return a.start-b.start;});
       var realRows=segsReal.map(function(sg){
         return '<div class="seqrow" style="cursor:default"><span class="seqname">'+LOTS[sg.li]+'</span>'+
           '<span class="note" style="margin-left:auto;white-space:nowrap">Equipe '+sg.team+' · '+rotSem(mondayOf(sg.start))+'–'+rotSem(mondayOf(sg.start+sg.dur-1))+'</span></div>';
