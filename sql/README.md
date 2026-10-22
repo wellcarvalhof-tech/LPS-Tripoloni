@@ -35,6 +35,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `29_estacas_geometria.sql` | Largura, volumes de projeto e espessura por estaca, "não se aplica" e código/EAP do serviço — base da importação do controle de produção | ⚠️ novo — rodar pra importar os informes de produção |
 | `30_estaca_volume_projeto.sql` | `volume_projeto` na estaca — o escopo da obra toda, separado da `quantidade` que é o saldo planejado | ⚠️ novo — rodar junto com a 29 |
 | `31_estaca_volume_realizado.sql` | `volume_realizado` por estaca — o avanço volumétrico, que não sai das datas (uma estaca pode estar 95% cortada) | ⚠️ novo — rodar junto com a 29 e a 30 |
+| `32_orcamento_ava.sql` | Coluna `obras.orcamento` — orçamento do projeto importado da planilha de composições e os lançamentos da AVA (valor agregado) | ⚠️ novo — rodar pra usar Cadastro → Orçamento e Acompanhamento → AVA |
 
 Pra saber **o que já rodou neste banco**, cole `CHECK_migracoes.sql` no SQL Editor do Supabase: ele lista cada migração com rodou/falta, sem alterar nada.
 

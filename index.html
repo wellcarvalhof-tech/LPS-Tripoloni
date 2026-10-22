@@ -1093,7 +1093,7 @@
    * montam o app pelo mesmo código. */
   async function sbFetchCadastro(obraId){
     var res=await Promise.all([
-      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco').eq('id',obraId).single(),
+      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco,orcamento').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       sbTudo(function(){return SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId).order('id',{ascending:true});}),
@@ -1127,6 +1127,9 @@
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
+    // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
+    ORC=(obra.orcamento&&typeof obra.orcamento==='object'&&obra.orcamento.itens)?obra.orcamento:null;
+    ORC_DIRTY=false; ORC_OPEN={}; AVA_CORTE=null; AVA_TAB='painel';
     ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; ESTACA_VOL={}; EST_OPEN={};
     REC_DIRTY={}; REALIZADO_DIRTY={}; APOIO_DIRTY={}; APOIO_SELECTED={};
@@ -1231,23 +1234,25 @@
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
-      ['cad-obra','Obra'],['cad-apoio','Apoio Administrativo'],['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
+      ['cad-obra','Obra'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],
+      ['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cad-equipes','Equipes'],['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
       ['cr-massas','Distribuição de massas'],['cr-oficina','Oficina (estudo)']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
-      ['ac-curvas','Curva S'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
+      ['ac-curvas','Curva S'],['ac-ava','AVA — Valor Agregado'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
       ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]}
   ];
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
-    'cad-obra':['Cadastro','Obra'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
+    'cad-obra':['Cadastro','Obra'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'cr-prod':['Tempo Caminho','Produtividade'],'cr-massas':['Tempo Caminho','Distribuição de massas'],
     'cr-oficina':['Tempo Caminho','Oficina — montagem manual (estudo)'],
-    'ac-curvas':['Acompanhamento','Curva S'],'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
+    'ac-curvas':['Acompanhamento','Curva S'],'ac-ava':['Acompanhamento','AVA — Análise do Valor Agregado'],
+    'ac-prod':['Acompanhamento','Produção Diária'],'ac-med':['Acompanhamento','Medições'],
     'lp-medio':['Last Planner','Médio Prazo'],'lp-semana':['Last Planner','Programação Semanal'],'lp-ppc':['Last Planner','PPC & Causas']};
 
   var ICONS={
@@ -7543,6 +7548,8 @@
   /* ---------- charts after render ---------- */
   function afterRender(view){
     if(view==='torre'){setupTorre();}
+    if(view==='cad-orc'){ orcWire(); }
+    if(view==='ac-ava'){ avaWire(); }
     if(view==='cr-massas'){ massasWire(); massasDraw(); }
     if(view==='torre-rel'){execReportDraw();}
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
@@ -10584,6 +10591,890 @@
       c.border={bottom:{style:'thin',color:{argb:'FF9AA7B0'}}};
     });
     return r;
+  }
+  /* ================= Orçamento do projeto e AVA =================
+   * O orçamento entra pela planilha de composições da obra (PLANILHAS_COMPOR) e serve a uma
+   * coisa só: dar PESO FINANCEIRO às atividades. O Tempo-Caminho continua sendo calculado por
+   * quantidade e equipe — nada aqui mexe no cronograma.
+   *
+   * O que é lido da planilha:
+   *   "PLANILHA SALDO"      -> a EAP com código, descrição, unidade, quantidade, custo e
+   *                            faturamento (unitário e total). É o quadro de quantidades e preços.
+   *   "CRONO CUSTO DIRETO"  -> o mesmo código com o custo distribuído por mês. É a linha de base
+   *                            da COTA (valor planejado) em R$, já pronta na planilha.
+   *
+   * A EAP tem até 5 níveis. O nível 1 é o macro-serviço (TERRAPLENAGEM), o nível 2 é o serviço
+   * (Limpeza, Corte, Aterro) e o resto são as composições que compõem o preço. A AVA trabalha no
+   * NÍVEL 2: é nele que se mede avanço na obra, e é nele que o orçamento vira peso.
+   *
+   * Os códigos se repetem entre as seções da planilha (DUPLICAÇÃO, MARGINAIS, INTERSEÇÕES,
+   * O.A.E. começam todas no item 1), então a chave guardada é seção + código. */
+  var ORC=null;              // {cfg,secoes,meses,itens,custos} — espelho de obras.orcamento
+  var ORC_DIRTY=false;
+  var ORC_OPEN={};           // nós abertos na árvore
+  function orcVazio(){
+    return {cfg:{base:'custo',bac:0,limiarAtencao:0.95,limiarCritico:0.9,arquivo:'',importadoEm:''},
+      secoes:[],meses:[],itens:[],custos:{}};
+  }
+  function orcAtual(){ return ORC&&ORC.itens?ORC:(ORC=orcVazio()); }
+  function orcTem(){ return !!(ORC&&ORC.itens&&ORC.itens.length); }
+  function orcSujo(){ ORC_DIRTY=true; var b=document.getElementById('orcSalvar'); if(b)b.disabled=false; }
+  function orcNum(v){
+    if(v==null||v==='')return 0;
+    if(typeof v==='number')return isFinite(v)?v:0;
+    var t=String(v).trim().replace(/\s|R\$/g,'');
+    if(/,/.test(t)&&/\./.test(t))t=t.replace(/\./g,'').replace(',','.');
+    else if(/,/.test(t))t=t.replace(',','.');
+    var n=parseFloat(t);
+    return isFinite(n)?n:0;
+  }
+  /** "  2.  1.  1." -> {cod:'2.1.1', nivel:3}. Devolve null quando não é linha de item. */
+  function orcCodigo(v){
+    var t=String(v==null?'':v).trim();
+    if(!t||!/^[\d.\s]+$/.test(t))return null;
+    var partes=t.split('.').map(function(x){ return x.trim(); }).filter(function(x){ return x!==''; });
+    if(!partes.length||partes.some(function(x){ return !/^\d+$/.test(x); }))return null;
+    return {cod:partes.join('.'),nivel:partes.length};
+  }
+  function orcPai(cod){ var p=String(cod).split('.'); return p.length>1?p.slice(0,-1).join('.'):''; }
+  /** Mês no formato AAAA-MM. O cabeçalho do cronograma vem como data de verdade, como número
+   *  de série do Excel ou como "10/2026" — excelDateToIso cobre os dois primeiros. */
+  function orcMesKey(d){
+    if(d==null||d==='')return null;
+    if(d instanceof Date)return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
+    if(typeof d==='number'){
+      if(d<20000||d>80000)return null;       // número que não é data de planilha
+      var iso=excelDateToIso(d);
+      return /^\d{4}-\d{2}/.test(iso)?iso.slice(0,7):null;
+    }
+    var t=String(d).trim();
+    var m=/^(\d{4})-(\d{2})/.exec(t); if(m)return m[1]+'-'+m[2];
+    m=/^(\d{1,2})\/(\d{4})$/.exec(t); if(m)return m[2]+'-'+('0'+m[1]).slice(-2);
+    m=/^(\d{2})\/(\d{2})\/(\d{4})/.exec(t); if(m)return m[3]+'-'+m[2];
+    return null;
+  }
+  function orcMesLabel(k){
+    var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    var p=String(k).split('-');
+    return MES[(+p[1]||1)-1]+'/'+String(p[0]).slice(2);
+  }
+  function orcAbaPorNome(wb,re){
+    var n=(wb.SheetNames||[]).filter(function(x){ return re.test(chaveNomeServ(x)); })[0];
+    return n?{nome:n,aoa:XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null})}:null;
+  }
+  /** Lê a planilha de composições inteira e devolve o orçamento pronto (sem gravar). */
+  function orcLerWorkbook(wb,nomeArq){
+    var saldo=orcAbaPorNome(wb,/planilha\s*saldo/);
+    if(!saldo)throw new Error('Não achei a aba "PLANILHA SALDO" no arquivo.');
+    var novo=orcVazio();
+    novo.cfg.arquivo=nomeArq||''; novo.cfg.importadoEm=new Date().toISOString();
+    var sec=null, nSec=0, porChave={};
+    saldo.aoa.forEach(function(lin){
+      if(!lin||!lin.length)return;
+      var a=lin[0], c=lin[2];
+      var txtA=String(a==null?'':a).trim();
+      // seção: texto sem número na primeira coluna e sem descrição (DUPLICAÇÃO, MARGINAIS…)
+      if(txtA&&!/\d/.test(txtA)&&!String(c==null?'':c).trim()){
+        if(/quadro|planilha|total/i.test(txtA))return;
+        nSec++; sec={k:'S'+nSec,nome:txtA};
+        novo.secoes.push(sec);
+        return;
+      }
+      var cd=orcCodigo(a); if(!cd)return;
+      if(!sec){ nSec++; sec={k:'S'+nSec,nome:'Planilha'}; novo.secoes.push(sec); }
+      var nome=String(c==null?'':c).trim();
+      if(!nome||/^total/i.test(nome))return;
+      var chave=sec.k+'|'+cd.cod;
+      if(porChave[chave])return;                   // código repetido na mesma seção: fica o 1º
+      var it={id:chave,sec:sec.k,cod:cd.cod,nivel:cd.nivel,pai:orcPai(cd.cod),nome:nome,
+        un:String(lin[3]==null?'':lin[3]).trim(),qtd:orcNum(lin[4]),
+        cu:orcNum(lin[10]),custo:orcNum(lin[11]),vu:orcNum(lin[12]),venda:orcNum(lin[13]),
+        folha:!!String(lin[1]==null?'':lin[1]).trim(),svc:null,pm:{},rm:{}};
+      porChave[chave]=it;
+      novo.itens.push(it);
+    });
+    if(!novo.itens.length)throw new Error('A aba "PLANILHA SALDO" não trouxe nenhum item reconhecível.');
+
+    // ---- cronograma de custo por mês: a linha de base da COTA, já pronta na planilha ----
+    var crono=orcAbaPorNome(wb,/crono\s*custo\s*direto/)||orcAbaPorNome(wb,/crono\s*venda/);
+    if(crono){
+      var cab=-1, colMes=[];
+      for(var i=0;i<Math.min(20,crono.aoa.length);i++){
+        var l=crono.aoa[i]||[];
+        if(/^cod/i.test(String(l[0]==null?'':l[0]).trim())){ cab=i; break; }
+      }
+      if(cab>=0){
+        (crono.aoa[cab]||[]).forEach(function(v,ci){
+          var k=orcMesKey(v); if(k)colMes.push({ci:ci,mes:k});
+        });
+        colMes.sort(function(x,y){ return x.mes<y.mes?-1:1; });
+        novo.meses=colMes.map(function(x){ return x.mes; });
+        var secC=null, iSec=0;
+        for(var r=cab+1;r<crono.aoa.length;r++){
+          var l2=crono.aoa[r]||[], a2=String(l2[0]==null?'':l2[0]).trim();
+          if(/^obra\s*:/i.test(a2)){ iSec++; secC=novo.secoes[iSec-1]; continue; }
+          var cd2=orcCodigo(a2); if(!cd2)continue;
+          var alvo=porChave[((secC||novo.secoes[0]||{k:'S1'}).k)+'|'+cd2.cod];
+          if(!alvo)continue;
+          colMes.forEach(function(x){
+            var v=orcNum(l2[x.ci]); if(v)alvo.pm[x.mes]=(alvo.pm[x.mes]||0)+v;
+          });
+        }
+      }
+    }
+    // Sem cronograma mensal, o eixo é um mês só — a tela avisa e o usuário distribui na mão.
+    if(!novo.meses.length){
+      var hoje=new Date();
+      novo.meses=[hoje.getFullYear()+'-'+('0'+(hoje.getMonth()+1)).slice(-2)];
+    }
+    return novo;
+  }
+  /* ---------- agregação: a árvore e os totais ---------- */
+  /** Soma os valores das FOLHAS debaixo de cada nó. O pai da planilha costuma vir em branco —
+   *  somar as linhas com valor é o único jeito de o nível 1 fechar com o total do item. */
+  function orcArvore(){
+    var O=orcAtual(), base=O.cfg.base==='venda'?'venda':'custo';
+    var mapa={}, raizes=[];
+    O.itens.forEach(function(it){
+      mapa[it.id]={it:it,filhos:[],peso:0,pm:{},qtdFolhas:0};
+    });
+    O.itens.forEach(function(it){
+      var no=mapa[it.id];
+      var paiId=it.pai?(it.sec+'|'+it.pai):null;
+      if(paiId&&mapa[paiId])mapa[paiId].filhos.push(no); else raizes.push(no);
+    });
+    function soma(no){
+      var ehFolha=!no.filhos.length;
+      if(ehFolha){
+        no.peso=orcNum(no.it[base]);
+        no.qtdFolhas=1;
+        Object.keys(no.it.pm||{}).forEach(function(m){ no.pm[m]=(no.pm[m]||0)+no.it.pm[m]; });
+      }else{
+        no.filhos.forEach(function(f){
+          soma(f);
+          no.peso+=f.peso; no.qtdFolhas+=f.qtdFolhas;
+          Object.keys(f.pm).forEach(function(m){ no.pm[m]=(no.pm[m]||0)+f.pm[m]; });
+        });
+      }
+      return no;
+    }
+    raizes.forEach(soma);
+    return {mapa:mapa,raizes:raizes,base:base};
+  }
+  /** As atividades da AVA: os nós de nível 2 (é onde a obra mede avanço). */
+  function orcAtividades(arv){
+    var out=[];
+    (arv||orcArvore()).raizes.forEach(function(r){
+      (r.filhos.length?r.filhos:[r]).forEach(function(n2){ out.push(n2); });
+    });
+    return out.filter(function(n){ return n.peso>0||n.it.rm&&Object.keys(n.it.rm).length; });
+  }
+  function orcSecaoNome(k){
+    var O=orcAtual(), s=O.secoes.filter(function(x){ return x.k===k; })[0];
+    return s?s.nome:'';
+  }
+  function orcBAC(){
+    var O=orcAtual(), base=O.cfg.base==='venda'?'venda':'custo';
+    if(orcNum(O.cfg.bac)>0)return orcNum(O.cfg.bac);
+    var arv=orcArvore(), t=0;
+    arv.raizes.forEach(function(r){ t+=r.peso; });
+    return t;
+  }
+  /* ---------- persistência ---------- */
+  async function orcSalvar(){
+    if(!selectedObra||!SB){ toast('Abra uma obra conectada pra salvar.'); return; }
+    try{
+      await sbUpdateObra(selectedObra.id,{orcamento:ORC});
+      ORC_DIRTY=false; toast('Orçamento salvo.'); go('cad-orc');
+    }catch(e){
+      alert('Falha ao salvar: '+((e&&e.message)||e)+'\n\nSe a mensagem fala em coluna "orcamento", rode sql/32_orcamento_ava.sql no Supabase.');
+    }
+  }
+  function orcImportar(){
+    if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var novo;
+        try{ novo=orcLerWorkbook(wb,file.name); }
+        catch(e){ alert('Não consegui ler a planilha: '+((e&&e.message)||e)); return; }
+        orcDialogoImport(novo);
+      }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  /** Mostra o que foi encontrado antes de trocar o orçamento — importação é substituição. */
+  function orcDialogoImport(novo){
+    var antigo=ORC, nAnt=(antigo&&antigo.itens)?antigo.itens.length:0;
+    var folhas=novo.itens.filter(function(i){ return i.folha; }).length;
+    var tc=0,tv=0,tpm=0;
+    novo.itens.forEach(function(i){ if(!i.folha)return; tc+=i.custo; tv+=i.venda; Object.keys(i.pm).forEach(function(m){ tpm+=i.pm[m]; }); });
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:620px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar orçamento</div>'+
+      '<div class="note" style="margin-bottom:12px">Confira antes de gravar: a importação <b>substitui</b> o orçamento atual desta obra.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><tbody>'+
+        '<tr><td>Arquivo</td><td class="r mono">'+escAttr(novo.cfg.arquivo||'—')+'</td></tr>'+
+        '<tr><td>Seções</td><td class="r mono">'+novo.secoes.map(function(s){ return escAttr(s.nome); }).join(' · ')+'</td></tr>'+
+        '<tr><td>Itens da EAP</td><td class="r mono">'+novo.itens.length+' ('+folhas+' com composição)</td></tr>'+
+        '<tr><td>Custo total</td><td class="r mono">'+fmtMoeda(tc)+'</td></tr>'+
+        '<tr><td>Faturamento total</td><td class="r mono">'+fmtMoeda(tv)+'</td></tr>'+
+        '<tr><td>Cronograma de custo</td><td class="r mono">'+(novo.meses.length>1?(novo.meses.length+' meses · '+orcMesLabel(novo.meses[0])+' a '+orcMesLabel(novo.meses[novo.meses.length-1])+' · '+fmtMoeda(tpm)):'<span style="color:var(--warn)">não encontrado</span>')+'</td></tr>'+
+        (nAnt?('<tr><td style="color:var(--crit)">Orçamento atual</td><td class="r mono" style="color:var(--crit)">'+nAnt+' itens serão substituídos</td></tr>'):'')+
+      '</tbody></table></div>'+
+      (novo.meses.length<=1?'<div class="note" style="margin-top:10px;color:var(--warn)">Sem a aba <b>CRONO CUSTO DIRETO</b> não há curva prevista: a AVA vai mostrar só o peso de cada item.</div>':'')+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="oiCancel">Cancelar</button>'+
+        '<button class="btn primary" id="oiOk">Importar</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#oiCancel').addEventListener('click',fecha);
+    back.querySelector('#oiOk').addEventListener('click',function(){
+      // o que já estava vinculado a serviço e lançado como realizado é preservado por código
+      var velho={}; if(antigo&&antigo.itens)antigo.itens.forEach(function(i){ velho[i.id]=i; });
+      novo.itens.forEach(function(i){
+        var v=velho[i.id]; if(!v)return;
+        if(v.svc)i.svc=v.svc;
+        if(v.rm&&Object.keys(v.rm).length)i.rm=v.rm;
+      });
+      if(antigo&&antigo.custos)novo.custos=antigo.custos;
+      if(antigo&&antigo.cfg){ novo.cfg.base=antigo.cfg.base||novo.cfg.base; novo.cfg.bac=antigo.cfg.bac||0;
+        novo.cfg.limiarAtencao=antigo.cfg.limiarAtencao||0.95; novo.cfg.limiarCritico=antigo.cfg.limiarCritico||0.9; }
+      ORC=novo; orcSujo(); fecha(); go('cad-orc');
+      toast(novo.itens.length+' itens importados. Salve pra gravar na obra.');
+    });
+  }
+  function fmtMoeda(v){
+    return 'R$ '+(Math.round(orcNum(v)*100)/100).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  }
+  function fmtMoedaCurta(v){
+    var n=orcNum(v), a=Math.abs(n);
+    if(a>=1e6)return 'R$ '+(n/1e6).toFixed(a>=1e7?1:2).replace('.',',')+' mi';
+    if(a>=1e3)return 'R$ '+(n/1e3).toFixed(0)+' mil';
+    return fmtMoeda(n);
+  }
+  /* ---------- tela: Cadastro → Orçamento ---------- */
+  function orcLinhaHTML(no,arv,total){
+    var it=no.it, temFilho=!!no.filhos.length;
+    var aberto=ORC_OPEN[it.id]!==false&&it.nivel<=1||ORC_OPEN[it.id]===true;
+    var pct=total>0?(100*no.peso/total):0;
+    var svcOpts='<option value="">—</option>'+SERV.map(function(sv){
+      return '<option value="'+sv.id+'"'+(it.svc===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>';
+    }).join('');
+    var html='<tr class="orc-n'+it.nivel+'" data-orcid="'+escAttr(it.id)+'">'+
+      '<td style="padding-left:'+(6+(it.nivel-1)*16)+'px;white-space:nowrap">'+
+        (temFilho?'<button class="iconbtn" data-orctog="'+escAttr(it.id)+'" style="margin-right:4px">'+(aberto?'▾':'▸')+'</button>':'<span style="display:inline-block;width:22px"></span>')+
+        '<b class="mono">'+escAttr(it.cod)+'</b></td>'+
+      '<td>'+escAttr(it.nome)+'</td>'+
+      '<td class="mono">'+escAttr(it.un||'')+'</td>'+
+      '<td class="r mono">'+(it.qtd?fmtDec(it.qtd,2):'—')+'</td>'+
+      '<td class="r mono">'+(no.filhos.length?'—':(it.cu?fmtMoeda(it.cu):'—'))+'</td>'+
+      '<td class="r mono">'+fmtMoeda(no.peso)+'</td>'+
+      '<td class="r mono">'+fmtDec(pct,2)+'%</td>'+
+      '<td>'+(it.nivel===2?('<select class="einp" data-orcsvc="'+escAttr(it.id)+'" style="min-width:150px">'+svcOpts+'</select>'):'')+'</td>'+
+      '</tr>';
+    if(aberto)no.filhos.forEach(function(f){ html+=orcLinhaHTML(f,arv,total); });
+    return html;
+  }
+  VIEWS['cad-orc']=function(){
+    if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
+    var O=orcAtual();
+    var acoes='<button class="btn" id="orcImp">↥ Importar planilha de orçamento</button>'+
+      (orcTem()?'<button class="btn" id="orcExp">↧ Exportar Excel</button><button class="btn" id="orcLimpar">🗑 Limpar</button>':'')+
+      '<button class="btn primary" id="orcSalvar"'+(ORC_DIRTY?'':' disabled')+'>💾 Salvar orçamento</button>';
+    var topo=head('Orçamento do projeto','Quadro de quantidades e preços da obra. Dá o peso financeiro de cada atividade para a AVA — não altera o cronograma.',acoes);
+    if(!orcTem())
+      return topo+'<div class="card"><div class="eyebrow" style="margin-bottom:4px">Nenhum orçamento importado</div>'+
+        '<div class="note">Importe a planilha de composições da obra (PLANILHAS_COMPOR). São lidas duas abas:<br>'+
+        '<b>PLANILHA SALDO</b> — a EAP com código, descrição, unidade, quantidade, custo e faturamento.<br>'+
+        '<b>CRONO CUSTO DIRETO</b> — o mesmo custo distribuído por mês, que vira a curva prevista (COTA) da AVA.<br><br>'+
+        'A importação não cria nem altera serviços, lotes ou quantidades do Tempo-Caminho.</div></div>';
+
+    var arv=orcArvore(), total=0;
+    arv.raizes.forEach(function(r){ total+=r.peso; });
+    var tc=0,tv=0,nFolhas=0;
+    O.itens.forEach(function(i){ if(!i.folha)return; tc+=i.custo; tv+=i.venda; nFolhas++; });
+    var bac=orcBAC();
+    var vinc=0, pesoVinc=0;
+    orcAtividades(arv).forEach(function(n){ if(n.it.svc){ vinc++; pesoVinc+=n.peso; } });
+    var nAtv=orcAtividades(arv).length;
+
+    var kpis='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('info','Custo total',fmtMoedaCurta(tc),nFolhas+' composições em '+O.itens.length+' linhas')+
+      kpi('accent','Faturamento total',fmtMoedaCurta(tv),tc>0?('margem '+fmtDec(100*(tv-tc)/tv,1)+'%'):'—')+
+      kpi('warn','Base da AVA (BAC)',fmtMoedaCurta(bac),(O.cfg.base==='venda'?'faturamento':'custo')+(orcNum(O.cfg.bac)>0?' · informado':' · soma da planilha'))+
+      kpi(pesoVinc>0?'good':'crit','Vinculado a serviço',fmtDec(total>0?100*pesoVinc/total:0,1)+'%',vinc+' de '+nAtv+' atividades de nível 2')+
+      '</div>';
+
+    var cfgCard='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:8px">Configuração da AVA</div>'+
+      '<div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">'+
+        '<div class="field" style="margin:0"><label>Base do peso</label>'+
+          '<select class="inp" id="orcBase" style="width:170px">'+
+            '<option value="custo"'+(O.cfg.base!=='venda'?' selected':'')+'>Custo</option>'+
+            '<option value="venda"'+(O.cfg.base==='venda'?' selected':'')+'>Faturamento</option></select></div>'+
+        '<div class="field" style="margin:0"><label>Orçamento executivo (BAC)</label>'+
+          '<input class="inp" id="orcBac" type="number" step="0.01" min="0" value="'+(orcNum(O.cfg.bac)||'')+'" placeholder="'+Math.round(bac)+'" style="width:190px"></div>'+
+        '<div class="field" style="margin:0"><label>Limiar de atenção</label>'+
+          '<input class="inp" id="orcLA" type="number" step="0.01" min="0" max="2" value="'+(O.cfg.limiarAtencao||0.95)+'" style="width:120px"></div>'+
+        '<div class="field" style="margin:0"><label>Limiar crítico</label>'+
+          '<input class="inp" id="orcLC" type="number" step="0.01" min="0" max="2" value="'+(O.cfg.limiarCritico||0.9)+'" style="width:120px"></div>'+
+      '</div>'+
+      '<div class="note" style="margin-top:8px">O <b>BAC</b> em branco usa a soma da planilha ('+fmtMoeda(total)+'). '+
+      'Os limiares pintam os índices da AVA: abaixo do crítico fica vermelho, entre os dois fica amarelo.</div></div>';
+
+    var periodo=O.meses.length>1?(orcMesLabel(O.meses[0])+' a '+orcMesLabel(O.meses[O.meses.length-1])+' · '+O.meses.length+' meses'):'sem cronograma mensal importado';
+    var tabela='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
+      '<div><div class="eyebrow" style="margin:0">EAP e pesos</div>'+
+      '<div class="note">Cronograma de custo: '+periodo+'. O peso de cada nó é a soma das composições abaixo dele. '+
+      'No nível 2 dá pra vincular a atividade a um serviço do app — é assim que o realizado da obra alimenta a AVA.</div></div>'+
+      '<div style="display:flex;gap:8px"><button class="btn" id="orcExpTudo" style="padding:4px 10px;font-size:11.5px">Abrir tudo</button>'+
+      '<button class="btn" id="orcColTudo" style="padding:4px 10px;font-size:11.5px">Fechar tudo</button>'+
+      '<button class="btn" id="orcAuto" style="padding:4px 10px;font-size:11.5px" title="Vincula por semelhança de nome com os serviços cadastrados">Vincular por nome</button></div></div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th>Item</th><th>Descrição</th><th>Un.</th><th class="r">Quantidade</th><th class="r">Custo unit.</th>'+
+        '<th class="r">'+(O.cfg.base==='venda'?'Faturamento':'Custo')+'</th><th class="r">% do total</th><th>Serviço do app</th>'+
+      '</tr></thead><tbody>'+
+      arv.raizes.map(function(r){
+        var cab='<tr class="orc-sec"><td colspan="8" style="background:var(--elev);font-weight:700">'+escAttr(orcSecaoNome(r.it.sec))+'</td></tr>';
+        return (r.it.cod==='1'?cab:'')+orcLinhaHTML(r,arv,total);
+      }).join('')+
+      '</tbody></table></div></div>';
+    return topo+kpis+cfgCard+tabela;
+  };
+  function orcWire(){
+    var b=document.getElementById('orcImp'); if(b)b.addEventListener('click',orcImportar);
+    var s=document.getElementById('orcSalvar'); if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
+    var x=document.getElementById('orcExp'); if(x)x.addEventListener('click',function(){ comCarga(exportOrcamentoExcel); });
+    var l=document.getElementById('orcLimpar');
+    if(l)l.addEventListener('click',function(){
+      if(!confirm('Apagar o orçamento importado desta obra? Os vínculos com serviços e os lançamentos da AVA vão junto.'))return;
+      ORC=orcVazio(); orcSujo(); go('cad-orc');
+    });
+    ['orcBase','orcBac','orcLA','orcLC'].forEach(function(id){
+      var e=document.getElementById(id); if(!e)return;
+      e.addEventListener('change',function(){
+        var O=orcAtual();
+        if(id==='orcBase')O.cfg.base=e.value==='venda'?'venda':'custo';
+        if(id==='orcBac')O.cfg.bac=orcNum(e.value);
+        if(id==='orcLA')O.cfg.limiarAtencao=orcNum(e.value)||0.95;
+        if(id==='orcLC')O.cfg.limiarCritico=orcNum(e.value)||0.9;
+        orcSujo(); go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orctog]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        var k=bt.getAttribute('data-orctog');
+        ORC_OPEN[k]=!(ORC_OPEN[k]===true);
+        go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orcsvc]').forEach(function(sel){
+      sel.addEventListener('change',function(){
+        var id=sel.getAttribute('data-orcsvc');
+        var it=orcAtual().itens.filter(function(i){ return i.id===id; })[0];
+        if(it){ it.svc=sel.value||null; orcSujo(); }
+      });
+    });
+    var et=document.getElementById('orcExpTudo');
+    if(et)et.addEventListener('click',function(){ orcAtual().itens.forEach(function(i){ ORC_OPEN[i.id]=true; }); go('cad-orc'); });
+    var ct=document.getElementById('orcColTudo');
+    if(ct)ct.addEventListener('click',function(){ ORC_OPEN={}; go('cad-orc'); });
+    var au=document.getElementById('orcAuto');
+    if(au)au.addEventListener('click',function(){
+      var n=0;
+      orcAtividades().forEach(function(no){
+        if(no.it.svc)return;
+        var nomeSvc=servicoParecido(no.it.nome);   // devolve o NOME do serviço, ou ''
+        if(!nomeSvc)return;
+        var sv=SERV.filter(function(x){ return x.n===nomeSvc; })[0];
+        if(sv){ no.it.svc=sv.id; n++; }
+      });
+      orcSujo(); go('cad-orc');
+      toast(n?(n+' atividade(s) vinculada(s) por semelhança de nome. Confira antes de salvar.'):'Nenhum nome bateu com os serviços cadastrados.');
+    });
+  }
+  async function exportOrcamentoExcel(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
+    if(!orcTem()){ alert('Nada pra exportar.'); return; }
+    var O=orcAtual(), arv=orcArvore(), wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+    var ws=wb.addWorksheet('Orçamento',{views:[{state:'frozen',ySplit:1}]});
+    var cab=['Seção','Item','Nível','Descrição','Un.','Quantidade','Custo unit.','Custo total','Fat. unit.','Fat. total','Serviço do app'];
+    O.meses.forEach(function(m){ cab.push('COTA '+orcMesLabel(m)); });
+    relCabecalho(ws,cab,[18,12,7,46,8,15,14,16,14,16,24].concat(O.meses.map(function(){ return 14; })));
+    O.itens.forEach(function(it){
+      var no=arv.mapa[it.id];
+      var sv=SERV.filter(function(s){ return s.id===it.svc; })[0];
+      var lin=[orcSecaoNome(it.sec),it.cod,it.nivel,it.nome,it.un,it.qtd,it.cu,
+        no?no.peso:it.custo,it.vu,it.venda,sv?sv.n:''];
+      O.meses.forEach(function(m){ lin.push((no&&no.pm[m])||0); });
+      var r=ws.addRow(lin); r.font={size:10,bold:it.nivel<=2};
+      for(var c=6;c<=10;c++)r.getCell(c).numFmt='#,##0.00';
+      for(var c2=12;c2<=11+O.meses.length;c2++)r.getCell(c2).numFmt='#,##0.00';
+    });
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='orcamento_'+nome+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('Orçamento exportado.');
+  }
+  /* ================= AVA — Análise do Valor Agregado =================
+   * Três curvas acumuladas, todas na mesma base financeira do orçamento:
+   *   COTA (valor planejado)  — o custo distribuído por mês que veio da planilha.
+   *   COTR (valor agregado)   — avanço físico × peso do item. É o quanto de orçamento a obra
+   *                             "ganhou" até aqui, e não tem nada a ver com o que foi gasto.
+   *   CRTR (custo real)       — o que de fato saiu, lançado mês a mês.
+   *
+   * O avanço físico de cada atividade vem do app quando ela está vinculada a um serviço (aí é o
+   * produzido ÷ quantidade cadastrada); quando não está, é lançado à mão na aba Lançamentos.
+   *
+   * A leitura trabalha por MÊS, não por semana: o cronograma de custo da planilha é mensal, o
+   * custo real fecha por mês e a medição é mensal. Converter pra semana inventaria precisão.
+   *
+   * Earned Schedule (Lipke): a data em que a COTA atingiria o valor agregado de hoje. É o que
+   * dá IDP-t, o índice de prazo que não volta pra 1,00 no fim da obra como o IDP tradicional. */
+  var AVA_CORTE=null;        // índice do mês de corte (null = último com lançamento)
+  var AVA_UNID='pct';        // 'pct' | 'rs'
+  var AVA_TAB='painel';      // 'painel' | 'lanc'
+
+  function avaMeses(){
+    var O=orcAtual(), m={};
+    (O.meses||[]).forEach(function(k){ m[k]=1; });
+    (O.itens||[]).forEach(function(it){ Object.keys(it.rm||{}).forEach(function(k){ m[k]=1; }); });
+    Object.keys(O.custos||{}).forEach(function(k){ m[k]=1; });
+    return Object.keys(m).sort();
+  }
+  function avaFimDoMes(k){
+    var p=String(k).split('-'), d=new Date(+p[0],+p[1],0);
+    d.setHours(23,59,59,0); return d;
+  }
+  /** Avanço físico acumulado (fração 0..1) de um serviço do app até o fim do mês. */
+  function avaAvancoServico(svcId,mes){
+    var si=-1; SERV.forEach(function(s,i){ if(s.id===svcId)si=i; });
+    if(si<0)return null;
+    var total=0; (QTY||[]).forEach(function(l){ total+=orcNum(l[si]); });
+    if(!(total>0))return null;
+    var lim=avaFimDoMes(mes).getTime(), feito=0;
+    (window.PROD_LIST||[]).forEach(function(p){
+      if(p.servId!==svcId)return;
+      var d=new Date(String(p.data)+'T12:00:00');
+      if(d.getTime()<=lim)feito+=orcNum(p.qtd);
+    });
+    return Math.max(0,Math.min(1,feito/total));
+  }
+  /** Série acumulada da AVA. Devolve tudo em fração do BAC (0..1) + os valores em R$. */
+  function avaCalcular(){
+    var O=orcAtual();
+    if(!orcTem())return null;
+    var meses=avaMeses(), N=meses.length;
+    if(!N)return null;
+    var arv=orcArvore(), atvs=orcAtividades(arv);
+    var BAC=orcBAC();
+    var totalPeso=0; atvs.forEach(function(n){ totalPeso+=n.peso; });
+    var alertas=[];
+    // atividade sem peso não entra no rateio; com peso e sem avanço possível, entra como aviso
+    var linhas=atvs.map(function(no){
+      var w=totalPeso>0?no.peso/totalPeso:0;
+      var pv=[], ev=[], acc=0;
+      var temPm=Object.keys(no.pm||{}).length>0;
+      for(var t=0;t<N;t++){
+        acc+=orcNum(no.pm[meses[t]]);
+        pv.push(no.peso>0?Math.min(1,acc/no.peso):0);
+        var r=null;
+        if(no.it.svc)r=avaAvancoServico(no.it.svc,meses[t]);
+        if(r==null){
+          // lançamento manual: o valor vale do mês dele em diante (é acumulado)
+          var ult=null;
+          for(var k=0;k<=t;k++){ var v=no.it.rm&&no.it.rm[meses[k]]; if(v!=null&&v!=='')ult=orcNum(v)/100; }
+          r=ult;
+        }
+        ev.push(r==null?0:Math.max(0,Math.min(1.5,r)));
+      }
+      if(no.peso>0&&!temPm)alertas.push({n:'atencao',cod:no.it.cod,txt:'"'+no.it.nome+'" tem peso mas não tem custo distribuído por mês. Não entra na COTA.'});
+      return {no:no,w:w,pv:pv,ev:ev};
+    });
+    var PV=[],EV=[],AC=[];
+    for(var t=0;t<N;t++){ PV.push(0); EV.push(0); AC.push(0); }
+    linhas.forEach(function(L){
+      if(!L.w)return;
+      for(var t=0;t<N;t++){ PV[t]+=L.w*L.pv[t]; EV[t]+=L.w*L.ev[t]; }
+    });
+    var sc=0;
+    for(var t2=0;t2<N;t2++){ sc+=orcNum((O.custos||{})[meses[t2]]); AC[t2]=sc; }
+    // Peso sem avanço possível: vira UM aviso, não 48. Uma lista com uma linha por atividade
+    // não vinculada enterra os avisos que importam.
+    var semFonte=0, pesoSemFonte=0;
+    linhas.forEach(function(L){
+      if(L.no.peso>0&&!L.no.it.svc&&!(L.no.it.rm&&Object.keys(L.no.it.rm).length)){ semFonte++; pesoSemFonte+=L.w; }
+    });
+    if(semFonte)alertas.push({n:'info',cod:'—',txt:semFonte+' atividade(s) sem vínculo com serviço e sem avanço lançado, somando '+
+      fmtDec(100*pesoSemFonte,1)+'% do orçamento. Enquanto estiverem assim, contam como 0% no COTR.'});
+    /* Mês de corte automático: o último com LANÇAMENTO de verdade. Olhar a série do COTR não
+     * serve — o avanço lançado é acumulado e se propaga até o fim do cronograma, o que jogaria
+     * o corte sempre no último mês. */
+    var corte=AVA_CORTE;
+    if(corte==null){
+      corte=0;
+      for(var t3=0;t3<N;t3++){
+        var m3=meses[t3], tem=orcNum((O.custos||{})[m3])>0;
+        if(!tem)for(var li=0;li<O.itens.length;li++){
+          var rm=O.itens[li].rm;
+          if(rm&&rm[m3]!=null&&rm[m3]!==''){ tem=true; break; }
+        }
+        if(!tem){
+          var lim=avaFimDoMes(m3).getTime();
+          for(var pi=0;pi<(window.PROD_LIST||[]).length;pi++){
+            var pd=window.PROD_LIST[pi];
+            if(orcNum(pd.qtd)>0&&new Date(String(pd.data)+'T12:00:00').getTime()<=lim){ tem=true; break; }
+          }
+        }
+        if(tem)corte=t3;
+      }
+    }
+    corte=Math.max(0,Math.min(N-1,corte));
+    // Earned Schedule: onde a COTA valeria o COTR de hoje
+    function es(ev){
+      var P=[0].concat(PV), C=0;
+      for(var k=0;k<=N;k++)if(P[k]<=ev+1e-12)C=k;
+      if(C>=N)return N;
+      var d=P[C+1]-P[C];
+      return d>0?C+(ev-P[C])/d:C;
+    }
+    var serie=[];
+    for(var t4=0;t4<=corte;t4++){
+      var ES=es(EV[t4]), AT=t4+1;
+      serie.push({t:t4,PV:PV[t4],EV:EV[t4],AC:AC[t4],
+        IDP:PV[t4]>0?EV[t4]/PV[t4]:null,
+        IDC:AC[t4]>0?(EV[t4]*BAC)/AC[t4]:null,
+        IDPt:EV[t4]>0?ES/AT:null,ES:ES});
+    }
+    var c=serie[corte]||{PV:0,EV:0,AC:0,ES:0};
+    var ev$=c.EV*BAC, pv$=c.PV*BAC, ac$=c.AC;
+    var PD=N; for(var t5=0;t5<N;t5++)if(PV[t5]>=0.99995){ PD=t5+1; break; }
+    var kpi={BAC:BAC,PVpct:c.PV,EVpct:c.EV,PV:pv$,EV:ev$,AC:ac$,
+      VPR:ev$-pv$, VC:ac$>0?ev$-ac$:null,
+      IDP:c.IDP,IDC:c.IDC,IDPt:c.IDPt,ES:c.ES,AT:corte+1,PD:PD,
+      SVt:c.ES-(corte+1),
+      ONT:c.IDC?BAC/c.IDC:null,
+      ONTcomp:(c.IDC&&c.IDP)?ac$+(BAC-ev$)/(c.IDC*c.IDP):null,
+      IDPT:(BAC-ac$)>0?(BAC-ev$)/(BAC-ac$):null,
+      prazoProj:c.IDPt?PD/c.IDPt:null};
+    return {meses:meses,N:N,corte:corte,BAC:BAC,PV:PV,EV:EV,AC:AC,serie:serie,kpi:kpi,
+      linhas:linhas,arv:arv,alertas:alertas,totalPeso:totalPeso};
+  }
+  /* ---------- desenho ---------- */
+  function avaLinhaSVG(el,series,meses,opts){
+    if(!el)return; opts=opts||{};
+    var W=opts.W||900,H=opts.H||300,pl=opts.pl||58,pr=16,pt=14,pb=38;
+    var iw=W-pl-pr, ih=H-pt-pb, n=meses.length;
+    el.setAttribute('viewBox','0 0 '+W+' '+H);
+    var mx=opts.ymax, mn=opts.ymin==null?0:opts.ymin;
+    if(mx==null){ mx=0; series.forEach(function(s){ s.v.forEach(function(v){ if(v!=null)mx=Math.max(mx,v); }); }); mx=mx||1; }
+    var xx=function(i){ return pl+(n<=1?iw/2:iw*i/(n-1)); };
+    var yy=function(v){ return pt+ih-ih*(v-mn)/Math.max(1e-9,mx-mn); };
+    var s='';
+    for(var g=0;g<=4;g++){
+      var v=mn+(mx-mn)*g/4;
+      s+='<line x1="'+pl+'" y1="'+yy(v).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(v).toFixed(1)+'" stroke="var(--line)"/>'+
+         '<text class="axm" x="'+(pl-6)+'" y="'+(yy(v)+3).toFixed(1)+'" text-anchor="end">'+(opts.fmt?opts.fmt(v):fmtDec(v,2))+'</text>';
+    }
+    if(opts.ref!=null&&opts.ref>=mn&&opts.ref<=mx)
+      s+='<line x1="'+pl+'" y1="'+yy(opts.ref).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(opts.ref).toFixed(1)+'" stroke="var(--ink)" stroke-opacity=".45" stroke-dasharray="4 3"/>';
+    var passo=Math.max(1,Math.ceil(n/12));
+    for(var i=0;i<n;i+=passo)
+      s+='<text class="axm" x="'+xx(i).toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+orcMesLabel(meses[i])+'</text>';
+    if(opts.corte!=null&&n>1)
+      s+='<line x1="'+xx(opts.corte).toFixed(1)+'" y1="'+pt+'" x2="'+xx(opts.corte).toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="3 3"><title>Data de corte</title></line>';
+    series.forEach(function(sr){
+      var d='', ligado=false;
+      sr.v.forEach(function(v,i){
+        if(v==null){ ligado=false; return; }
+        d+=(ligado?'L':'M')+xx(i).toFixed(1)+' '+yy(v).toFixed(1)+' '; ligado=true;
+      });
+      if(d)s+='<path d="'+d+'" fill="none" stroke="'+sr.cor+'" stroke-width="2.2"'+(sr.trace?' stroke-dasharray="5 4"':'')+'/>';
+      sr.v.forEach(function(v,i){
+        if(v==null)return;
+        s+='<circle cx="'+xx(i).toFixed(1)+'" cy="'+yy(v).toFixed(1)+'" r="2.6" fill="'+sr.cor+'"><title>'+escAttr(sr.lab+' · '+orcMesLabel(meses[i])+': '+(opts.fmt?opts.fmt(v):fmtDec(v,2)))+'</title></circle>';
+      });
+    });
+    el.innerHTML=s;
+  }
+  function avaLegenda(items){
+    return '<div class="legend" style="display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;margin-bottom:6px">'+
+      items.map(function(i){
+        return '<span style="display:inline-flex;align-items:center;gap:6px"><i style="width:16px;height:3px;border-radius:2px;background:'+i.cor+';display:inline-block'+(i.trace?';background:repeating-linear-gradient(90deg,'+i.cor+' 0 4px,transparent 4px 7px)':'')+'"></i>'+escAttr(i.lab)+'</span>';
+      }).join('')+'</div>';
+  }
+  function avaChip(v,O){
+    if(v==null)return '<span class="pill mut">—</span>';
+    var lc=O.cfg.limiarCritico||0.9, la=O.cfg.limiarAtencao||0.95;
+    var cls=v<lc?'crit':(v<la?'warn':'good');
+    return '<span class="pill '+cls+'">'+fmtDec(v,2)+'</span>';
+  }
+  function avaPainelHTML(D){
+    var O=orcAtual(), k=D.kpi, mesCorte=D.meses[D.corte];
+    var sinal=function(v){ return (v>=0?'+':'−')+fmtMoedaCurta(Math.abs(v)).replace('R$ ',''); };
+    var kpis='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('info','COTA — previsto',fmtDec(100*k.PVpct,1)+'%',fmtMoedaCurta(k.PV)+' de '+fmtMoedaCurta(k.BAC))+
+      kpi('accent','COTR — valor agregado',fmtDec(100*k.EVpct,1)+'%',fmtMoedaCurta(k.EV))+
+      kpi(k.AC>0?'warn':'info','CRTR — custo real',k.AC>0?fmtMoedaCurta(k.AC):'—',k.AC>0?(fmtDec(100*k.AC/k.BAC,1)+'% do orçamento'):'nenhum custo lançado')+
+      kpi(k.VPR>=0?'good':'crit','VPR — variação de prazo',sinal(k.VPR)+' R$',k.VPR>=0?'adiantado em valor':'atrasado em valor')+
+      '</div>'+
+      '<div class="kpis" style="margin-bottom:12px">'+
+      kpi(k.IDP==null?'info':(k.IDP<(O.cfg.limiarCritico||0.9)?'crit':(k.IDP<(O.cfg.limiarAtencao||0.95)?'warn':'good')),'IDP — desempenho de prazo',k.IDP==null?'—':fmtDec(k.IDP,2),'COTR ÷ COTA')+
+      kpi(k.IDC==null?'info':(k.IDC<(O.cfg.limiarCritico||0.9)?'crit':(k.IDC<(O.cfg.limiarAtencao||0.95)?'warn':'good')),'IDC — desempenho de custo',k.IDC==null?'—':fmtDec(k.IDC,2),k.AC>0?'COTR ÷ CRTR':'sem custo lançado')+
+      kpi(k.IDPt==null?'info':(k.IDPt<(O.cfg.limiarCritico||0.9)?'crit':(k.IDPt<(O.cfg.limiarAtencao||0.95)?'warn':'good')),'IDP-t — prazo (Earned Schedule)',k.IDPt==null?'—':fmtDec(k.IDPt,2),
+        'mês ganho '+fmtDec(k.ES,1)+' de '+k.AT+' decorrido(s)')+
+      kpi(k.ONT==null?'info':(k.ONT>k.BAC?'crit':'good'),'ONT — custo no término',k.ONT==null?'—':fmtMoedaCurta(k.ONT),
+        k.ONT==null?'precisa do CRTR':(k.ONT>k.BAC?('estouro de '+fmtMoedaCurta(k.ONT-k.BAC)):'dentro do orçamento'))+
+      '</div>';
+
+    var curvaId='avaCurva', idxId='avaIdx';
+    var painel='<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">'+
+        '<div><div class="eyebrow" style="margin:0">Curva S</div>'+
+        '<div class="note">COTA (previsto), COTR (agregado) e CRTR (custo real), acumulados por mês</div></div>'+
+        '<div style="display:flex;gap:6px">'+
+          '<button class="subtab'+(AVA_UNID==='pct'?' active':'')+'" data-avaunid="pct">% do orçamento</button>'+
+          '<button class="subtab'+(AVA_UNID==='rs'?' active':'')+'" data-avaunid="rs">R$</button></div>'+
+      '</div>'+
+      avaLegenda([{lab:'COTA — previsto',cor:cssHex('--warn')},{lab:'COTR — agregado',cor:cssHex('--accent')},{lab:'CRTR — custo real',cor:cssHex('--crit'),trace:true}])+
+      '<svg class="chart" id="'+curvaId+'" style="width:100%;height:auto"></svg></div>';
+
+    var indices='<div class="card" style="margin-bottom:12px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Índices de desempenho</div>'+
+      '<div class="note" style="margin-bottom:6px">Acumulados até cada mês. Abaixo de 1,00 é desfavorável; a linha tracejada é o 1,00</div>'+
+      avaLegenda([{lab:'IDP — prazo',cor:cssHex('--c1')},{lab:'IDC — custo',cor:cssHex('--c4')},{lab:'IDP-t — prazo (ES)',cor:cssHex('--c5')}])+
+      '<svg class="chart" id="'+idxId+'" style="width:100%;height:auto"></svg></div>';
+
+    // tabela por macro-serviço -> atividade
+    var porRaiz={};
+    D.linhas.forEach(function(L){
+      var raiz=L.no.it.sec+'|'+String(L.no.it.cod).split('.')[0];
+      (porRaiz[raiz]||(porRaiz[raiz]=[])).push(L);
+    });
+    var corpo='';
+    Object.keys(porRaiz).forEach(function(rk){
+      var grupo=porRaiz[rk], raizNo=D.arv.mapa[rk];
+      var wG=0,pvG=0,evG=0;
+      grupo.forEach(function(L){ wG+=L.w; pvG+=L.w*L.pv[D.corte]; evG+=L.w*L.ev[D.corte]; });
+      var nomeG=raizNo?(orcSecaoNome(raizNo.it.sec)+' · '+raizNo.it.nome):rk;
+      corpo+='<tr style="background:var(--elev)"><td style="font-weight:700">'+escAttr(nomeG)+'</td>'+
+        '<td class="r mono" style="font-weight:700">'+fmtDec(100*wG,1)+'%</td>'+
+        '<td class="r mono" style="font-weight:700">'+fmtDec(wG>0?100*pvG/wG:0,1)+'%</td>'+
+        '<td class="r mono" style="font-weight:700">'+fmtDec(wG>0?100*evG/wG:0,1)+'%</td>'+
+        '<td class="r mono" style="font-weight:700;color:var('+((evG-pvG)>=0?'--good':'--crit')+')">'+fmtDec(100*(evG-pvG),2)+' pp</td>'+
+        '<td></td></tr>';
+      grupo.forEach(function(L){
+        var pv=L.pv[D.corte], ev=L.ev[D.corte], d=(ev-pv)*L.w;
+        var sv=SERV.filter(function(s){ return s.id===L.no.it.svc; })[0];
+        corpo+='<tr><td style="padding-left:22px">'+escAttr(L.no.it.nome)+
+          ' <span class="note mono">'+escAttr(L.no.it.cod)+'</span></td>'+
+          '<td class="r mono">'+fmtDec(100*L.w,2)+'%</td>'+
+          '<td class="r mono">'+fmtDec(100*pv,1)+'%</td>'+
+          '<td class="r mono">'+fmtDec(100*ev,1)+'%</td>'+
+          '<td class="r mono" style="color:var('+(d>=0?'--good':'--crit')+')">'+fmtDec(100*d,2)+' pp</td>'+
+          '<td class="note">'+(sv?escAttr(sv.n):'<span style="color:var(--muted)">lançamento manual</span>')+'</td></tr>';
+      });
+    });
+    var tabela='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:2px">Avanço por serviço</div>'+
+      '<div class="note" style="margin-bottom:8px">Acumulado em '+orcMesLabel(mesCorte)+', ponderado pelo peso financeiro. O desvio é em pontos percentuais do contrato inteiro</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+      '<th>Serviço</th><th class="r">Peso</th><th class="r">Previsto</th><th class="r">Realizado</th><th class="r">Desvio</th><th>Origem do avanço</th>'+
+      '</tr></thead><tbody>'+corpo+'</tbody></table></div></div>';
+
+    var atrasos=D.linhas.map(function(L){
+      return {nome:L.no.it.nome,cod:L.no.it.cod,d:(L.ev[D.corte]-L.pv[D.corte])*L.w};
+    }).filter(function(x){ return x.d<-1e-9; }).sort(function(a,b){ return a.d-b.d; }).slice(0,10);
+    var listaAtraso='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:2px">Maiores atrasos ponderados</div>'+
+      '<div class="note" style="margin-bottom:8px">Quanto cada atividade tira do avanço global, em pontos percentuais do contrato</div>'+
+      (atrasos.length?('<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><tbody>'+
+        atrasos.map(function(a){
+          return '<tr><td class="mono">'+escAttr(a.cod)+'</td><td>'+escAttr(a.nome)+'</td>'+
+            '<td class="r mono" style="color:var(--crit)">'+fmtDec(100*a.d,2)+' pp</td></tr>';
+        }).join('')+'</tbody></table></div>'):'<div class="note">Nenhuma atividade atrasada em relação à COTA.</div>')+'</div>';
+
+    var alertas='<div class="card"><div class="eyebrow" style="margin-bottom:2px">Checagens do cadastro</div>'+
+      '<div class="note" style="margin-bottom:8px">O que pode estar distorcendo a leitura</div>'+
+      (D.alertas.length?('<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><tbody>'+
+        D.alertas.slice(0,40).map(function(a){
+          var cor=a.n==='atencao'?'--warn':'--muted';
+          return '<tr><td class="mono" style="color:var('+cor+')">'+escAttr(a.cod)+'</td><td>'+escAttr(a.txt)+'</td></tr>';
+        }).join('')+'</tbody></table></div>'+
+        (D.alertas.length>40?('<div class="note" style="margin-top:6px">+ '+(D.alertas.length-40)+' outras</div>'):'')
+      ):'<div class="note" style="color:var(--good)">Nada a apontar.</div>')+'</div>';
+
+    return kpis+painel+indices+tabela+listaAtraso+alertas;
+  }
+  function avaLancHTML(D){
+    var O=orcAtual(), meses=D.meses;
+    var th='<th style="min-width:230px">Atividade</th>';
+    meses.forEach(function(m,i){ th+='<th class="r"'+(i===D.corte?' style="background:var(--warn-bg)"':'')+'>'+orcMesLabel(m)+'</th>'; });
+    var linCusto='<tr style="background:var(--elev)"><td style="font-weight:700">CRTR — custo real do mês (R$)</td>';
+    meses.forEach(function(m){
+      linCusto+='<td><input class="einp" type="number" step="0.01" data-avacusto="'+m+'" value="'+(orcNum((O.custos||{})[m])||'')+'" style="width:104px;text-align:right"></td>';
+    });
+    linCusto+='</tr>';
+    var corpo='';
+    D.linhas.forEach(function(L){
+      var it=L.no.it, sv=SERV.filter(function(s){ return s.id===it.svc; })[0];
+      corpo+='<tr><td>'+escAttr(it.nome)+' <span class="note mono">'+escAttr(it.cod)+'</span>'+
+        (sv?(' <span class="pill mut" title="Avanço vem do serviço vinculado — não é editável aqui">'+escAttr(sv.n)+'</span>'):'')+'</td>';
+      meses.forEach(function(m,i){
+        if(sv){
+          var v=avaAvancoServico(it.svc,m);
+          corpo+='<td class="r mono note">'+(v==null?'—':fmtDec(100*v,1)+'%')+'</td>';
+        }else{
+          corpo+='<td><input class="einp" type="number" step="0.1" min="0" max="150" data-avarm="'+escAttr(it.id)+'" data-avames="'+m+'" value="'+((it.rm&&it.rm[m]!=null&&it.rm[m]!=='')?it.rm[m]:'')+'" style="width:72px;text-align:right" placeholder="%"></td>';
+        }
+      });
+      corpo+='</tr>';
+    });
+    return '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Lançamentos do mês</div>'+
+      '<div class="note" style="margin-bottom:8px">O <b>CRTR</b> é o custo real do mês, na mesma base do orçamento. '+
+      'O avanço é <b>acumulado</b> (%) e só precisa ser lançado quando muda — o valor vale dali em diante. '+
+      'Atividade vinculada a um serviço traz o avanço do app e não é editável aqui.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11.5px"><thead><tr>'+th+'</tr></thead>'+
+      '<tbody>'+linCusto+corpo+'</tbody></table></div></div>';
+  }
+  VIEWS['ac-ava']=function(){
+    if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
+    if(!orcTem())
+      return head('AVA — Análise do Valor Agregado','','')+
+        '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Falta o orçamento</div>'+
+        '<div class="note">A AVA precisa do peso financeiro de cada atividade. Importe a planilha de orçamento em '+
+        '<b>Cadastro → Orçamento do projeto</b> e volte aqui.</div>'+
+        '<div style="margin-top:10px"><button class="btn primary" id="avaIrOrc">Ir para o orçamento</button></div></div>';
+    var D=avaCalcular();
+    if(!D)return head('AVA','','')+'<div class="card"><div class="note">Orçamento sem meses de cronograma.</div></div>';
+    var opts=D.meses.map(function(m,i){
+      return '<option value="'+i+'"'+(i===D.corte?' selected':'')+'>'+orcMesLabel(m)+'</option>';
+    }).join('');
+    var acoes='<span class="note" style="margin-right:4px">Data de corte</span>'+
+      '<select class="inp" id="avaCorte" style="width:120px">'+opts+'</select>'+
+      '<button class="btn" id="avaExp">↧ Exportar Excel</button>'+
+      '<button class="btn primary" id="avaSalvar"'+(ORC_DIRTY?'':' disabled')+'>💾 Salvar lançamentos</button>';
+    var tabs='<div class="subtabs" style="margin-bottom:12px">'+
+      '<button class="subtab'+(AVA_TAB==='painel'?' active':'')+'" data-avatab="painel">Painel</button>'+
+      '<button class="subtab'+(AVA_TAB==='lanc'?' active':'')+'" data-avatab="lanc">Lançamentos</button></div>';
+    return head('AVA — Análise do Valor Agregado','COTA, COTR e CRTR acumulados por mês, na base financeira do orçamento importado.',acoes)+
+      tabs+(AVA_TAB==='lanc'?avaLancHTML(D):avaPainelHTML(D));
+  };
+  function avaDraw(){
+    if(!orcTem()||AVA_TAB!=='painel')return;
+    var D=avaCalcular(); if(!D)return;
+    var el=document.getElementById('avaCurva');
+    if(el){
+      var f=AVA_UNID==='rs';
+      avaLinhaSVG(el,[
+        {lab:'COTA',cor:cssHex('--warn'),v:D.PV.map(function(v){ return f?v*D.BAC:v*100; })},
+        {lab:'COTR',cor:cssHex('--accent'),v:D.EV.map(function(v,i){ return i<=D.corte?(f?v*D.BAC:v*100):null; })},
+        {lab:'CRTR',cor:cssHex('--crit'),trace:true,v:D.AC.map(function(v,i){ return (i<=D.corte&&v>0)?(f?v:100*v/D.BAC):null; })}
+      ],D.meses,{W:900,H:300,corte:D.corte,ymax:f?null:100,
+        fmt:f?function(v){ return fmtMoedaCurta(v).replace('R$ ',''); }:function(v){ return Math.round(v)+'%'; }});
+    }
+    var ei=document.getElementById('avaIdx');
+    if(ei){
+      var mv=function(campo){ return D.meses.map(function(_,i){ var s=D.serie[i]; return s?s[campo]:null; }); };
+      avaLinhaSVG(ei,[
+        {lab:'IDP',cor:cssHex('--c1'),v:mv('IDP')},
+        {lab:'IDC',cor:cssHex('--c4'),v:mv('IDC')},
+        {lab:'IDP-t',cor:cssHex('--c5'),v:mv('IDPt')}
+      ],D.meses,{W:900,H:240,corte:D.corte,ref:1,ymin:0,ymax:null,pl:44,
+        fmt:function(v){ return fmtDec(v,2); }});
+    }
+  }
+  function avaWire(){
+    var ir=document.getElementById('avaIrOrc'); if(ir)ir.addEventListener('click',function(){ go('cad-orc'); });
+    document.querySelectorAll('[data-avatab]').forEach(function(b){
+      b.addEventListener('click',function(){ AVA_TAB=b.getAttribute('data-avatab'); go('ac-ava'); });
+    });
+    document.querySelectorAll('[data-avaunid]').forEach(function(b){
+      b.addEventListener('click',function(){ AVA_UNID=b.getAttribute('data-avaunid'); go('ac-ava'); });
+    });
+    var c=document.getElementById('avaCorte');
+    if(c)c.addEventListener('change',function(){ AVA_CORTE=+c.value; go('ac-ava'); });
+    var s=document.getElementById('avaSalvar');
+    if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
+    var x=document.getElementById('avaExp');
+    if(x)x.addEventListener('click',function(){ comCarga(exportAvaExcel); });
+    document.querySelectorAll('[data-avacusto]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var O=orcAtual(); O.custos=O.custos||{};
+        var v=orcNum(inp.value);
+        if(v)O.custos[inp.getAttribute('data-avacusto')]=v; else delete O.custos[inp.getAttribute('data-avacusto')];
+        orcSujo(); avaDraw();
+      });
+    });
+    document.querySelectorAll('[data-avarm]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var id=inp.getAttribute('data-avarm'), mes=inp.getAttribute('data-avames');
+        var it=orcAtual().itens.filter(function(i){ return i.id===id; })[0];
+        if(!it)return;
+        it.rm=it.rm||{};
+        if(inp.value==='')delete it.rm[mes]; else it.rm[mes]=orcNum(inp.value);
+        orcSujo();
+      });
+    });
+    avaDraw();
+  }
+  async function exportAvaExcel(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
+    var D=avaCalcular(); if(!D){ alert('Sem dados pra exportar.'); return; }
+    var O=orcAtual(), wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+    var k=D.kpi;
+    var wsR=wb.addWorksheet('Resumo'); wsR.columns=[{width:40},{width:26}];
+    [['Obra',(window._OBRA&&window._OBRA.nome)||''],['Mês de corte',orcMesLabel(D.meses[D.corte])],
+     ['Base do peso',O.cfg.base==='venda'?'Faturamento':'Custo'],
+     ['BAC — orçamento',k.BAC],['COTA — previsto (R$)',k.PV],['COTA — previsto (%)',100*k.PVpct],
+     ['COTR — agregado (R$)',k.EV],['COTR — agregado (%)',100*k.EVpct],['CRTR — custo real (R$)',k.AC],
+     ['VPR — variação de prazo (R$)',k.VPR],['VC — variação de custo (R$)',k.VC],
+     ['IDP',k.IDP],['IDC',k.IDC],['IDP-t',k.IDPt],['Mês ganho (ES)',k.ES],['Meses decorridos',k.AT],
+     ['ONT — custo no término',k.ONT],['ONT composto',k.ONTcomp],['IDPT — índice para o término',k.IDPT],
+     ['Prazo projetado (meses)',k.prazoProj]].forEach(function(l){
+      var r=wsR.addRow([l[0],l[1]==null?'—':l[1]]);
+      r.getCell(1).font={bold:true,size:10}; r.getCell(2).font={size:10};
+      if(typeof l[1]==='number')r.getCell(2).numFmt=Math.abs(l[1])>100?'#,##0.00':'0.00';
+    });
+    var wsC=wb.addWorksheet('Curva S',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsC,['Mês','COTA (%)','COTR (%)','CRTR (%)','COTA (R$)','COTR (R$)','CRTR (R$)','IDP','IDC','IDP-t'],
+      [12,12,12,12,16,16,16,10,10,10]);
+    D.meses.forEach(function(m,i){
+      var s=D.serie[i];
+      var r=wsC.addRow([orcMesLabel(m),100*D.PV[i],i<=D.corte?100*D.EV[i]:null,
+        (i<=D.corte&&D.AC[i]>0)?100*D.AC[i]/D.BAC:null,
+        D.PV[i]*D.BAC,i<=D.corte?D.EV[i]*D.BAC:null,i<=D.corte?D.AC[i]:null,
+        s?s.IDP:null,s?s.IDC:null,s?s.IDPt:null]);
+      r.font={size:10};
+      [2,3,4].forEach(function(c){ r.getCell(c).numFmt='0.0'; });
+      [5,6,7].forEach(function(c){ r.getCell(c).numFmt='#,##0.00'; });
+      [8,9,10].forEach(function(c){ r.getCell(c).numFmt='0.00'; });
+    });
+    var wsA=wb.addWorksheet('Atividades',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsA,['Seção','Macro-serviço','Código','Atividade','Peso (R$)','Peso (%)','Previsto (%)','Realizado (%)','Desvio (pp)','Serviço do app'],
+      [18,26,12,42,16,11,13,14,12,24]);
+    D.linhas.forEach(function(L){
+      var it=L.no.it, raiz=D.arv.mapa[it.sec+'|'+String(it.cod).split('.')[0]];
+      var sv=SERV.filter(function(s){ return s.id===it.svc; })[0];
+      var r=wsA.addRow([orcSecaoNome(it.sec),raiz?raiz.it.nome:'',it.cod,it.nome,L.no.peso,100*L.w,
+        100*L.pv[D.corte],100*L.ev[D.corte],100*(L.ev[D.corte]-L.pv[D.corte])*L.w,sv?sv.n:'']);
+      r.font={size:10};
+      r.getCell(5).numFmt='#,##0.00';
+      [6,7,8,9].forEach(function(c){ r.getCell(c).numFmt='0.00'; });
+    });
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='ava_'+nome+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('AVA exportada.');
   }
   /* ================= Exportar histograma em Excel =================
    * O que vai: o quadro previsto × realizado como está na tela (P / Próprio / Terceiro / Total,

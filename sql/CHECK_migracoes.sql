@@ -29,6 +29,7 @@ select * from (
   ('29_estacas_geometria',          (select count(*)>0 from c where table_name='lote_estacas' and column_name='largura_m')),
   ('30_estaca_volume_projeto',      (select count(*)>0 from c where table_name='estaca_quantidades' and column_name='volume_projeto')),
   ('31_estaca_volume_realizado',    (select count(*)>0 from c where table_name='estaca_quantidades' and column_name='volume_realizado')),
+  ('32_orcamento_ava',             (select count(*)>0 from c where table_name='obras' and column_name='orcamento')),
   ('25_fix_views_security_invoker', (select coalesce(bool_and(array_to_string(cl.reloptions,',') like '%security_invoker=%'),false)
                                        from pg_class cl join pg_namespace n on n.oid=cl.relnamespace
                                       where n.nspname='public' and cl.relname in ('vw_ppc_semanal','vw_curva_s')))
