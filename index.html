@@ -9550,17 +9550,36 @@
     calRows.forEach(function(r,i){ if(r.working)calIdx[r.working]=i+1; isHoliday.push(!!r.isHoliday); });
     var twCal=calRows.length||tw;
     var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<twCal;w++)out[si].push(0);});
-    var spanByTeam={}; // "si::team" -> {min,max} (semanas de trabalho)
+    /* O recurso só conta nas semanas em que o serviço está SENDO EXECUTADO. Antes a equipe era
+     * contada do primeiro ao último segmento dela, de ponta a ponta: se trabalhava nas semanas
+     * 1-2, parava esperando a predecessora e voltava na 12, o histograma cobrava equipe mobilizada
+     * nas semanas 3-11, em que não havia serviço nenhum.
+     *
+     * A exceção é o recesso: equipe não desmobiliza por causa de feriado. Então o vão entre duas
+     * semanas trabalhadas só continua contando quando TODAS as semanas de calendário no meio são
+     * de parada — se houver semana útil no vão, é ociosidade de verdade e não entra. */
+    var ocupaByTeam={}; // "si::team" -> {si, w:{semana de trabalho: true}}
     segs.forEach(function(sg){
       if(!sg.dur)return;
-      var k=sg.si+'::'+sg.team, start=sg.start, end=sg.start+sg.dur-1;
-      var cur=spanByTeam[k];
-      if(!cur)spanByTeam[k]={si:sg.si,min:start,max:end};
-      else{ cur.min=Math.min(cur.min,start); cur.max=Math.max(cur.max,end); }
+      var k=sg.si+'::'+sg.team;
+      var cur=ocupaByTeam[k]||(ocupaByTeam[k]={si:sg.si,w:{}});
+      for(var w=sg.start;w<=sg.start+sg.dur-1;w++)cur.w[w]=true;
     });
-    Object.keys(spanByTeam).forEach(function(k){
-      var span=spanByTeam[k], from=calIdx[Math.max(1,span.min)]||1, to=calIdx[Math.min(tw,span.max)]||twCal;
-      for(var w=from;w<=to;w++){ if(out[span.si])out[span.si][w-1]+=1; }
+    Object.keys(ocupaByTeam).forEach(function(k){
+      var eq=ocupaByTeam[k], marcas=[];
+      Object.keys(eq.w).forEach(function(w){ var c=calIdx[+w]; if(c)marcas.push(c); });
+      marcas.sort(function(a,b){ return a-b; });
+      if(!marcas.length)return;
+      var ativo={};
+      marcas.forEach(function(c){ ativo[c]=true; });
+      for(var i=1;i<marcas.length;i++){
+        var a=marcas[i-1], b=marcas[i];
+        if(b-a<=1)continue;
+        var soParada=true;
+        for(var c2=a+1;c2<b;c2++)if(!isHoliday[c2-1]){ soParada=false; break; }
+        if(soParada)for(var c3=a+1;c3<b;c3++)ativo[c3]=true;
+      }
+      Object.keys(ativo).forEach(function(c){ if(out[eq.si])out[eq.si][+c-1]+=1; });
     });
     return {teamsByService:out,tw:twCal,isHoliday:isHoliday};
   }
