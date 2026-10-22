@@ -3586,6 +3586,13 @@
 
   var HIST_FILTER='todos', HIST_SVC=null;
   var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
+  /* Como contar a equipe entre dois segmentos do mesmo serviço:
+   *   'execucao' — só as semanas com serviço acontecendo. É o custo de quem só paga quem trabalha.
+   *   'continuo' — da mobilização à desmobilização, inclusive as semanas paradas no meio. É o
+   *                custo de quem mantém a equipe na obra esperando a frente liberar.
+   * As duas leituras são legítimas e dão números diferentes; a obra escolhe. */
+  var HIST_MODO='execucao';
+  function histModoLabel(m){ return (m||HIST_MODO)==='continuo'?'Da mobilização à desmobilização':'Durante a execução'; }
   // Classificação da mão de obra (característica da função, independente de onde está alocada):
   // 'todas'|'mod' (direta)|'moi' (indireta)|'sem' (função ainda sem classificação).
   var HIST_CLASSE='todas';   // mão de obra: todas|direto|indireto|terceirizado|sem
@@ -4351,12 +4358,18 @@
     var classeEqBtns=[['todos','Total'],['proprio','Só Tripoloni'],['terceiro','Só terceiro']].map(function(o){
       return '<button class="subtab'+(HIST_CLASSE_EQ===o[0]?' active':'')+'" data-histclasseeq="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
+    var modoBtns=[['execucao','Durante a execução'],['continuo','Mobilização → desmobilização']].map(function(o){
+      return '<button class="subtab'+(HIST_MODO===o[0]?' active':'')+'" data-histmodo="'+o[0]+'" title="'+
+        (o[0]==='continuo'?'Conta a equipe da primeira à última semana dela, inclusive as semanas paradas entre frentes'
+                          :'Conta a equipe só nas semanas com serviço acontecendo (o recesso continua contando)')+'">'+o[1]+'</button>';
+    }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
       '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="Divide o realizado de equipamento entre frota própria e locada; o previsto é geral">Realizado de equipamento:</span>'+classeEqBtns+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="O que fazer com a semana em que a equipe está na obra mas sem frente liberada">Contagem:</span>'+modoBtns+'</div>'+
       '</div>',
       RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
@@ -8002,6 +8015,9 @@
       document.querySelectorAll('[data-historigem]').forEach(function(b){
         b.addEventListener('click',function(){HIST_ORIGEM=b.getAttribute('data-historigem'); go('cr-hist');});
       });
+      document.querySelectorAll('[data-histmodo]').forEach(function(b){
+        b.addEventListener('click',function(){HIST_MODO=b.getAttribute('data-histmodo'); go('cr-hist');});
+      });
       document.querySelectorAll('[data-catclasse]').forEach(function(sel){
         sel.addEventListener('change',function(){
           setClasseCat(sel.getAttribute('data-catclasse'),sel.value,sel.getAttribute('data-cattipo')||'funcao');
@@ -8077,7 +8093,7 @@
       if(saveReal)saveReal.addEventListener('click',saveRealizadoAll);
       abcWire();
       var histExp=document.getElementById('histExp');
-      if(histExp)histExp.addEventListener('click',function(){ comCarga(exportHistogramaExcel); });
+      if(histExp)histExp.addEventListener('click',histExportDialogo);
       var realImp=document.getElementById('histRealImp');
       if(realImp)realImp.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importRealizadoWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       var dpImp=document.getElementById('histDpCeqImp');
@@ -9539,7 +9555,7 @@
    * nesse serviço — mesmo em semanas "vazias" entre um lote e outro da mesma equipe — sem
    * desmobilizar e remobilizar nesse intervalo. Por isso agrupa por serviço+equipe (do primeiro
    * início ao último término), em vez de olhar semana a semana se há produção naquela semana. */
-  function activeTeamsByWeek(){
+  function activeTeamsByWeek(modo){
     var segsAll=buildSchedule(); var tw=1; segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
     // Filtro global de lotes: conta só as equipes trabalhando nos lotes em exibição. O horizonte
     // (tw) continua o do cronograma integrado inteiro, pra alinhar com as outras visões.
@@ -9550,14 +9566,13 @@
     calRows.forEach(function(r,i){ if(r.working)calIdx[r.working]=i+1; isHoliday.push(!!r.isHoliday); });
     var twCal=calRows.length||tw;
     var out={}; SERV.forEach(function(s,si){out[si]=[];for(var w=0;w<twCal;w++)out[si].push(0);});
-    /* O recurso só conta nas semanas em que o serviço está SENDO EXECUTADO. Antes a equipe era
-     * contada do primeiro ao último segmento dela, de ponta a ponta: se trabalhava nas semanas
-     * 1-2, parava esperando a predecessora e voltava na 12, o histograma cobrava equipe mobilizada
-     * nas semanas 3-11, em que não havia serviço nenhum.
+    /* Duas leituras, e a diferença é justamente a ociosidade entre frentes:
+     *   'execucao' — a equipe conta só nas semanas com serviço acontecendo.
+     *   'continuo' — conta da primeira à última semana dela, mobilização a desmobilização.
      *
-     * A exceção é o recesso: equipe não desmobiliza por causa de feriado. Então o vão entre duas
-     * semanas trabalhadas só continua contando quando TODAS as semanas de calendário no meio são
-     * de parada — se houver semana útil no vão, é ociosidade de verdade e não entra. */
+     * Nos dois modos o RECESSO continua contando: equipe não desmobiliza por causa de feriado.
+     * Isso é exato porque em buildCalendarRows uma linha ou tem semana de trabalho ou é parada,
+     * nunca as duas — então "vão só de linhas sem semana de trabalho" é exatamente um recesso. */
     var ocupaByTeam={}; // "si::team" -> {si, w:{semana de trabalho: true}}
     segs.forEach(function(sg){
       if(!sg.dur)return;
@@ -9565,6 +9580,7 @@
       var cur=ocupaByTeam[k]||(ocupaByTeam[k]={si:sg.si,w:{}});
       for(var w=sg.start;w<=sg.start+sg.dur-1;w++)cur.w[w]=true;
     });
+    var continuo=(modo||HIST_MODO)==='continuo';
     Object.keys(ocupaByTeam).forEach(function(k){
       var eq=ocupaByTeam[k], marcas=[];
       Object.keys(eq.w).forEach(function(w){ var c=calIdx[+w]; if(c)marcas.push(c); });
@@ -9575,9 +9591,12 @@
       for(var i=1;i<marcas.length;i++){
         var a=marcas[i-1], b=marcas[i];
         if(b-a<=1)continue;
-        var soParada=true;
-        for(var c2=a+1;c2<b;c2++)if(!isHoliday[c2-1]){ soParada=false; break; }
-        if(soParada)for(var c3=a+1;c3<b;c3++)ativo[c3]=true;
+        var preenche=continuo;
+        if(!preenche){
+          preenche=true;
+          for(var c2=a+1;c2<b;c2++)if(!isHoliday[c2-1]){ preenche=false; break; }
+        }
+        if(preenche)for(var c3=a+1;c3<b;c3++)ativo[c3]=true;
       }
       Object.keys(ativo).forEach(function(c){ if(out[eq.si])out[eq.si][+c-1]+=1; });
     });
@@ -9588,8 +9607,8 @@
    * esses itens não têm equipes/cronograma próprio (indireto). byResource é a soma dos dois —
    * byResourceDireto/byResourceIndireto ficam disponíveis à parte pra quem quiser decompor
    * (gráfico, filtro por origem). */
-  function computeHistogram(){
-    var atbw=activeTeamsByWeek(), tw=atbw.tw, teamsByService=atbw.teamsByService, isHoliday=atbw.isHoliday||[];
+  function computeHistogram(modo){
+    var atbw=activeTeamsByWeek(modo), tw=atbw.tw, teamsByService=atbw.teamsByService, isHoliday=atbw.isHoliday||[];
     var byResource={}, byResourceDireto={}, byResourceIndireto={};
     RECURSOS.forEach(function(r){
       byResource[r.id]=[]; byResourceDireto[r.id]=[]; byResourceIndireto[r.id]=[];
@@ -11661,8 +11680,8 @@
    * exibição têm serviço. Antes ele varria a obra inteira, e aí o arquivo não batia com a tela —
    * a diferença era o apoio administrativo (que não tem lote e vale em todas as semanas) mais o
    * realizado das semanas fora da janela. */
-  function histXlsDados(){
-    var hist=computeHistogram(), twObra=hist.tw||0;
+  function histXlsDados(modo){
+    var hist=computeHistogram(modo), twObra=hist.tw||0;
     var jan=histJanelaSemanas(twObra);
     var semanas=[]; for(var w=jan.ini;w<=jan.fim;w++)semanas.push(w);
     var tw=semanas.length;
@@ -11695,7 +11714,7 @@
     }
     var cats=[], porCat={};
     linhas.forEach(function(L){ if(!porCat[L.cat]){porCat[L.cat]=[];cats.push(L.cat);} porCat[L.cat].push(L); });
-    return {hist:hist,tw:tw,twObra:twObra,jan:jan,semanas:semanas,datas:datas,
+    return {hist:hist,modo:modo||HIST_MODO,tw:tw,twObra:twObra,jan:jan,semanas:semanas,datas:datas,
       linhas:linhas,cats:cats,porCat:porCat,soma:soma,
       geral:soma(function(){return true;}),
       mo:soma(function(L){return L.r.tipo==='funcao';}),
@@ -11719,8 +11738,8 @@
     var hm=Math.max(1,orcNum(ABC.hmes)||176), dm=Math.max(1,orcNum(ABC.dmes)||22), sm=Math.max(1,orcNum(ABC.smes)||4);
     return {hm:hm,dm:dm,sm:sm,hSem:hm/sm,hDia:hm/dm,dSem:dm/sm};
   }
-  function abcDados(){
-    var D=histXlsDados(), F=abcFatores();
+  function abcDados(modo){
+    var D=histXlsDados(modo), F=abcFatores();
     var linhas=D.linhas.map(function(L){
       var rs=(ABC.base==='realizado')?L.somaR:L.somaP;
       return {r:L.r,cat:L.cat,rsP:L.somaP,rsR:L.somaR,rs:rs,pico:L.pico,
@@ -11739,7 +11758,7 @@
     });
     var totH=0,totD=0,totHP=0,totHR=0;
     linhas.forEach(function(x){ totH+=x.horas; totD+=x.dias; totHP+=x.horasP; totHR+=x.horasR; });
-    return {linhas:linhas,total:total,F:F,tw:D.tw,
+    return {linhas:linhas,total:total,F:F,tw:D.tw,modo:D.modo,
       totH:totH,totD:totD,totHP:totHP,totHR:totHR,cA:cA,cB:cB};
   }
   function abcClasseCor(c){ return c==='A'?'--crit':(c==='B'?'--warn':'--good'); }
@@ -11895,6 +11914,7 @@
      ['Horas por mês',A.F.hm],['Dias por mês',A.F.dm],['Semanas por mês',A.F.sm],
      ['Horas por semana',A.F.hSem],['Horas por dia',A.F.hDia],['Dias por semana',A.F.dSem],
      ['Corte da classe A (%)',A.cA],['Corte da classe B (%)',A.cB],
+     ['Contagem da equipe',histModoLabel(A.modo)],
      ['Lotes','filtroLotes'],
      ['Observação','Mão de obra e equipamento usam a mesma base de horas: 176 h/mês é disponibilidade de calendário, não produtividade.']
     ].map(function(l){ return l[1]==='filtroLotes'?[l[0],(filtroLotesTexto()||'todos os lotes da obra').replace('Lotes em exibição: ','')]:l; })
@@ -11926,9 +11946,60 @@
     setTimeout(function(){ URL.revokeObjectURL(url); },2000);
     toast('Curva ABC exportada.');
   }
-  async function exportHistogramaExcel(){
+  /** Pergunta como contar a equipe antes de gerar o arquivo. São duas leituras legítimas e com
+   *  números diferentes — é melhor escolher na hora de exportar do que descobrir depois. */
+  function histExportDialogo(){
+    var escolhido=HIST_MODO;
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    function cartao(v,tit,txt){
+      return '<button class="btn" data-hmodo="'+v+'" style="text-align:left;padding:10px 12px;height:auto;'+
+        (escolhido===v?'border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)':'')+'">'+
+        '<b>'+tit+'</b><br><span class="note">'+txt+'</span></button>';
+    }
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:520px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Exportar histograma</div>'+
+      '<div class="note" style="margin-bottom:12px">Como contar a equipe nas semanas em que ela está na obra sem frente liberada.</div>'+
+      '<div style="display:flex;flex-direction:column;gap:10px" id="hmodoBox">'+
+        cartao('execucao','Apenas durante a execução','Conta só as semanas com serviço acontecendo. Semana de recesso continua contando — equipe não desmobiliza por feriado.')+
+        cartao('continuo','Contínuo — da mobilização à desmobilização','Conta da primeira à última semana de cada equipe, inclusive as paradas entre uma frente e outra.')+
+      '</div>'+
+      '<div class="note" id="hmodoDif" style="margin-top:10px"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="hmodoCancel">Cancelar</button>'+
+        '<button class="btn primary" id="hmodoOk">Exportar</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    function marca(){
+      back.querySelectorAll('[data-hmodo]').forEach(function(b){
+        var on=b.getAttribute('data-hmodo')===escolhido;
+        b.style.borderColor=on?'var(--accent)':'';
+        b.style.boxShadow=on?'inset 0 0 0 1px var(--accent)':'';
+      });
+      try{
+        var a=histXlsDados('execucao'), c=histXlsDados('continuo');
+        var sa=0,sc=0;
+        for(var i=0;i<a.tw;i++)sa+=a.geral.P[i];
+        for(var j=0;j<c.tw;j++)sc+=c.geral.P[j];
+        var dif=sc-sa;
+        back.querySelector('#hmodoDif').innerHTML=dif>0
+          ? ('Nesta obra a diferença é de <b>'+fmtBR(dif)+' recurso-semana</b> ('+fmtDec(sa>0?100*dif/sa:0,1)+'% a mais no contínuo): são as semanas em que a equipe fica parada entre frentes.')
+          : 'Nesta obra os dois modos dão o mesmo número — nenhuma equipe fica parada entre frentes.';
+      }catch(e){ back.querySelector('#hmodoDif').textContent=''; }
+    }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#hmodoBox').addEventListener('click',function(e){
+      var b=e.target.closest('[data-hmodo]'); if(!b)return;
+      escolhido=b.getAttribute('data-hmodo'); marca();
+    });
+    back.querySelector('#hmodoCancel').addEventListener('click',fecha);
+    back.querySelector('#hmodoOk').addEventListener('click',function(){
+      fecha(); comCarga(function(){ return exportHistogramaExcel(escolhido); });
+    });
+    marca();
+  }
+  async function exportHistogramaExcel(modo){
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
-    var D=histXlsDados();
+    var D=histXlsDados(modo);
     if(!D.tw||!D.linhas.length){ alert('Nada pra exportar: cadastre recursos nas equipes e gere o cronograma.'); return; }
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
     var tw=D.tw, wb=new ExcelJS.Workbook();
@@ -12039,7 +12110,7 @@
     notaV.font={size:9,italic:true};
 
     /* ---- Curva ABC ---- */
-    try{ abcAbaExcel(wb,abcDados()); }catch(e){}
+    try{ abcAbaExcel(wb,abcDados(D.modo)); }catch(e){}
 
     /* ---- Equipe típica de cada serviço ---- */
     var wsE=wb.addWorksheet('Serviços · equipe típica',{views:[{state:'frozen',ySplit:1}]});
@@ -12123,6 +12194,9 @@
      ['Semanas no relatório',tw+' ('+rotSem(calWeekDate(D.jan.ini))+' a '+rotSem(calWeekDate(D.jan.fim))+')'],
      ['Semanas do cronograma inteiro',D.twObra],
      ['Semanas com apontamento',semanasApont],
+     ['Contagem da equipe',histModoLabel(D.modo)+(D.modo==='continuo'
+        ?' — conta as semanas paradas entre frentes'
+        :' — só as semanas com serviço (o recesso conta)')],
      ['Recursos com previsto ou realizado',D.linhas.length],
      ['Mão de obra',D.linhas.filter(function(L){return L.r.tipo==='funcao';}).length],
      ['Equipamentos',D.linhas.filter(function(L){return L.r.tipo==='equipamento';}).length],
