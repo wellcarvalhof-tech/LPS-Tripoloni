@@ -4357,7 +4357,7 @@
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="Divide o realizado de equipamento entre frota própria e locada; o previsto é geral">Realizado de equipamento:</span>'+classeEqBtns+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:44vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -8442,6 +8442,50 @@
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
 
+  /** Primeira e última semana em que os lotes EM EXIBIÇÃO têm serviço. Com o filtro de lotes
+   *  aberto numa frente só, o gráfico não precisa varrer a obra inteira: fora dessa janela as
+   *  barras são de trabalho que o usuário acabou de tirar da tela. */
+  function histJanelaSemanas(tw){
+    var idxs=viewLotIdxs();
+    if(!idxs.length||idxs.length>=LOTS.length)return {ini:1,fim:tw,todos:true,nLotes:LOTS.length};
+    var sel={}; idxs.forEach(function(li){ sel[li]=1; });
+    var ini=0, fim=0;
+    buildSchedule().forEach(function(g){
+      if(!sel[g.li])return;
+      var a=g.start, b=g.start+g.dur-1;
+      if(!ini||a<ini)ini=a;
+      if(b>fim)fim=b;
+    });
+    if(!ini)return {ini:1,fim:tw,todos:true,nLotes:idxs.length};
+    return {ini:Math.max(1,ini),fim:Math.max(Math.max(1,ini),Math.min(tw,fim)),todos:false,nLotes:idxs.length};
+  }
+  /** Quadro de fechamento no canto do gráfico: a semana de referência e o acumulado até ela.
+   *  IAH = realizado ÷ previsto (Índice de Aderência do Histograma). */
+  function histResumoSVG(x,y,dados){
+    var L=140, R=132, W=L+R+22, H=dados.aviso?72:58;
+    var fmtI=function(v){ return v==null?'—':fmtDec(v,2); };
+    var cor=function(v){ return v==null?'var(--muted)':(v<0.9?'var(--crit)':(v<0.98?'var(--warn)':'var(--good)')); };
+    var s='<g transform="translate('+x.toFixed(1)+','+y.toFixed(1)+')">'+
+      '<rect x="0" y="0" width="'+W+'" height="'+H+'" rx="5" fill="var(--surface)" fill-opacity=".94" stroke="var(--line-2)"/>'+
+      '<line x1="'+(L+11)+'" y1="4" x2="'+(L+11)+'" y2="'+(H-4)+'" stroke="var(--line)"/>';
+    var linhas=[
+      ['Previsto '+dados.wk,fmtBR(dados.prevSem),'Previsto acumulado',fmtBR(dados.prevAcum),null],
+      ['Realizado '+dados.wk,fmtBR(dados.realSem),'Realizado acumulado',fmtBR(dados.realAcum),null],
+      ['IAH',fmtI(dados.iahSem),'IAH',fmtI(dados.iahAcum),'idx']
+    ];
+    linhas.forEach(function(ln,i){
+      var yy=15+i*17;
+      var fill1=ln[4]==='idx'?cor(dados.iahSem):'var(--ink)';
+      var fill2=ln[4]==='idx'?cor(dados.iahAcum):'var(--ink)';
+      s+='<text x="6" y="'+yy+'" font-size="9" fill="var(--muted)">'+escAttr(ln[0])+'</text>'+
+         '<text x="'+(L+5)+'" y="'+yy+'" font-size="9.5" text-anchor="end" font-weight="700" fill="'+fill1+'">'+ln[1]+'</text>'+
+         '<text x="'+(L+17)+'" y="'+yy+'" font-size="9" fill="var(--muted)">'+escAttr(ln[2])+'</text>'+
+         '<text x="'+(W-6)+'" y="'+yy+'" font-size="9.5" text-anchor="end" font-weight="700" fill="'+fill2+'">'+ln[3]+'</text>';
+    });
+    if(dados.aviso)
+      s+='<text x="6" y="'+(H-5)+'" font-size="8" fill="var(--warn)">'+escAttr(dados.aviso)+'</text>';
+    return s+'</g>';
+  }
   function renderHistChart(){
     var el=document.getElementById('histSvg'); if(!el)return;
     var hist=computeHistogram(), tw=hist.tw;
@@ -8467,23 +8511,27 @@
       });
       prevWeek.push(p); realWeek.push(r);
     }
+    /* Só as semanas dos lotes em exibição. A escala vem da JANELA, não da obra inteira: com o
+     * filtro numa frente só, antes as barras ficavam espremidas num canto de um eixo vazio. */
+    var jan=histJanelaSemanas(tw), nW=jan.fim-jan.ini+1;
     var W=900,H=290,pl=44,pr=64,pt=26,pb=48,iw=W-pl-pr,ih=H-pt-pb; // pt maior: cabe o rótulo em cima da barra
     var maxVal=1;
-    for(var w2=0;w2<tw;w2++)maxVal=Math.max(maxVal,prevWeek[w2],realWeek[w2]);
-    var xx=function(w3){return pl+iw*w3/tw;}, grpW=iw/tw*0.82, barW=grpW*0.42;
+    for(var w2=jan.ini-1;w2<jan.fim;w2++)maxVal=Math.max(maxVal,prevWeek[w2],realWeek[w2]);
+    var xx=function(i){return pl+iw*i/nW;}, grpW=iw/nW*0.82, barW=grpW*0.42;
     var yy=function(v){return pt+ih-ih*v/maxVal;};
     var s='', steps=4;
     for(var g=0;g<=steps;g++){var val=Math.round(maxVal*g/steps);s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text class="axm" x="'+(pl-6)+'" y="'+(yy(val)+3)+'" text-anchor="end">'+val+'</text>';}
-    var wnAll=[]; for(var wi=0;wi<tw;wi++)wnAll.push(wi+1);
-    s+=weekAxisSVG(wnAll,function(i){return xx(i)+grpW/2;},iw/tw,pt+ih,pl,W-pr);
+    var wnAll=[]; for(var wi=0;wi<nW;wi++)wnAll.push(jan.ini+wi);
+    s+=weekAxisSVG(wnAll,function(i){return xx(i)+grpW/2;},iw/nW,pt+ih,pl,W-pr);
     var hol=hist.isHoliday||[];
-    for(var wh=0;wh<tw;wh++){ if(hol[wh])s+='<rect x="'+xx(wh).toFixed(1)+'" y="'+pt+'" width="'+(iw/tw).toFixed(1)+'" height="'+ih+'" fill="var(--warn)" opacity="0.10"><title>Recesso / feriado — '+rotSem(calWeekDate(wh+1))+' (recursos mobilizados, sem produção)</title></rect>'; }
+    for(var wh=0;wh<nW;wh++){ var wH=jan.ini+wh; if(hol[wH-1])s+='<rect x="'+xx(wh).toFixed(1)+'" y="'+pt+'" width="'+(iw/nW).toFixed(1)+'" height="'+ih+'" fill="var(--warn)" opacity="0.10"><title>Recesso / feriado — '+rotSem(calWeekDate(wH))+' (recursos mobilizados, sem produção)</title></rect>'; }
     // Rótulos de dados: um por barra quando há espaço; em obra longa, um por semana
     // ("previsto·realizado", na vertical) a cada N semanas, pra não virar borrão.
-    var parCabe=barW>=7, fsLbl=parCabe?0:6, passoLbl=parCabe?1:labelStep(iw/tw,fsLbl);
-    for(var w4=0;w4<tw;w4++){
-      var pv=prevWeek[w4], rv=realWeek[w4]; if(pv<=0&&rv<=0)continue;
-      var x0=xx(w4), wkLbl=rotSem(calWeekDate(w4+1));
+    var parCabe=barW>=7, fsLbl=parCabe?0:6, passoLbl=parCabe?1:labelStep(iw/nW,fsLbl);
+    for(var w4=0;w4<nW;w4++){
+      var wReal=jan.ini+w4;
+      var pv=prevWeek[wReal-1], rv=realWeek[wReal-1]; if(pv<=0&&rv<=0)continue;
+      var x0=xx(w4), wkLbl=rotSem(calWeekDate(wReal));
       if(parCabe){
         s+=barLabelSVG(x0+barW/2,yy(pv),barW,pv);
         s+=barLabelSVG(x0+barW*1.15+barW/2,yy(rv),barW,rv);
@@ -8506,11 +8554,44 @@
     // Acumulado no mesmo gráfico (eixo da direita): previsto na obra inteira; realizado só até a
     // última semana com apontamento (depois disso a curva ficaria plana e enganaria — corta ali).
     var lastReal=-1; for(var w5=0;w5<tw;w5++){ if(realWeek[w5]>0)lastReal=w5; }
-    var accP=[], accR=[], sP=0, sR=0;
-    for(var w6=0;w6<tw;w6++){ sP+=prevWeek[w6]; accP.push(sP); if(w6<=lastReal){ sR+=realWeek[w6]; accR.push(sR); } }
-    var wkLabels=[]; for(var w7=0;w7<tw;w7++)wkLabels.push(rotSem(calWeekDate(w7+1)));
+    var accPfull=[], accRfull=[], sP=0, sR=0;
+    for(var w6=0;w6<tw;w6++){ sP+=prevWeek[w6]; accPfull.push(sP); if(w6<=lastReal){ sR+=realWeek[w6]; accRfull.push(sR); } }
+    // O acumulado continua sendo o da obra inteira — só o PEDAÇO da janela é desenhado. Zerar a
+    // curva no começo da janela esconderia tudo o que já foi mobilizado antes dela.
+    var accP=accPfull.slice(jan.ini-1,jan.fim);
+    var accR=(lastReal>=jan.ini-1)?accRfull.slice(jan.ini-1,Math.min(jan.fim,lastReal+1)):[];
+    var wkLabels=[]; for(var w7=0;w7<nW;w7++)wkLabels.push(rotSem(calWeekDate(jan.ini+w7)));
     s+=accLinesSVG({prev:accP,real:accR},function(i){return xx(i)+grpW/2;},W-pr,pt,ih,wkLabels);
+    /* Fechamento no canto superior direito. A semana de referência é a última apontada DENTRO
+     * da janela — é dela que se fala na reunião, e apontar uma semana que não está no gráfico
+     * fazia o IAH acumulado passar de 4,00 com a janela num lote só. O acumulado é o da obra
+     * desde a semana 1, igual à curva acumulada desenhada acima. */
+    var wRef=0;
+    for(var wr=jan.ini;wr<=jan.fim;wr++)if(realWeek[wr-1]>0)wRef=wr;   // última apontada DENTRO da janela
+    if(!wRef){
+      var hj=hojeCalWeek(tw)||0;
+      wRef=(hj>=jan.ini&&hj<=jan.fim)?hj:jan.fim;
+    }
+    wRef=Math.max(jan.ini,Math.min(jan.fim,wRef));
+    var pAc=0,rAc=0;
+    for(var w8=0;w8<wRef;w8++){ pAc+=prevWeek[w8]; rAc+=realWeek[w8]; }
+    var pSem=prevWeek[wRef-1]||0, rSem=realWeek[wRef-1]||0;
+    /* Com filtro de lotes, o previsto encolhe mas o realizado não: o apontamento de recurso é
+     * por recurso e semana, sem lote. Dividir um pelo outro dava IAH 2,88 numa obra que está
+     * atrasada. Então o índice só sai quando os dois lados falam da mesma obra. */
+    var mistura=!jan.todos;
+    s+=histResumoSVG(W-pr-300,pt+3,{wk:rotSem(calWeekDate(wRef)),
+      prevSem:pSem,realSem:rSem,iahSem:(!mistura&&pSem>0)?rSem/pSem:null,
+      prevAcum:pAc,realAcum:rAc,iahAcum:(!mistura&&pAc>0)?rAc/pAc:null,
+      aviso:mistura?'realizado é da obra inteira — apontamento não tem lote':''});
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+    var avisoEl=document.getElementById('histJanela');
+    if(avisoEl)avisoEl.innerHTML=jan.todos
+      ? ''
+      : ('<b>Janela:</b> '+rotSem(calWeekDate(jan.ini))+' a '+rotSem(calWeekDate(jan.fim))+' ('+nW+' semana'+(nW===1?'':'s')+') — '+
+         'o intervalo em que os '+jan.nLotes+' lote(s) em exibição têm serviço. '+
+         '<span style="color:var(--warn)">O <b>previsto</b> já sai só desses lotes, mas o <b>realizado</b> é da obra inteira: '+
+         'o apontamento de recurso é por recurso e semana, sem lote. Por isso o IAH fica em branco com o filtro ligado.</span>');
     if(legEl)legEl.innerHTML='<span><span class="swatch" style="background:var(--line-2);border:1px solid var(--muted)"></span>Previsto</span>'+
       '<span><span class="swatch" style="background:var(--good)"></span>Realizado = previsto</span>'+
       '<span><span class="swatch" style="background:var(--warn)"></span>Realizado abaixo</span>'+
