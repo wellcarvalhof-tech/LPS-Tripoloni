@@ -4365,7 +4365,7 @@
     var cadastro=sectionCard('cadastro','Cadastro histograma','Funções, equipamentos, equipe típica de cada serviço e alocação do apoio administrativo.',null,
       catalogoFuncoes+catalogoEquip+equipe+apoioAloc);
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
-      cadastro+relatorioPeriodoHTML(hist)+totais+servicoPR+grafico+realizadoHTML(hist);
+      cadastro+relatorioPeriodoHTML(hist)+totais+servicoPR+grafico+abcHTML(hist)+realizadoHTML(hist);
   };
 
   function scenarioStats(snap){
@@ -8062,6 +8062,7 @@
       });
       var saveReal=document.getElementById('saveRealizado');
       if(saveReal)saveReal.addEventListener('click',saveRealizadoAll);
+      abcWire();
       var histExp=document.getElementById('histExp');
       if(histExp)histExp.addEventListener('click',function(){ comCarga(exportHistogramaExcel); });
       var realImp=document.getElementById('histRealImp');
@@ -11559,6 +11560,227 @@
       mo:soma(function(L){return L.r.tipo==='funcao';}),
       eq:soma(function(L){return L.r.tipo==='equipamento';})};
   }
+  /* ================= Curva ABC dos recursos =================
+   * O histograma conta RECURSO × SEMANA: dois pedreiros por quatro semanas são oito. Essa é a
+   * unidade de mobilização, e é dela que saem as horas e os dias — não o contrário.
+   *
+   * A conversão é só aritmética, e fica toda à vista porque cada obra usa uma convenção:
+   *   horas por semana = horas do mês ÷ semanas do mês      (176 ÷ 4   = 44 h)
+   *   horas por dia    = horas do mês ÷ dias do mês         (176 ÷ 22  = 8 h)
+   *   dias por semana  = dias do mês ÷ semanas do mês       (22 ÷ 4    = 5,5 dias)
+   * Mão de obra e equipamento usam a MESMA base de horas: 176 h/mês é disponibilidade de
+   * calendário, não produtividade. Equipamento parado no pátio continua custando hora de posse.
+   *
+   * A classificação segue a regra usual: o item que ATRAVESSA o corte entra na classe de cima.
+   * Senão o recurso que sozinho leva 30% da obra cairia em B por um décimo de ponto. */
+  var ABC={hmes:176,dmes:22,smes:4,base:'previsto',corteA:80,corteB:95};
+  function abcFatores(){
+    var hm=Math.max(1,orcNum(ABC.hmes)||176), dm=Math.max(1,orcNum(ABC.dmes)||22), sm=Math.max(1,orcNum(ABC.smes)||4);
+    return {hm:hm,dm:dm,sm:sm,hSem:hm/sm,hDia:hm/dm,dSem:dm/sm};
+  }
+  function abcDados(){
+    var D=histXlsDados(), F=abcFatores();
+    var linhas=D.linhas.map(function(L){
+      var rs=(ABC.base==='realizado')?L.somaR:L.somaP;
+      return {r:L.r,cat:L.cat,rsP:L.somaP,rsR:L.somaR,rs:rs,pico:L.pico,
+        meses:rs/F.sm,horas:rs*F.hSem,dias:rs*F.dSem,
+        horasP:L.somaP*F.hSem,horasR:L.somaR*F.hSem,
+        diasP:L.somaP*F.dSem,diasR:L.somaR*F.dSem};
+    }).filter(function(x){ return x.rs>0; })
+      .sort(function(a,b){ return b.rs-a.rs||String(a.r.n).localeCompare(String(b.r.n)); });
+    var total=0; linhas.forEach(function(x){ total+=x.rs; });
+    var acc=0, cA=orcNum(ABC.corteA)||80, cB=orcNum(ABC.corteB)||95;
+    linhas.forEach(function(x,i){
+      x.rank=i+1;
+      x.pct=total>0?100*x.rs/total:0;
+      var antes=acc; acc+=x.pct; x.acum=acc;
+      x.classe=antes<cA?'A':(antes<cB?'B':'C');
+    });
+    var totH=0,totD=0,totHP=0,totHR=0;
+    linhas.forEach(function(x){ totH+=x.horas; totD+=x.dias; totHP+=x.horasP; totHR+=x.horasR; });
+    return {linhas:linhas,total:total,F:F,tw:D.tw,
+      totH:totH,totD:totD,totHP:totHP,totHR:totHR,cA:cA,cB:cB};
+  }
+  function abcClasseCor(c){ return c==='A'?'--crit':(c==='B'?'--warn':'--good'); }
+  /** Pareto: barra de cada recurso + linha do acumulado, com os cortes A e B marcados. */
+  function abcParetoSVG(el,A){
+    if(!el)return;
+    var lin=A.linhas.slice(0,24), n=lin.length;
+    var W=960,H=300,pl=52,pr=48,pt=16,pb=92, iw=W-pl-pr, ih=H-pt-pb;
+    el.setAttribute('viewBox','0 0 '+W+' '+H);
+    if(!n){ el.innerHTML=''; return; }
+    var mx=0; lin.forEach(function(x){ mx=Math.max(mx,x.pct); }); if(mx<=0)mx=1;
+    var gap=iw/n, bw=Math.max(3,gap*0.62);
+    var yB=function(v){ return pt+ih-ih*v/mx; };
+    var yA=function(v){ return pt+ih-ih*v/100; };
+    var s='';
+    for(var g=0;g<=4;g++){
+      var v=mx*g/4;
+      s+='<line x1="'+pl+'" y1="'+yB(v).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yB(v).toFixed(1)+'" stroke="var(--line)"/>'+
+         '<text class="axm" x="'+(pl-6)+'" y="'+(yB(v)+3).toFixed(1)+'" text-anchor="end">'+fmtDec(v,1)+'%</text>';
+    }
+    [A.cA,A.cB].forEach(function(c,i){
+      s+='<line x1="'+pl+'" y1="'+yA(c).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yA(c).toFixed(1)+'" stroke="var('+(i?'--warn':'--crit')+')" stroke-dasharray="4 3" stroke-opacity=".7"/>'+
+         '<text class="axm" x="'+(W-pr+4)+'" y="'+(yA(c)+3).toFixed(1)+'" fill="var('+(i?'--warn':'--crit')+')">'+c+'%</text>';
+    });
+    s+='<text class="axm" x="'+(W-pr+4)+'" y="'+(yA(0)+3).toFixed(1)+'">0%</text>';
+    var d='';
+    lin.forEach(function(x,i){
+      var cx=pl+gap*i+gap/2;
+      s+='<rect x="'+(cx-bw/2).toFixed(1)+'" y="'+yB(x.pct).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,yB(0)-yB(x.pct)).toFixed(1)+
+        '" fill="var('+abcClasseCor(x.classe)+')" fill-opacity=".85"><title>'+escAttr(x.r.n+'\n'+fmtDec(x.pct,2)+'% · acumulado '+fmtDec(x.acum,1)+'% · classe '+x.classe+'\n'+fmtBR(x.horas)+' h · '+fmtDec(x.dias,1)+' dias')+'</title></rect>';
+      d+=(i?'L':'M')+cx.toFixed(1)+' '+yA(x.acum).toFixed(1)+' ';
+      var nome=String(x.r.n);
+      if(nome.length>22)nome=nome.slice(0,21)+'…';
+      s+='<text class="axm" font-size="8.5" transform="translate('+(cx+3).toFixed(1)+','+(pt+ih+5)+') rotate(55)" text-anchor="start">'+escAttr(nome)+'</text>';
+    });
+    s+='<path d="'+d+'" fill="none" stroke="var(--accent)" stroke-width="2"/>';
+    lin.forEach(function(x,i){
+      var cx=pl+gap*i+gap/2;
+      s+='<circle cx="'+cx.toFixed(1)+'" cy="'+yA(x.acum).toFixed(1)+'" r="2.4" fill="var(--accent)"/>';
+    });
+    el.innerHTML=s;
+  }
+  function abcHTML(hist){
+    if(!RECURSOS.length||!hist.tw)
+      return sectionCard('abc','Curva ABC de recursos','',null,'<div class="note">Cadastre recursos e monte as equipes pra ver a curva ABC.</div>');
+    var A=abcDados(), F=A.F;
+    if(!A.linhas.length)
+      return sectionCard('abc','Curva ABC de recursos','',null,'<div class="note">Nenhum recurso com '+(ABC.base==='realizado'?'realizado apontado':'previsto no cronograma')+'.</div>');
+    var nA=A.linhas.filter(function(x){ return x.classe==='A'; }).length;
+    var nB=A.linhas.filter(function(x){ return x.classe==='B'; }).length;
+    var nC=A.linhas.filter(function(x){ return x.classe==='C'; }).length;
+    var hA=0; A.linhas.forEach(function(x){ if(x.classe==='A')hA+=x.horas; });
+
+    var cfg='<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--line)">'+
+      '<div class="field" style="margin:0"><label>Base do ranking</label>'+
+        '<select class="inp" id="abcBase" style="width:150px">'+
+          '<option value="previsto"'+(ABC.base!=='realizado'?' selected':'')+'>Previsto</option>'+
+          '<option value="realizado"'+(ABC.base==='realizado'?' selected':'')+'>Realizado</option></select></div>'+
+      '<div class="field" style="margin:0"><label>Horas por mês</label><input class="inp" id="abcHM" type="number" min="1" step="1" value="'+F.hm+'" style="width:100px"></div>'+
+      '<div class="field" style="margin:0"><label>Dias por mês</label><input class="inp" id="abcDM" type="number" min="1" step="0.5" value="'+F.dm+'" style="width:100px"></div>'+
+      '<div class="field" style="margin:0"><label>Semanas por mês</label><input class="inp" id="abcSM" type="number" min="1" step="0.0001" value="'+F.sm+'" style="width:110px"></div>'+
+      '<div class="field" style="margin:0"><label>Corte A (%)</label><input class="inp" id="abcCA" type="number" min="1" max="99" step="1" value="'+A.cA+'" style="width:92px"></div>'+
+      '<div class="field" style="margin:0"><label>Corte B (%)</label><input class="inp" id="abcCB" type="number" min="1" max="100" step="1" value="'+A.cB+'" style="width:92px"></div>'+
+      '<div style="margin-left:auto;display:flex;gap:8px;padding-bottom:8px"><button class="btn" id="abcExp">↧ Exportar ABC</button></div>'+
+      '</div>'+
+      '<div class="note" style="margin-bottom:10px">Com esses números: <b>'+fmtDec(F.hSem,1)+' h por semana</b>, '+
+      '<b>'+fmtDec(F.hDia,2)+' h por dia</b> e <b>'+fmtDec(F.dSem,2)+' dias por semana</b>. '+
+      'Mão de obra e equipamento usam a mesma base — 176 h/mês é disponibilidade de calendário, não produtividade.</div>';
+
+    var kpis='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('crit','Classe A',nA+' recurso'+(nA===1?'':'s'),fmtDec(100*hA/Math.max(1,A.totH),1)+'% das horas · até '+A.cA+'% acumulado')+
+      kpi('warn','Classe B',nB+' recurso'+(nB===1?'':'s'),'entre '+A.cA+'% e '+A.cB+'%')+
+      kpi('good','Classe C',nC+' recurso'+(nC===1?'':'s'),'a cauda, acima de '+A.cB+'%')+
+      kpi('info','Total mobilizado',fmtBR(A.totH)+' h',fmtDec(A.totD,0)+' dias · '+fmtDec(A.total/F.sm,1)+' recurso-mês')+
+      '</div>';
+
+    var linhas=A.linhas.map(function(x){
+      return '<tr><td class="r mono">'+x.rank+'</td>'+
+        '<td><span class="pill" style="background:var('+abcClasseCor(x.classe)+');color:#fff;font-weight:700">'+x.classe+'</span></td>'+
+        '<td>'+escAttr(x.r.n)+'</td>'+
+        '<td class="note">'+(x.r.tipo==='equipamento'?'Equipamento':'Mão de obra')+'</td>'+
+        '<td class="note">'+escAttr(x.cat)+'</td>'+
+        '<td class="r mono">'+fmtDec(x.rs,1)+'</td>'+
+        '<td class="r mono">'+fmtDec(x.meses,1)+'</td>'+
+        '<td class="r mono"><b>'+fmtBR(x.horas)+'</b></td>'+
+        '<td class="r mono"><b>'+fmtDec(x.dias,1)+'</b></td>'+
+        '<td class="r mono">'+fmtDec(x.pct,2)+'%</td>'+
+        '<td class="r mono">'+fmtDec(x.acum,1)+'%</td>'+
+        '<td class="r mono note">'+fmtBR(x.horasP)+'</td>'+
+        '<td class="r mono note">'+fmtBR(x.horasR)+'</td></tr>';
+    }).join('');
+    var tabela='<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+      '<th class="r">#</th><th>Classe</th><th style="min-width:200px">Recurso</th><th>Tipo</th><th>Categoria</th>'+
+      '<th class="r" title="Unidade do histograma: um recurso mobilizado por uma semana">Recurso×semana</th>'+
+      '<th class="r">Meses</th><th class="r">Horas</th><th class="r">Dias</th>'+
+      '<th class="r">%</th><th class="r">% acum.</th>'+
+      '<th class="r">h previstas</th><th class="r">h realizadas</th></tr></thead><tbody>'+linhas+
+      '<tr style="background:var(--elev);font-weight:700"><td></td><td></td><td>Total</td><td></td><td></td>'+
+      '<td class="r mono">'+fmtDec(A.total,1)+'</td><td class="r mono">'+fmtDec(A.total/F.sm,1)+'</td>'+
+      '<td class="r mono">'+fmtBR(A.totH)+'</td><td class="r mono">'+fmtDec(A.totD,0)+'</td>'+
+      '<td class="r mono">100%</td><td></td>'+
+      '<td class="r mono">'+fmtBR(A.totHP)+'</td><td class="r mono">'+fmtBR(A.totHR)+'</td></tr>'+
+      '</tbody></table></div>';
+
+    var grafico='<div style="margin-bottom:12px"><svg class="chart" id="abcPareto" style="width:100%;height:auto"></svg>'+
+      (A.linhas.length>24?('<div class="note">Gráfico mostra os 24 maiores; a tabela abaixo traz os '+A.linhas.length+'.</div>'):'')+'</div>';
+
+    return sectionCard('abc','Curva ABC de recursos',
+      'Ranking de mobilização por horas. A unidade do histograma é recurso×semana; horas e dias saem da conversão ao lado.',
+      null, cfg+kpis+grafico+tabela);
+  }
+  function abcWire(){
+    var mapa={abcBase:'base',abcHM:'hmes',abcDM:'dmes',abcSM:'smes',abcCA:'corteA',abcCB:'corteB'};
+    Object.keys(mapa).forEach(function(id){
+      var e=document.getElementById(id); if(!e)return;
+      e.addEventListener('change',function(){
+        ABC[mapa[id]]=(id==='abcBase')?(e.value==='realizado'?'realizado':'previsto'):(orcNum(e.value)||ABC[mapa[id]]);
+        go('cr-hist');
+      });
+    });
+    var x=document.getElementById('abcExp');
+    if(x)x.addEventListener('click',function(){ comCarga(exportAbcExcel); });
+    var el=document.getElementById('abcPareto');
+    if(el&&RECURSOS.length)abcParetoSVG(el,abcDados());
+  }
+  /** Aba da curva ABC, usada no botão próprio e dentro da exportação do histograma. */
+  function abcAbaExcel(wb,A){
+    var ws=wb.addWorksheet('Curva ABC',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(ws,['#','Classe','Recurso','Tipo','Categoria','Recurso×semana','Meses','Horas','Dias',
+      '% do total','% acumulado','Horas previstas','Horas realizadas','Pico simultâneo'],
+      [6,8,34,14,18,16,10,12,10,11,13,16,16,15]);
+    A.linhas.forEach(function(x){
+      var r=ws.addRow([x.rank,x.classe,x.r.n,(x.r.tipo==='equipamento'?'Equipamento':'Mão de obra'),x.cat,
+        x.rs,x.meses,x.horas,x.dias,x.pct,x.acum,x.horasP,x.horasR,x.pico]);
+      r.font={size:10};
+      [6,7,9].forEach(function(c){ r.getCell(c).numFmt='#,##0.0'; });
+      [8,12,13].forEach(function(c){ r.getCell(c).numFmt='#,##0'; });
+      [10,11].forEach(function(c){ r.getCell(c).numFmt='0.00'; });
+      r.getCell(14).numFmt='#,##0.0';
+      var cor=x.classe==='A'?'FFFBE3E3':(x.classe==='B'?'FFFDF3DC':'FFE6F5EA');
+      r.getCell(2).fill={type:'pattern',pattern:'solid',fgColor:{argb:cor}};
+      r.getCell(2).font={size:10,bold:true};
+      r.getCell(2).alignment={horizontal:'center'};
+    });
+    var t=ws.addRow(['','','Total','','',A.total,A.total/A.F.sm,A.totH,A.totD,100,'',A.totHP,A.totHR,'']);
+    t.font={size:10,bold:true};
+    [6,7,9].forEach(function(c){ t.getCell(c).numFmt='#,##0.0'; });
+    [8,12,13].forEach(function(c){ t.getCell(c).numFmt='#,##0'; });
+    ws.addRow([]);
+    [['Base do ranking',ABC.base==='realizado'?'Realizado apontado':'Previsto do cronograma'],
+     ['Horas por mês',A.F.hm],['Dias por mês',A.F.dm],['Semanas por mês',A.F.sm],
+     ['Horas por semana',A.F.hSem],['Horas por dia',A.F.hDia],['Dias por semana',A.F.dSem],
+     ['Corte da classe A (%)',A.cA],['Corte da classe B (%)',A.cB],
+     ['Observação','Mão de obra e equipamento usam a mesma base de horas: 176 h/mês é disponibilidade de calendário, não produtividade.']
+    ].forEach(function(l){
+      var r=ws.addRow(['','',l[0],l[1]]);
+      r.getCell(3).font={size:9,bold:true,italic:true};
+      r.getCell(4).font={size:9,italic:true};
+      if(typeof l[1]==='number')r.getCell(4).numFmt='#,##0.00';
+    });
+    return ws;
+  }
+  async function exportAbcExcel(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
+    var A=abcDados();
+    if(!A.linhas.length){ alert('Nada pra exportar.'); return; }
+    var wb=new ExcelJS.Workbook(); wb.creator='LPS Tripoloni'; wb.created=new Date();
+    abcAbaExcel(wb,A);
+    var GW=940,GH=300;
+    var wsG=wb.addWorksheet('Pareto'); wsG.getColumn(1).width=130;
+    var png=await relGraficoPng(function(el){ abcParetoSVG(el,A); },GW,GH);
+    relColaGrafico(wb,wsG,png,1,'Curva ABC — participação de cada recurso e acumulado',GW,GH);
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='curva_abc_recursos_'+nome+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('Curva ABC exportada.');
+  }
   async function exportHistogramaExcel(){
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
     var D=histXlsDados();
@@ -11667,6 +11889,9 @@
     wsV.addRow([]);
     var notaV=wsV.addRow(['O previsto por serviço vem da equipe típica × equipes ativas na semana. O realizado é apontado por recurso e semana, sem serviço: aqui ele é rateado entre os serviços que previam aquele recurso na semana, proporcional ao previsto de cada um. O que foi apontado sem nenhum serviço prevendo aparece em "Sem serviço previsto".']);
     notaV.font={size:9,italic:true};
+
+    /* ---- Curva ABC ---- */
+    try{ abcAbaExcel(wb,abcDados()); }catch(e){}
 
     /* ---- Equipe típica de cada serviço ---- */
     var wsE=wb.addWorksheet('Serviços · equipe típica',{views:[{state:'frozen',ySplit:1}]});
