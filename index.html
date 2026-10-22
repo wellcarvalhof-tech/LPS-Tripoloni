@@ -3091,6 +3091,7 @@
     });
     wsR.addRow([]);
     [['Fator de homogeneização',D.fator],['Rebaixo no balanço',MASSAS.rebaixo?'sim':'não'],
+     ['Lotes',(filtroLotesTexto()||'todos os lotes da obra').replace('Lotes em exibição: ','')],
      ['Extensão considerada (m)',Math.round(D.extensao)],
      [D.saldo>=0?'Sobra / bota-fora (m³)':'Falta / empréstimo (m³)',Math.round(Math.abs(D.saldo))]].forEach(function(l){
       var r=wsR.addRow(l); r.font={size:10,bold:true};
@@ -5147,7 +5148,12 @@
     var idx={}; SERV.forEach(function(sv,i){ idx[sv.id]=i; });
     var prev=SERV.map(function(_,si){ var t=0; for(var w=1;w<=wq.tw;w++)t+=wq.M[si][w]||0; return t; });
     var real=SERV.map(function(){ return 0; });
+    // O previsto já vem filtrado (weeklyQtyBySvc usa viewSegs); o apontado tem lote, então
+    // filtra também — senão o realizado de um lote escondido aparecia como avanço do que está na tela.
+    var lotIdsP=window._LOTIDS||[];
     (window.PROD_LIST||[]).forEach(function(r){
+      var liP=lotIdsP.indexOf(r.loteId);
+      if(liP>=0&&!lotInView(liP))return;
       var si=idx[r.servId];
       if(si!=null)real[si]+=(+r.qtd||0);
     });
@@ -5290,18 +5296,19 @@
   window.MP_WIN=window.MP_WIN||6;
   window.MP_START=window.MP_START||HOJE_W;
   function mpWindowCells(){
-    var segs=buildSchedule(); var tw=1; segs.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
+    var segsTodos=buildSchedule(); var tw=1; segsTodos.forEach(function(s){tw=Math.max(tw,s.start+s.dur-1);});
+    var segs=viewSegs(segsTodos);   // filtro global de lotes; o horizonte continua o da obra inteira
     var win=window.MP_WIN;
     var start,end;
     if(win==='tudo'){ start=1; end=tw; }
     else { start=Math.max(1,Math.min(window.MP_START,tw)); end=Math.min(tw,start+(+win||6)-1); }
-    var cell={};
+    var cell={}, lotIdxs=viewLotIdxs();
     segs.forEach(function(sg){ if(sg.start+sg.dur-1<start||sg.start>end)return;
       for(var w=Math.max(sg.start,start);w<=Math.min(sg.start+sg.dur-1,end);w++){
         var sub={qty:sg.wq[w-sg.start],color:sg.color,si:sg.si,li:sg.li,team:sg.team,week:w,key:w+'::'+sg.li+'::'+sg.si+'::'+sg.team};
         var k=w+'::'+sg.li;(cell[k]||(cell[k]=[])).push(sub);
       }});
-    return {cell:cell,start:start,end:end,tw:tw};
+    return {cell:cell,start:start,end:end,tw:tw,lotIdxs:lotIdxs};
   }
   /* ================= Médio Prazo · Restrições =================
    * Três abas: Janela (recorte do tempo-caminho — clique numa célula ou no cabeçalho do lote
@@ -5893,13 +5900,14 @@
     var leg='<div class="legend" style="margin-bottom:12px"><span style="font-weight:600">Categorias:</span>'+
       MP_CATS.map(function(c){return '<span><span class="dot" style="background:'+c.color+'"></span>'+c.label+'</span>';}).join('')+
       '<span class="note" style="margin-left:auto">Clique numa célula — ou no nome do lote — pra lançar uma restrição ali.</span></div>';
-    var th='<th>Segunda-feira</th><th>Semana</th>'+LOTS.map(function(l,i){
-      return '<th class="lot"><button class="mp-lotebtn" data-mplote="'+i+'" title="Nova restrição neste lote">'+escAttr(l)+'</button></th>';
+    var th='<th>Segunda-feira</th><th>Semana</th>'+wc.lotIdxs.map(function(i){
+      return '<th class="lot"><button class="mp-lotebtn" data-mplote="'+i+'" title="Nova restrição neste lote">'+escAttr(LOTS[i])+'</button></th>';
     }).join('');
     var body='';
     for(var w=wc.end;w>=wc.start;w--){
       var d=mondayOf(w),tds='';
-      for(var li=0;li<LOTS.length;li++){
+      for(var ci=0;ci<wc.lotIdxs.length;ci++){
+        var li=wc.lotIdxs[ci];
         var subs=wc.cell[w+'::'+li];
         if(!subs){ tds+='<td class="cell"><button class="mp-vazia" data-mpnova="'+w+'::'+li+'::-1::1" title="Nova restrição"></button></td>'; continue; }
         var inner=subs.map(function(sc,i){
@@ -5941,12 +5949,14 @@
     wb.creator='LPS Tripoloni'; wb.created=new Date();
 
     var ws=wb.addWorksheet('Quadro',{views:[{state:'frozen',xSplit:2,ySplit:1}]});
-    relCabecalho(ws,['Segunda-feira','Semana'].concat(LOTS.slice()),
-      [14,10].concat(LOTS.map(function(){ return 18; })));
+    var colLotes=wc.lotIdxs.map(function(li){ return LOTS[li]; });
+    relCabecalho(ws,['Segunda-feira','Semana'].concat(colLotes),
+      [14,10].concat(colLotes.map(function(){ return 18; })));
     for(var w=wc.end;w>=wc.start;w--){
       var linha=[fmtDate(mondayOf(w)),rotSem(mondayOf(w))];
       var marca=[];
-      for(var li=0;li<LOTS.length;li++){
+      for(var ci=0;ci<wc.lotIdxs.length;ci++){
+        var li=wc.lotIdxs[ci];
         var subs=wc.cell[w+'::'+li]||[];
         if(!subs.length){ linha.push(''); marca.push(null); continue; }
         var txt=[], rs=[];
@@ -5980,6 +5990,7 @@
     MP.slice().sort(function(a,b){ return (a.semana||0)-(b.semana||0); }).forEach(function(r){
       if(r.semana==null||r.semana<wc.start||r.semana>wc.end)return;
       var li=lotIds.indexOf(r.lote_id);
+      if(li>=0&&wc.lotIdxs.indexOf(li)<0)return;   // fora dos lotes em exibição
       var sv=SERV.filter(function(x){ return x.id===r.servico_id; })[0];
       var sit=MP_SITS[mpSit(r)]||{lab:''};
       var lin=wsR.addRow([r.semana,rotSem(mondayOf(r.semana)),fmtDate(mondayOf(r.semana)),
@@ -5995,6 +6006,8 @@
       lin.getCell(9).font={size:10,color:{argb:pickFont('#'+cc)==='#ffffff'?'FFFFFFFF':'FF0A0A0A'}};
     });
     if(wsR.rowCount===1)wsR.addRow(['(nenhuma restrição nesta janela)']);
+    var fMP=filtroLotesTexto();
+    if(fMP){ ws.addRow([]); var nMP=ws.addRow([fMP]); nMP.font={size:9,italic:true}; }
 
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
@@ -8164,6 +8177,15 @@
   function lotInView(li){ var set=lotViewSet(); if(!set)return true; var id=(window._LOTIDS||[])[li]; return !!(id&&set[id]); }
   function viewLotIdxs(){ var out=[]; LOTS.forEach(function(l,li){ if(lotInView(li))out.push(li); }); return out; }
   function viewSegs(segs){ return lotViewSet()?(segs||[]).filter(function(sg){return lotInView(sg.li);}):segs; }
+  /** Uma linha dizendo de quais lotes o relatório está falando. Relatório filtrado que não diz
+   *  que está filtrado vira número errado na mão de quem recebe o arquivo. '' quando é a obra toda. */
+  function filtroLotesTexto(){
+    if(!lotViewSet())return '';
+    var idxs=viewLotIdxs();
+    var nomes=idxs.map(function(li){ return LOTS[li]; });
+    var lista=nomes.length>8?(nomes.slice(0,8).join(', ')+' +'+(nomes.length-8)):nomes.join(', ');
+    return 'Lotes em exibição: '+lista+' ('+idxs.length+' de '+LOTS.length+')';
+  }
   function lotViewKey(){ return 'lps-tripoloni-lotview-'+(selectedObra?selectedObra.id:''); }
   function loadLotView(){
     try{ var raw=safeStore.getItem(lotViewKey()); LOT_VIEW=raw?JSON.parse(raw):null; }catch(e){ LOT_VIEW=null; }
@@ -8576,22 +8598,22 @@
     var pAc=0,rAc=0;
     for(var w8=0;w8<wRef;w8++){ pAc+=prevWeek[w8]; rAc+=realWeek[w8]; }
     var pSem=prevWeek[wRef-1]||0, rSem=realWeek[wRef-1]||0;
-    /* Com filtro de lotes, o previsto encolhe mas o realizado não: o apontamento de recurso é
-     * por recurso e semana, sem lote. Dividir um pelo outro dava IAH 2,88 numa obra que está
-     * atrasada. Então o índice só sai quando os dois lados falam da mesma obra. */
+    /* O apontamento de recurso não tem lote: é por recurso e semana. Com filtro de lotes ligado,
+     * o realizado é ATRIBUÍDO aos lotes em exibição — decisão de quem opera, registrada aqui pra
+     * quem ler o número saber o que está comparando. */
     var mistura=!jan.todos;
     s+=histResumoSVG(W-pr-300,pt+3,{wk:rotSem(calWeekDate(wRef)),
-      prevSem:pSem,realSem:rSem,iahSem:(!mistura&&pSem>0)?rSem/pSem:null,
-      prevAcum:pAc,realAcum:rAc,iahAcum:(!mistura&&pAc>0)?rAc/pAc:null,
-      aviso:mistura?'realizado é da obra inteira — apontamento não tem lote':''});
+      prevSem:pSem,realSem:rSem,iahSem:pSem>0?rSem/pSem:null,
+      prevAcum:pAc,realAcum:rAc,iahAcum:pAc>0?rAc/pAc:null,
+      aviso:mistura?'realizado atribuído aos lotes em exibição':''});
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
     var avisoEl=document.getElementById('histJanela');
     if(avisoEl)avisoEl.innerHTML=jan.todos
       ? ''
       : ('<b>Janela:</b> '+rotSem(calWeekDate(jan.ini))+' a '+rotSem(calWeekDate(jan.fim))+' ('+nW+' semana'+(nW===1?'':'s')+') — '+
          'o intervalo em que os '+jan.nLotes+' lote(s) em exibição têm serviço. '+
-         '<span style="color:var(--warn)">O <b>previsto</b> já sai só desses lotes, mas o <b>realizado</b> é da obra inteira: '+
-         'o apontamento de recurso é por recurso e semana, sem lote. Por isso o IAH fica em branco com o filtro ligado.</span>');
+         '<span style="color:var(--warn)">O <b>previsto</b> sai só desses lotes. O apontamento de recurso não tem lote '+
+         '(é por recurso e semana), então o <b>realizado</b> apontado é atribuído inteiro a eles — é o que o IAH compara.</span>');
     if(legEl)legEl.innerHTML='<span><span class="swatch" style="background:var(--line-2);border:1px solid var(--muted)"></span>Previsto</span>'+
       '<span><span class="swatch" style="background:var(--good)"></span>Realizado = previsto</span>'+
       '<span><span class="swatch" style="background:var(--warn)"></span>Realizado abaixo</span>'+
@@ -11137,11 +11159,16 @@
   function avaAvancoServico(svcId,mes){
     var si=-1; SERV.forEach(function(s,i){ if(s.id===svcId)si=i; });
     if(si<0)return null;
-    var total=0; (QTY||[]).forEach(function(l){ total+=orcNum(l[si]); });
+    // Filtro de lotes dos DOIS lados: quantidade cadastrada e produção apontada. Filtrar só o
+    // numerador faria o avanço despencar; só o denominador, estourar.
+    var idxs=viewLotIdxs(), lotIds=window._LOTIDS||[];
+    var total=0; idxs.forEach(function(li){ total+=orcNum((QTY[li]||[])[si]); });
     if(!(total>0))return null;
     var lim=avaFimDoMes(mes).getTime(), feito=0;
     (window.PROD_LIST||[]).forEach(function(p){
       if(p.servId!==svcId)return;
+      var lp=lotIds.indexOf(p.loteId);
+      if(lp>=0&&!lotInView(lp))return;
       var d=new Date(String(p.data)+'T12:00:00');
       if(d.getTime()<=lim)feito+=orcNum(p.qtd);
     });
@@ -11442,8 +11469,12 @@
     var tabs='<div class="subtabs" style="margin-bottom:12px">'+
       '<button class="subtab'+(AVA_TAB==='painel'?' active':'')+'" data-avatab="painel">Painel</button>'+
       '<button class="subtab'+(AVA_TAB==='lanc'?' active':'')+'" data-avatab="lanc">Lançamentos</button></div>';
+    var fAva=filtroLotesTexto();
+    var avisoAva=fAva?('<div class="banner" style="margin-bottom:12px">'+escAttr(fAva)+'. '+
+      'O <b>peso</b> de cada atividade vem do orçamento, que não tem lote — ele continua o do contrato inteiro. '+
+      'Já o <b>avanço</b> dos serviços vinculados é o produzido ÷ quantidade cadastrada <b>desses lotes</b>.</div>'):'';
     return head('AVA — Análise do Valor Agregado','COTA, COTR e CRTR acumulados por mês, na base financeira do orçamento importado.',acoes)+
-      tabs+(AVA_TAB==='lanc'?avaLancHTML(D):avaPainelHTML(D));
+      tabs+avisoAva+(AVA_TAB==='lanc'?avaLancHTML(D):avaPainelHTML(D));
   };
   function avaDraw(){
     if(!orcTem()||AVA_TAB!=='painel')return;
@@ -11512,6 +11543,7 @@
     var wsR=wb.addWorksheet('Resumo'); wsR.columns=[{width:40},{width:26}];
     [['Obra',(window._OBRA&&window._OBRA.nome)||''],['Mês de corte',orcMesLabel(D.meses[D.corte])],
      ['Base do peso',O.cfg.base==='venda'?'Faturamento':'Custo'],
+     ['Lotes',(filtroLotesTexto()||'todos os lotes da obra').replace('Lotes em exibição: ','')],
      ['BAC — orçamento',k.BAC],['COTA — previsto (R$)',k.PV],['COTA — previsto (%)',100*k.PVpct],
      ['COTR — agregado (R$)',k.EV],['COTR — agregado (%)',100*k.EVpct],['CRTR — custo real (R$)',k.AC],
      ['VPR — variação de prazo (R$)',k.VPR],['VC — variação de custo (R$)',k.VC],
@@ -11833,8 +11865,10 @@
      ['Horas por mês',A.F.hm],['Dias por mês',A.F.dm],['Semanas por mês',A.F.sm],
      ['Horas por semana',A.F.hSem],['Horas por dia',A.F.hDia],['Dias por semana',A.F.dSem],
      ['Corte da classe A (%)',A.cA],['Corte da classe B (%)',A.cB],
+     ['Lotes','filtroLotes'],
      ['Observação','Mão de obra e equipamento usam a mesma base de horas: 176 h/mês é disponibilidade de calendário, não produtividade.']
-    ].forEach(function(l){
+    ].map(function(l){ return l[1]==='filtroLotes'?[l[0],(filtroLotesTexto()||'todos os lotes da obra').replace('Lotes em exibição: ','')]:l; })
+     .forEach(function(l){
       var r=ws.addRow(['','',l[0],l[1]]);
       r.getCell(3).font={size:9,bold:true,italic:true};
       r.getCell(4).font={size:9,italic:true};
@@ -12065,7 +12099,13 @@
       if(typeof l[1]==='number')r.getCell(2).numFmt='#,##0.#';
     });
     wsR.addRow([]);
-    var nota=wsR.addRow(['Exporta todos os recursos com previsto ou realizado, independente do filtro aberto na tela. O previsto sai do cronograma × equipe típica; o realizado, dos apontamentos semanais por recurso.']);
+    var filtroTxt=filtroLotesTexto();
+    if(filtroTxt){
+      var lf=wsR.addRow(['Filtro de lotes',filtroTxt.replace('Lotes em exibição: ','')]);
+      lf.getCell(1).font={bold:true,size:10}; lf.getCell(2).font={size:10};
+    }
+    wsR.addRow([]);
+    var nota=wsR.addRow(['Traz todos os recursos com previsto ou realizado, independente do filtro de TIPO aberto na tela. O previsto sai do cronograma × equipe típica e respeita o filtro de lotes; o realizado vem dos apontamentos semanais por recurso, que não têm lote — com filtro ligado, ele é atribuído aos lotes em exibição.']);
     nota.font={size:9,italic:true};
 
     var buf=await wb.xlsx.writeBuffer();
@@ -12108,6 +12148,7 @@
      ['semana_inicio',fmtDate(mondayOf(1)),'segunda-feira da semana 1'],
      ['num_semanas',tw,'horizonte do cronograma'],
      ['lotes',lotIdxs.length+' de '+LOTS.length,'lotes em exibição / total'],
+     ['lotes_nomes',(filtroLotesTexto()||'todos os lotes da obra').replace('Lotes em exibição: ',''),'quais lotes este relatório cobre'],
      ['servicos',SERV.length,'serviços cadastrados'],
      ['dias_uteis_semana',DIAS_SEM,'base de cálculo das durações'],
      ['observacao','Sem colunas em R$: o app não tem custo unitário por serviço.','']
