@@ -3710,7 +3710,10 @@
     if(!cMO||cMO==='todas')return true;
     return cMO==='sem'?!resClasse(r):resClasse(r)===cMO;
   }
-  var HIST_OPEN={cadastro:false}; // o grupo "Cadastro histograma" começa recolhido — é configuração, não análise do dia a dia
+  /* A aba abre com tudo recolhido, menos o gráfico: ele é o que se olha primeiro, e sete cards
+   * abertos de uma vez faziam a página nascer com metros de rolagem. Quem precisa de um card
+   * abre; o estado vale enquanto a página fica aberta e volta ao padrão no próximo acesso. */
+  var HIST_OPEN={grafico:true};
   var REP_FROM=null, REP_TO=null, REP_TIPO='todos'; // relatório do período (semanas do projeto) e filtro de tipo
   // Mesmos recortes do gráfico: origem (serviços × apoio) e classificação da mão de obra.
   var REP_ORIGEM='todos', REP_CLASSE='todas', REP_CLASSE_EQ='todos';
@@ -3722,7 +3725,7 @@
   var SVCPR_FILTER='todos', SVCPR_OPEN={};
   function sectionCard(key,title,note,actionsHtml,bodyHtml){
     if(isMobile()&&MOBILE_HIST_OCULTA[key])return ''; // cadastro e apontamento ficam fora do celular
-    var open=HIST_OPEN[key]!==false;
+    var open=HIST_OPEN[key]===true;
     return '<div class="card" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;'+(open?'margin-bottom:10px':'')+'">'+
       '<div style="display:flex;align-items:flex-start;gap:6px"><button class="iconbtn" data-histtoggle="'+key+'" title="'+(open?'Recolher':'Expandir')+'">'+(open?'▾':'▸')+'</button>'+
       '<div><div class="eyebrow" style="margin:0">'+title+'</div>'+(note?'<div class="note">'+note+'</div>':'')+'</div></div>'+
@@ -4490,8 +4493,11 @@
     // grupo recolhível só — a análise (relatório, totais, gráfico, realizado) fica solta abaixo.
     var cadastro=sectionCard('cadastro','Cadastro histograma','Funções, equipamentos, equipe típica de cada serviço e alocação do apoio administrativo.',null,
       catalogoFuncoes+catalogoEquip+equipe+apoioAloc);
+    /* Ordem da aba, definida com quem usa: cadastro (configuração), gráfico (o que se olha todo
+     * dia), apontamento do realizado, quantidades, relatório do período, curva ABC e, por último,
+     * o previsto × realizado por serviço. */
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
-      cadastro+relatorioPeriodoHTML(hist)+totais+servicoPR+grafico+abcHTML(hist)+realizadoHTML(hist);
+      cadastro+grafico+realizadoHTML(hist)+totais+relatorioPeriodoHTML(hist)+abcHTML(hist)+servicoPR;
   };
 
   function scenarioStats(snap){
@@ -8043,7 +8049,7 @@
       document.querySelectorAll('[data-histtoggle]').forEach(function(b){
         b.addEventListener('click',function(){
           var k=b.getAttribute('data-histtoggle');
-          HIST_OPEN[k]=(HIST_OPEN[k]===false);
+          HIST_OPEN[k]=(HIST_OPEN[k]!==true);
           go('cr-hist');
         });
       });
@@ -8213,12 +8219,17 @@
       var repPrint=document.getElementById('repPrint');
       if(repPrint)repPrint.addEventListener('click',function(){
         // Imprime só o card do relatório: a classe no body esconde o resto da página no @media print.
-        HIST_OPEN.relatorio=true;
-        document.body.classList.add('printing-report');
-        var prevTitle=document.title;
-        document.title='Relatório do histograma - '+((window._OBRA&&window._OBRA.nome)||'');
-        window.onafterprint=function(){ document.body.classList.remove('printing-report'); document.title=prevTitle; window.onafterprint=null; };
-        window.print();
+        function imprime(){
+          document.body.classList.add('printing-report');
+          var prevTitle=document.title;
+          document.title='Relatório do histograma - '+((window._OBRA&&window._OBRA.nome)||'');
+          window.onafterprint=function(){ document.body.classList.remove('printing-report'); document.title=prevTitle; window.onafterprint=null; };
+          window.print();
+        }
+        // O botão fica no cabeçalho do card, que aparece mesmo recolhido — e recolhido o corpo
+        // nem está no DOM. Abre e espera o desenho, senão sai folha em branco.
+        if(HIST_OPEN.relatorio!==true){ HIST_OPEN.relatorio=true; go('cr-hist'); setTimeout(imprime,80); }
+        else imprime();
       });
       document.querySelectorAll('[data-realcat]').forEach(function(b){
         b.addEventListener('click',function(){var k=b.getAttribute('data-realcat'); REAL_CAT_OPEN[k]=!(REAL_CAT_OPEN[k]!==false); go('cr-hist');});
