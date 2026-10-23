@@ -4469,15 +4469,21 @@
     var classeEqBtns=[['todos','Total'],['proprio','Só Tripoloni'],['terceiro','Só terceiro']].map(function(o){
       return '<button class="subtab'+(HIST_CLASSE_EQ===o[0]?' active':'')+'" data-histclasseeq="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
+    var modoBtns=[['continuo','Mobilização → desmobilização'],['execucao','Durante a execução']].map(function(o){
+      return '<button class="subtab'+(HIST_MODO===o[0]?' active':'')+'" data-histmodo="'+o[0]+'" title="'+
+        (o[0]==='continuo'?'Padrão: conta a equipe da primeira à última semana dela, inclusive as semanas paradas entre frentes — ela permanece até o fim do serviço'
+                          :'Conta a equipe só nas semanas com serviço acontecendo (o recesso continua contando)')+'">'+o[1]+'</button>';
+    }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
       '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="Divide o realizado de equipamento entre frota própria e locada; o previsto é geral">Realizado de equipamento:</span>'+classeEqBtns+'</div>'+
+        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="O que fazer com a semana em que a equipe está na obra mas sem frente liberada">Contagem:</span>'+modoBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="No mês, cada barra é o pico — quantos recursos chegaram a estar mobilizados">Período:</span>'+histPeriodoBotoesHTML()+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas". A equipe conta <b>da mobilização à desmobilização</b> — permanece até o fim do serviço, inclusive nas semanas paradas entre frentes. Pra ver a outra leitura (só as semanas com serviço acontecendo), escolha na hora de exportar o relatório.</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas". <b>Contagem</b> decide a semana em que a equipe está na obra sem frente liberada: o padrão é <b>mobilização → desmobilização</b>, em que ela permanece até o fim do serviço. A exportação pergunta de novo, e aí dá pra gerar o relatório pelo outro critério sem mexer na tela.</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -8159,6 +8165,9 @@
       });
       document.querySelectorAll('[data-histclasseeq]').forEach(function(b){
         b.addEventListener('click',function(){HIST_CLASSE_EQ=b.getAttribute('data-histclasseeq'); go('cr-hist');});
+      });
+      document.querySelectorAll('[data-histmodo]').forEach(function(b){
+        b.addEventListener('click',function(){HIST_MODO=b.getAttribute('data-histmodo'); go('cr-hist');});
       });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
@@ -12560,10 +12569,19 @@
    *
    * A classificação segue a regra usual: o item que ATRAVESSA o corte entra na classe de cima.
    * Senão o recurso que sozinho leva 30% da obra cairia em B por um décimo de ponto. */
-  var ABC={hmes:176,dmes:22,smes:4,base:'previsto',corteA:80,corteB:95};
+  /* Eficiência: a hora mobilizada não é hora produzida. 176 h/mês é o calendário; a eficiência
+   * diz quanto disso vira trabalho na frente — o resto é deslocamento, espera de frente, chuva
+   * curta, abastecimento, manutenção. Horas efetivas = horas mobilizadas × eficiência.
+   * Ela NÃO muda o ranking nem as classes A/B/C: multiplica todo mundo pelo mesmo fator. Muda a
+   * grandeza, que é o que vai pra conta de hora-homem e hora-máquina. */
+  var ABC={hmes:176,dmes:22,smes:4,ef:100,base:'previsto',corteA:80,corteB:95};
   function abcFatores(){
     var hm=Math.max(1,orcNum(ABC.hmes)||176), dm=Math.max(1,orcNum(ABC.dmes)||22), sm=Math.max(1,orcNum(ABC.smes)||4);
-    return {hm:hm,dm:dm,sm:sm,hSem:hm/sm,hDia:hm/dm,dSem:dm/sm};
+    var efPct=orcNum(ABC.ef); if(efPct==null||!(efPct>0))efPct=100;
+    efPct=Math.max(1,Math.min(200,efPct));
+    var ef=efPct/100;
+    return {hm:hm,dm:dm,sm:sm,hSem:hm/sm,hDia:hm/dm,dSem:dm/sm,
+            ef:ef,efPct:efPct,hSemEf:hm/sm*ef,hDiaEf:hm/dm*ef};
   }
   function abcDados(modo){
     var D=histXlsDados(modo), F=abcFatores();
@@ -12571,7 +12589,9 @@
       var rs=(ABC.base==='realizado')?L.somaR:L.somaP;
       return {r:L.r,cat:L.cat,rsP:L.somaP,rsR:L.somaR,rs:rs,pico:L.pico,
         meses:rs/F.sm,horas:rs*F.hSem,dias:rs*F.dSem,
+        horasEf:rs*F.hSemEf,
         horasP:L.somaP*F.hSem,horasR:L.somaR*F.hSem,
+        horasPEf:L.somaP*F.hSemEf,horasREf:L.somaR*F.hSemEf,
         diasP:L.somaP*F.dSem,diasR:L.somaR*F.dSem};
     }).filter(function(x){ return x.rs>0; })
       .sort(function(a,b){ return b.rs-a.rs||String(a.r.n).localeCompare(String(b.r.n)); });
@@ -12583,10 +12603,12 @@
       var antes=acc; acc+=x.pct; x.acum=acc;
       x.classe=antes<cA?'A':(antes<cB?'B':'C');
     });
-    var totH=0,totD=0,totHP=0,totHR=0;
-    linhas.forEach(function(x){ totH+=x.horas; totD+=x.dias; totHP+=x.horasP; totHR+=x.horasR; });
+    var totH=0,totD=0,totHP=0,totHR=0,totHEf=0,totHPEf=0,totHREf=0;
+    linhas.forEach(function(x){ totH+=x.horas; totD+=x.dias; totHP+=x.horasP; totHR+=x.horasR;
+      totHEf+=x.horasEf; totHPEf+=x.horasPEf; totHREf+=x.horasREf; });
     return {linhas:linhas,total:total,F:F,tw:D.tw,modo:D.modo,
-      totH:totH,totD:totD,totHP:totHP,totHR:totHR,cA:cA,cB:cB};
+      totH:totH,totD:totD,totHP:totHP,totHR:totHR,
+      totHEf:totHEf,totHPEf:totHPEf,totHREf:totHREf,cA:cA,cB:cB};
   }
   function abcClasseCor(c){ return c==='A'?'--crit':(c==='B'?'--warn':'--good'); }
   /** Pareto: barra de cada recurso + linha do acumulado, com os cortes A e B marcados. */
@@ -12615,7 +12637,7 @@
     lin.forEach(function(x,i){
       var cx=pl+gap*i+gap/2;
       s+='<rect x="'+(cx-bw/2).toFixed(1)+'" y="'+yB(x.pct).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,yB(0)-yB(x.pct)).toFixed(1)+
-        '" fill="var('+abcClasseCor(x.classe)+')" fill-opacity=".85"><title>'+escAttr(x.r.n+'\n'+fmtDec(x.pct,2)+'% · acumulado '+fmtDec(x.acum,1)+'% · classe '+x.classe+'\n'+fmtBR(x.horas)+' h · '+fmtDec(x.dias,1)+' dias')+'</title></rect>';
+        '" fill="var('+abcClasseCor(x.classe)+')" fill-opacity=".85"><title>'+escAttr(x.r.n+'\n'+fmtDec(x.pct,2)+'% · acumulado '+fmtDec(x.acum,1)+'% · classe '+x.classe+'\n'+fmtBR(x.horas)+' h · '+fmtDec(x.dias,1)+' dias'+(A.F.efPct!==100?(' / '+fmtBR(x.horasEf)+' h efetivas'):''))+'</title></rect>';
       d+=(i?'L':'M')+cx.toFixed(1)+' '+yA(x.acum).toFixed(1)+' ';
       var nome=String(x.r.n);
       if(nome.length>22)nome=nome.slice(0,21)+'…';
@@ -12647,19 +12669,24 @@
       '<div class="field" style="margin:0"><label>Horas por mês</label><input class="inp" id="abcHM" type="number" min="1" step="1" value="'+F.hm+'" style="width:100px"></div>'+
       '<div class="field" style="margin:0"><label>Dias por mês</label><input class="inp" id="abcDM" type="number" min="1" step="0.5" value="'+F.dm+'" style="width:100px"></div>'+
       '<div class="field" style="margin:0"><label>Semanas por mês</label><input class="inp" id="abcSM" type="number" min="1" step="0.0001" value="'+F.sm+'" style="width:110px"></div>'+
+      '<div class="field" style="margin:0"><label title="Quanto da hora mobilizada vira trabalho na frente. 100% = a hora de calendário inteira">Eficiência (%)</label><input class="inp" id="abcEF" type="number" min="1" max="200" step="1" value="'+F.efPct+'" style="width:100px"></div>'+
       '<div class="field" style="margin:0"><label>Corte A (%)</label><input class="inp" id="abcCA" type="number" min="1" max="99" step="1" value="'+A.cA+'" style="width:92px"></div>'+
       '<div class="field" style="margin:0"><label>Corte B (%)</label><input class="inp" id="abcCB" type="number" min="1" max="100" step="1" value="'+A.cB+'" style="width:92px"></div>'+
       '<div style="margin-left:auto;display:flex;gap:8px;padding-bottom:8px"><button class="btn" id="abcExp">↧ Exportar ABC</button></div>'+
       '</div>'+
       '<div class="note" style="margin-bottom:10px">Com esses números: <b>'+fmtDec(F.hSem,1)+' h por semana</b>, '+
-      '<b>'+fmtDec(F.hDia,2)+' h por dia</b> e <b>'+fmtDec(F.dSem,2)+' dias por semana</b>. '+
-      'Mão de obra e equipamento usam a mesma base — 176 h/mês é disponibilidade de calendário, não produtividade.</div>';
+      '<b>'+fmtDec(F.hDia,2)+' h por dia</b> e <b>'+fmtDec(F.dSem,2)+' dias por semana</b>'+
+      (F.efPct!==100?(' — a <b>'+fmtDec(F.efPct,0)+'%</b> de eficiência, <b>'+fmtDec(F.hSemEf,1)+' h efetivas por semana</b> ('+fmtDec(F.hDiaEf,2)+' h por dia)'):'')+'. '+
+      'Mão de obra e equipamento usam a mesma base — 176 h/mês é disponibilidade de calendário, não produtividade. '+
+      'A <b>eficiência</b> é o que converte uma na outra: hora mobilizada × eficiência = hora efetiva. '+
+      'Ela não mexe no ranking nem nas classes — multiplica todos os recursos pelo mesmo fator.</div>';
 
     var kpis='<div class="kpis" style="margin-bottom:12px">'+
       kpi('crit','Classe A',nA+' recurso'+(nA===1?'':'s'),fmtDec(100*hA/Math.max(1,A.totH),1)+'% das horas · até '+A.cA+'% acumulado')+
       kpi('warn','Classe B',nB+' recurso'+(nB===1?'':'s'),'entre '+A.cA+'% e '+A.cB+'%')+
       kpi('good','Classe C',nC+' recurso'+(nC===1?'':'s'),'a cauda, acima de '+A.cB+'%')+
       kpi('info','Total mobilizado',fmtBR(A.totH)+' h',fmtDec(A.totD,0)+' dias · '+fmtDec(A.total/F.sm,1)+' recurso-mês')+
+      (F.efPct!==100?kpi('accent','Horas efetivas',fmtBR(A.totHEf)+' h','a '+fmtDec(F.efPct,0)+'% de eficiência'):'')+
       '</div>';
 
     var linhas=A.linhas.map(function(x){
@@ -12671,6 +12698,7 @@
         '<td class="r mono">'+fmtDec(x.rs,1)+'</td>'+
         '<td class="r mono">'+fmtDec(x.meses,1)+'</td>'+
         '<td class="r mono"><b>'+fmtBR(x.horas)+'</b></td>'+
+        (F.efPct!==100?('<td class="r mono" style="color:var(--accent)"><b>'+fmtBR(x.horasEf)+'</b></td>'):'')+
         '<td class="r mono"><b>'+fmtDec(x.dias,1)+'</b></td>'+
         '<td class="r mono">'+fmtDec(x.pct,2)+'%</td>'+
         '<td class="r mono">'+fmtDec(x.acum,1)+'%</td>'+
@@ -12680,12 +12708,16 @@
     var tabela='<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
       '<th class="r">#</th><th>Classe</th><th style="min-width:200px">Recurso</th><th>Tipo</th><th>Categoria</th>'+
       '<th class="r" title="Unidade do histograma: um recurso mobilizado por uma semana">Recurso×semana</th>'+
-      '<th class="r">Meses</th><th class="r">Horas</th><th class="r">Dias</th>'+
+      '<th class="r">Meses</th><th class="r" title="Horas de calendário em que o recurso fica mobilizado">Horas</th>'+
+      (F.efPct!==100?('<th class="r" title="Horas mobilizadas × '+fmtDec(F.efPct,0)+'% de eficiência">h efetivas</th>'):'')+
+      '<th class="r">Dias</th>'+
       '<th class="r">%</th><th class="r">% acum.</th>'+
       '<th class="r">h previstas</th><th class="r">h realizadas</th></tr></thead><tbody>'+linhas+
       '<tr style="background:var(--elev);font-weight:700"><td></td><td></td><td>Total</td><td></td><td></td>'+
       '<td class="r mono">'+fmtDec(A.total,1)+'</td><td class="r mono">'+fmtDec(A.total/F.sm,1)+'</td>'+
-      '<td class="r mono">'+fmtBR(A.totH)+'</td><td class="r mono">'+fmtDec(A.totD,0)+'</td>'+
+      '<td class="r mono">'+fmtBR(A.totH)+'</td>'+
+      (F.efPct!==100?('<td class="r mono">'+fmtBR(A.totHEf)+'</td>'):'')+
+      '<td class="r mono">'+fmtDec(A.totD,0)+'</td>'+
       '<td class="r mono">100%</td><td></td>'+
       '<td class="r mono">'+fmtBR(A.totHP)+'</td><td class="r mono">'+fmtBR(A.totHR)+'</td></tr>'+
       '</tbody></table></div>';
@@ -12700,7 +12732,7 @@
       null, cfg+kpis+grafico+tabela);
   }
   function abcWire(){
-    var mapa={abcBase:'base',abcHM:'hmes',abcDM:'dmes',abcSM:'smes',abcCA:'corteA',abcCB:'corteB'};
+    var mapa={abcBase:'base',abcHM:'hmes',abcDM:'dmes',abcSM:'smes',abcEF:'ef',abcCA:'corteA',abcCB:'corteB'};
     Object.keys(mapa).forEach(function(id){
       var e=document.getElementById(id); if(!e)return;
       e.addEventListener('change',function(){
@@ -12716,34 +12748,37 @@
   /** Aba da curva ABC, usada no botão próprio e dentro da exportação do histograma. */
   function abcAbaExcel(wb,A){
     var ws=wb.addWorksheet('Curva ABC',{views:[{state:'frozen',ySplit:1}]});
-    relCabecalho(ws,['#','Classe','Recurso','Tipo','Categoria','Recurso×semana','Meses','Horas','Dias',
-      '% do total','% acumulado','Horas previstas','Horas realizadas','Pico simultâneo'],
-      [6,8,34,14,18,16,10,12,10,11,13,16,16,15]);
+    relCabecalho(ws,['#','Classe','Recurso','Tipo','Categoria','Recurso×semana','Meses','Horas','Horas efetivas','Dias',
+      '% do total','% acumulado','Horas previstas','Horas realizadas','h previstas efetivas','h realizadas efetivas','Pico simultâneo'],
+      [6,8,34,14,18,16,10,12,14,10,11,13,16,16,19,19,15]);
     A.linhas.forEach(function(x){
       var r=ws.addRow([x.rank,x.classe,x.r.n,(x.r.tipo==='equipamento'?'Equipamento':'Mão de obra'),x.cat,
-        x.rs,x.meses,x.horas,x.dias,x.pct,x.acum,x.horasP,x.horasR,x.pico]);
+        x.rs,x.meses,x.horas,x.horasEf,x.dias,x.pct,x.acum,x.horasP,x.horasR,x.horasPEf,x.horasREf,x.pico]);
       r.font={size:10};
-      [6,7,9].forEach(function(c){ r.getCell(c).numFmt='#,##0.0'; });
-      [8,12,13].forEach(function(c){ r.getCell(c).numFmt='#,##0'; });
-      [10,11].forEach(function(c){ r.getCell(c).numFmt='0.00'; });
-      r.getCell(14).numFmt='#,##0.0';
+      [6,7,10].forEach(function(c){ r.getCell(c).numFmt='#,##0.0'; });
+      [8,9,13,14,15,16].forEach(function(c){ r.getCell(c).numFmt='#,##0'; });
+      [11,12].forEach(function(c){ r.getCell(c).numFmt='0.00'; });
+      r.getCell(17).numFmt='#,##0.0';
       var cor=x.classe==='A'?'FFFBE3E3':(x.classe==='B'?'FFFDF3DC':'FFE6F5EA');
       r.getCell(2).fill={type:'pattern',pattern:'solid',fgColor:{argb:cor}};
       r.getCell(2).font={size:10,bold:true};
       r.getCell(2).alignment={horizontal:'center'};
     });
-    var t=ws.addRow(['','','Total','','',A.total,A.total/A.F.sm,A.totH,A.totD,100,'',A.totHP,A.totHR,'']);
+    var t=ws.addRow(['','','Total','','',A.total,A.total/A.F.sm,A.totH,A.totHEf,A.totD,100,'',A.totHP,A.totHR,A.totHPEf,A.totHREf,'']);
     t.font={size:10,bold:true};
-    [6,7,9].forEach(function(c){ t.getCell(c).numFmt='#,##0.0'; });
-    [8,12,13].forEach(function(c){ t.getCell(c).numFmt='#,##0'; });
+    [6,7,10].forEach(function(c){ t.getCell(c).numFmt='#,##0.0'; });
+    [8,9,13,14,15,16].forEach(function(c){ t.getCell(c).numFmt='#,##0'; });
     ws.addRow([]);
     [['Base do ranking',ABC.base==='realizado'?'Realizado apontado':'Previsto do cronograma'],
      ['Horas por mês',A.F.hm],['Dias por mês',A.F.dm],['Semanas por mês',A.F.sm],
      ['Horas por semana',A.F.hSem],['Horas por dia',A.F.hDia],['Dias por semana',A.F.dSem],
+     ['Eficiência (%)',A.F.efPct],
+     ['Horas efetivas por semana',A.F.hSemEf],['Horas efetivas por dia',A.F.hDiaEf],
      ['Corte da classe A (%)',A.cA],['Corte da classe B (%)',A.cB],
      ['Contagem da equipe',histModoLabel(A.modo)],
      ['Lotes','filtroLotes'],
-     ['Observação','Mão de obra e equipamento usam a mesma base de horas: 176 h/mês é disponibilidade de calendário, não produtividade.']
+     ['Observação','Mão de obra e equipamento usam a mesma base de horas: 176 h/mês é disponibilidade de calendário, não produtividade.'],
+     ['Horas efetivas','Horas mobilizadas × eficiência — o que se espera de trabalho na frente. A eficiência não muda o ranking nem as classes A/B/C: multiplica todos os recursos pelo mesmo fator.']
     ].map(function(l){ return l[1]==='filtroLotes'?[l[0],(filtroLotesTexto()||'todos os lotes da obra').replace('Lotes em exibição: ','')]:l; })
      .forEach(function(l){
       var r=ws.addRow(['','',l[0],l[1]]);
