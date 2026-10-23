@@ -3610,7 +3610,11 @@
    *   'continuo' — da mobilização à desmobilização, inclusive as semanas paradas no meio. É o
    *                custo de quem mantém a equipe na obra esperando a frente liberar.
    * As duas leituras são legítimas e dão números diferentes; a obra escolhe. */
-  var HIST_MODO='execucao';
+  /* Padrão: a equipe permanece até o fim do serviço — conta da mobilização à desmobilização,
+   * inclusive as semanas paradas entre frentes, porque ninguém desmobiliza e remobiliza equipe
+   * por causa de uma frente que atrasou. Quem quiser a outra leitura (só as semanas com serviço
+   * acontecendo) escolhe na hora de exportar o relatório. */
+  var HIST_MODO='continuo';
   /* Semana ou mês. O histograma conta RECURSOS mobilizados — é um estoque, não um fluxo, então
    * o mês não é a soma das semanas: é quantos recursos estiveram mobilizados ali, o PICO do mês.
    * É a mesma leitura das abas HISTOGRAMA MO e HISTOGRAMA EQUIPTO da planilha da obra, que
@@ -4465,21 +4469,15 @@
     var classeEqBtns=[['todos','Total'],['proprio','Só Tripoloni'],['terceiro','Só terceiro']].map(function(o){
       return '<button class="subtab'+(HIST_CLASSE_EQ===o[0]?' active':'')+'" data-histclasseeq="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
-    var modoBtns=[['execucao','Durante a execução'],['continuo','Mobilização → desmobilização']].map(function(o){
-      return '<button class="subtab'+(HIST_MODO===o[0]?' active':'')+'" data-histmodo="'+o[0]+'" title="'+
-        (o[0]==='continuo'?'Conta a equipe da primeira à última semana dela, inclusive as semanas paradas entre frentes'
-                          :'Conta a equipe só nas semanas com serviço acontecendo (o recesso continua contando)')+'">'+o[1]+'</button>';
-    }).join('');
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
       '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="Divide o realizado de equipamento entre frota própria e locada; o previsto é geral">Realizado de equipamento:</span>'+classeEqBtns+'</div>'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="O que fazer com a semana em que a equipe está na obra mas sem frente liberada">Contagem:</span>'+modoBtns+'</div>'+
         '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="No mês, cada barra é o pico — quantos recursos chegaram a estar mobilizados">Período:</span>'+histPeriodoBotoesHTML()+'</div>'+
       '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas".</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas". A equipe conta <b>da mobilização à desmobilização</b> — permanece até o fim do serviço, inclusive nas semanas paradas entre frentes. Pra ver a outra leitura (só as semanas com serviço acontecendo), escolha na hora de exportar o relatório.</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -8147,9 +8145,6 @@
       document.querySelectorAll('[data-historigem]').forEach(function(b){
         b.addEventListener('click',function(){HIST_ORIGEM=b.getAttribute('data-historigem'); go('cr-hist');});
       });
-      document.querySelectorAll('[data-histmodo]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_MODO=b.getAttribute('data-histmodo'); go('cr-hist');});
-      });
       document.querySelectorAll('[data-histper]').forEach(function(b){
         b.addEventListener('click',function(){HIST_PERIODO=b.getAttribute('data-histper'); go('cr-hist');});
       });
@@ -8816,7 +8811,8 @@
     var avisoEl=document.getElementById('histJanela');
     if(avisoEl)avisoEl.innerHTML=jan.todos
       ? ''
-      : ('<b>Janela:</b> '+rotSem(calWeekDate(jan.ini))+' a '+rotSem(calWeekDate(jan.fim))+' ('+nW+' semana'+(nW===1?'':'s')+') — '+
+      : ('<b>Janela:</b> '+rotSem(calWeekDate(jan.ini))+' a '+rotSem(calWeekDate(jan.fim))+' ('+
+         (mes?(nW+' '+(nW===1?'mês':'meses')):(nW+' semana'+(nW===1?'':'s')))+') — '+
          'o intervalo em que os '+jan.nLotes+' lote(s) em exibição têm serviço. '+
          '<span style="color:var(--warn)">O <b>previsto</b> sai só desses lotes. O apontamento de recurso não tem lote '+
          '(é por recurso e semana), então o <b>realizado</b> apontado é atribuído inteiro a eles — é o que o IAH compara.</span>');
@@ -8956,6 +8952,13 @@
       var acc=[], sum=0; weekly.forEach(function(v){ sum+=v; acc.push(sum); });
       return {nome:l.nome,color:l.color,weekly:weekly,acc:acc};
     });
+    /* O horizonte é o do cronograma integrado inteiro; com filtro de lotes, as semanas depois do
+     * fim do serviço em exibição não têm nada a mostrar. Corta na última semana com mobilização
+     * de algum cenário, senão a comparação vira uma reta deitada no zero. */
+    var fim=0;
+    computed.forEach(function(c){ for(var w=0;w<c.weekly.length;w++)if(c.weekly[w]>0&&w+1>fim)fim=w+1; });
+    if(!fim)fim=1;
+    computed.forEach(function(c){ c.weekly=c.weekly.slice(0,fim); c.acc=c.acc.slice(0,fim); });
     lineChartSVG(elW,computed.map(function(c){return {values:c.weekly,color:c.color};}));
     lineChartSVG(elA,computed.map(function(c){return {values:c.acc,color:c.color};}));
     if(legEl)legEl.innerHTML=computed.map(function(c){
@@ -9923,6 +9926,22 @@
       });
       totalByServiceResource[si]=perRes; totalByService[si]=svcTotal; grandTotal+=svcTotal;
     });
+    /* O apoio administrativo é da obra inteira, não de um lote — mas ele existe enquanto existe
+     * obra pra apoiar. Sem este corte, filtrar lotes deixava o apoio mobilizado por semanas em
+     * que os lotes em exibição já tinham acabado (o horizonte é o do cronograma integrado), e o
+     * gráfico terminava numa reta chapada no tamanho do apoio. Corta no INTERVALO do serviço
+     * direto em exibição — não semana a semana, senão um vão entre frentes desmobilizaria o
+     * escritório, o que não acontece. */
+    var apoIni=-1, apoFim=-1;
+    SERV.forEach(function(s,si){
+      var teams=teamsByService[si]||[];
+      for(var i=0;i<teams.length;i++){
+        if(!(teams[i]>0))continue;
+        if(apoIni<0||i<apoIni)apoIni=i;
+        if(i>apoFim)apoFim=i;
+      }
+    });
+    if(apoIni<0){ apoIni=0; apoFim=tw-1; }   // sem serviço nenhum: não há janela pra cortar
     var totalByApoio={}, totalByApoioResource={}, grandTotalIndireto=0;
     APOIO.forEach(function(a){
       var crew=(a.cfg&&a.cfg.crew)||[], apoTotal=0, perRes={};
@@ -9932,7 +9951,7 @@
         perRes[item.resourceId]=(perRes[item.resourceId]||0)+qty;
         apoTotal+=qty;
         var arr=byResource[item.resourceId], arrI=byResourceIndireto[item.resourceId];
-        for(var i=0;i<arr.length;i++){ arr[i]+=qty; arrI[i]+=qty; }
+        for(var i=apoIni;i<=apoFim&&i<arr.length;i++){ arr[i]+=qty; arrI[i]+=qty; }
       });
       totalByApoioResource[a.id]=perRes; totalByApoio[a.id]=apoTotal; grandTotalIndireto+=apoTotal;
     });
