@@ -8644,30 +8644,43 @@
   }
   /** Quadro de fechamento no canto do gráfico: a semana de referência e o acumulado até ela.
    *  IAH = realizado ÷ previsto (Índice de Aderência do Histograma). */
-  function histResumoSVG(x,y,dados){
-    var L=140, R=132, W=L+R+22, H=dados.aviso?72:58;
+  /** Fechamento do período: três cartões empilhados na coluna à direita do gráfico.
+   *  Antes era uma caixa flutuando por cima das barras — tapava os meses do meio. */
+  var HIST_PAINEL_W=152;
+  function histResumoSVG(x,y,W,dados){
     var fmtI=function(v){ return v==null?'—':fmtDec(v,2); };
     var cor=function(v){ return v==null?'var(--muted)':(v<0.9?'var(--crit)':(v<0.98?'var(--warn)':'var(--good)')); };
-    var s='<g transform="translate('+x.toFixed(1)+','+y.toFixed(1)+')">'+
-      '<rect x="0" y="0" width="'+W+'" height="'+H+'" rx="5" fill="var(--surface)" fill-opacity=".94" stroke="var(--line-2)">'+
-        (dados.ajuda?'<title>'+escAttr(dados.ajuda)+'</title>':'')+'</rect>'+
-      '<line x1="'+(L+11)+'" y1="4" x2="'+(L+11)+'" y2="'+(H-4)+'" stroke="var(--line)"/>';
-    var linhas=[
-      ['Previsto '+dados.wk,fmtBR(dados.prevSem),'Previsto acumulado',fmtBR(dados.prevAcum),null],
-      ['Realizado '+dados.wk,fmtBR(dados.realSem),'Realizado acumulado',fmtBR(dados.realAcum),null],
-      ['IAH',fmtI(dados.iahSem),'IAH',fmtI(dados.iahAcum),'idx']
+    var cards=[
+      {t:'PREVISTO', val:fmtBR(dados.prevSem), acum:fmtBR(dados.prevAcum), c:'var(--ink)'},
+      {t:'REALIZADO',val:fmtBR(dados.realSem), acum:fmtBR(dados.realAcum), c:'var(--ink)'},
+      {t:'IAH',      val:fmtI(dados.iahSem),   acum:fmtI(dados.iahAcum),
+       c:cor(dados.iahSem), cAcum:cor(dados.iahAcum)}
     ];
-    linhas.forEach(function(ln,i){
-      var yy=15+i*17;
-      var fill1=ln[4]==='idx'?cor(dados.iahSem):'var(--ink)';
-      var fill2=ln[4]==='idx'?cor(dados.iahAcum):'var(--ink)';
-      s+='<text x="6" y="'+yy+'" font-size="9" fill="var(--muted)">'+escAttr(ln[0])+'</text>'+
-         '<text x="'+(L+5)+'" y="'+yy+'" font-size="9.5" text-anchor="end" font-weight="700" fill="'+fill1+'">'+ln[1]+'</text>'+
-         '<text x="'+(L+17)+'" y="'+yy+'" font-size="9" fill="var(--muted)">'+escAttr(ln[2])+'</text>'+
-         '<text x="'+(W-6)+'" y="'+yy+'" font-size="9.5" text-anchor="end" font-weight="700" fill="'+fill2+'">'+ln[3]+'</text>';
+    var hC=58, vao=10;
+    var s='<g transform="translate('+x.toFixed(1)+','+y.toFixed(1)+')">'+
+      (dados.ajuda?'<title>'+escAttr(dados.ajuda)+'</title>':'');
+    cards.forEach(function(c,i){
+      var yc=i*(hC+vao);
+      s+='<rect x="0" y="'+yc+'" width="'+W+'" height="'+hC+'" rx="5" fill="var(--surface)" fill-opacity=".94" stroke="var(--line-2)"/>'+
+        '<text x="9" y="'+(yc+14)+'" font-size="7.5" fill="var(--muted)" letter-spacing="0.7">'+c.t+'</text>'+
+        '<text x="9" y="'+(yc+32)+'" font-size="8.5" fill="var(--muted)">'+escAttr(dados.wk)+'</text>'+
+        '<text x="'+(W-9)+'" y="'+(yc+33)+'" font-size="13.5" text-anchor="end" font-weight="700" fill="'+c.c+'">'+c.val+'</text>'+
+        '<line x1="9" y1="'+(yc+39)+'" x2="'+(W-9)+'" y2="'+(yc+39)+'" stroke="var(--line)"/>'+
+        '<text x="9" y="'+(yc+51)+'" font-size="8" fill="var(--muted)">acumulado</text>'+
+        '<text x="'+(W-9)+'" y="'+(yc+51)+'" font-size="10.5" text-anchor="end" font-weight="700" fill="'+(c.cAcum||c.c)+'">'+c.acum+'</text>';
     });
-    if(dados.aviso)
-      s+='<text x="6" y="'+(H-5)+'" font-size="8" fill="var(--warn)">'+escAttr(dados.aviso)+'</text>';
+    if(dados.aviso){
+      // cabe pouco texto na coluna: quebra em linhas curtas em vez de vazar pra fora
+      var pal=String(dados.aviso).split(' '), lin=[], atual='';
+      pal.forEach(function(w){
+        if((atual+' '+w).trim().length>26){ if(atual)lin.push(atual); atual=w; }
+        else atual=(atual+' '+w).trim();
+      });
+      if(atual)lin.push(atual);
+      lin.slice(0,3).forEach(function(t,i){
+        s+='<text x="1" y="'+(3*(hC+vao)+2+i*10)+'" font-size="7.5" fill="var(--warn)">'+escAttr(t)+'</text>';
+      });
+    }
     return s+'</g>';
   }
   function renderHistChart(){
@@ -8700,7 +8713,8 @@
     var jan=histJanelaSemanas(tw);
     var semJan=[]; for(var wj=jan.ini;wj<=jan.fim;wj++)semJan.push(wj);
     var pers=histPeriodos(semJan), nW=pers.length, mes=histPeriodoMes();
-    var W=900,H=290,pl=44,pr=64,pt=26,pb=48,iw=W-pl-pr,ih=H-pt-pb; // pt maior: cabe o rótulo em cima da barra
+    // pr abre espaço pro eixo do acumulado E pra coluna de cartões, que fica fora das barras
+    var W=900,H=290,pl=44,pr=6+HIST_PAINEL_W+42,pt=26,pb=48,iw=W-pl-pr,ih=H-pt-pb; // pt maior: cabe o rótulo em cima da barra
     // no mês a barra é o PICO do período — recurso mobilizado é estoque, não fluxo
     var valP=pers.map(function(pe){ return histPico(prevWeek,pe); });
     var valR=pers.map(function(pe){ return histPico(realWeek,pe); });
@@ -8791,7 +8805,7 @@
      * o realizado é ATRIBUÍDO aos lotes em exibição — decisão de quem opera, registrada aqui pra
      * quem ler o número saber o que está comparando. */
     var mistura=!jan.todos;
-    s+=histResumoSVG(W-pr-300,pt+3,{wk:(perRef?perRef.lab:rotSem(calWeekDate(wRef))),
+    s+=histResumoSVG(W-6-HIST_PAINEL_W,pt,HIST_PAINEL_W,{wk:(perRef?perRef.lab:rotSem(calWeekDate(wRef))),
       prevSem:pSem,realSem:rSem,iahSem:pSem>0?rSem/pSem:null,
       prevAcum:pAc,realAcum:rAc,iahAcum:pAc>0?rAc/pAc:null,
       aviso:mistura?'realizado atribuído aos lotes em exibição':'',
