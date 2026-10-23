@@ -1096,7 +1096,7 @@
    * montam o app pelo mesmo código. */
   async function sbFetchCadastro(obraId){
     var res=await Promise.all([
-      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco,orcamento').eq('id',obraId).single(),
+      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco,orcamento,eap').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       sbTudo(function(){return SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId).order('id',{ascending:true});}),
@@ -1132,6 +1132,8 @@
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
     ORC=(obra.orcamento&&typeof obra.orcamento==='object'&&obra.orcamento.itens)?obra.orcamento:null;
+    EAP=(obra.eap&&typeof obra.eap==='object'&&obra.eap.itens)?obra.eap:null;
+    EAP_DIRTY=false; EAP_OPEN={};
     ORC_DIRTY=false; ORC_OPEN={}; AVA_CORTE=null; AVA_TAB='painel';
     /* Entrar na obra é entrar na linha de base: vista 'base' (TC_VISTA null), aba do tempo-
      * caminho, sem cenário carregado e sem vista de cenário de uma sessão anterior. */
@@ -1241,7 +1243,7 @@
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
-      ['cad-obra','Obra'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],
+      ['cad-obra','Obra'],['cad-eap','EAP de serviços'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],
       ['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
@@ -1253,7 +1255,7 @@
       ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]}
   ];
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
-    'cad-obra':['Cadastro','Obra'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
+    'cad-obra':['Cadastro','Obra'],'cad-eap':['Cadastro','EAP de serviços'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'cr-prod':['Tempo Caminho','Produtividade'],'cr-massas':['Tempo Caminho','Distribuição de massas'],
@@ -7597,6 +7599,7 @@
       }
     }
     if(view==='torre'){setupTorre();}
+    if(view==='cad-eap'){ eapWire(); }
     if(view==='cad-orc'){ orcWire(); }
     if(view==='ac-ava'){ avaWire(); }
     if(view==='cr-massas'){ massasWire(); massasDraw(); }
@@ -10872,6 +10875,476 @@
       c.border={bottom:{style:'thin',color:{argb:'FF9AA7B0'}}};
     });
     return r;
+  }
+  /* ================= EAP de serviços =================
+   * A obra fala quatro línguas pro mesmo serviço: o código da EAP de controle (2.2.1), o código
+   * contratual (T04), o nome do serviço no Tempo-Caminho (CFT) e o item do orçamento (2.4 CFT).
+   * Nenhum bate com o outro — no CFT são três itens de EAP, um serviço planejado e um item de
+   * orçamento, e o mesmo T04 cobre dois deles.
+   *
+   * Até aqui essa tradução era refeita à mão a cada importação. A EAP guarda o de-para de uma vez.
+   *
+   * Regras do modelo:
+   *   - um item aponta pra NO MÁXIMO um serviço planejado e um item de orçamento;
+   *   - vários itens podem apontar pro mesmo (é o caso do CFT);
+   *   - "serviço controlado" guarda APELIDOS, no plural: o nome da coluna muda de revisão pra
+   *     revisão da planilha de controle, e sem apelido a importação volta a perguntar;
+   *   - não há quantidade aqui. Ela vive em Lotes & Quantidades e no orçamento, e o mesmo número
+   *     em dois lugares sempre termina divergindo.
+   *
+   * Serviço do app pode existir sem item de EAP: a EAP é uma camada de leitura por cima do
+   * cadastro, não um portão na frente dele. */
+  var EAP=null;
+  var EAP_DIRTY=false;
+  var EAP_OPEN={};
+  function eapVazio(){ return {cfg:{arquivo:'',importadoEm:''},itens:[]}; }
+  function eapAtual(){ return (EAP&&EAP.itens)?EAP:(EAP=eapVazio()); }
+  function eapTem(){ return !!(EAP&&EAP.itens&&EAP.itens.length); }
+  function eapPodeEditar(){ return isPlanejador()&&!isReadOnly(); }
+  function eapSujo(){ EAP_DIRTY=true; var b=document.getElementById('eapSalvar'); if(b)b.disabled=false; }
+  function eapPai(cod){ var p=String(cod).split('.'); return p.length>1?p.slice(0,-1).join('.'):''; }
+  function eapNivel(cod){ return String(cod).split('.').length; }
+  function eapOrdena(a,b){
+    var x=String(a.cod).split('.'), y=String(b.cod).split('.');
+    for(var i=0;i<Math.max(x.length,y.length);i++){
+      var vx=+x[i], vy=+y[i];
+      if(isNaN(vx)&&isNaN(vy))continue;
+      if(isNaN(vx))return -1;
+      if(isNaN(vy))return 1;
+      if(vx!==vy)return vx-vy;
+    }
+    return 0;
+  }
+  /** Separa "2.2.1 CFT 01 (m)" em código, nome e unidade. O rótulo inteiro vira apelido. */
+  function eapQuebraRotulo(txt){
+    var t=String(txt==null?'':txt).replace(/\s+/g,' ').trim();
+    if(!t)return null;
+    var m=/^([\d]+(?:\.[\d]+)*)\s+(.*)$/.exec(t);
+    if(!m)return {cod:'',nome:t,un:''};
+    var resto=m[2].trim(), un='';
+    var mu=/\(([^()]{1,12})\)\s*$/.exec(resto);
+    if(mu){ un=mu[1].trim(); resto=resto.slice(0,mu.index).trim(); }
+    return {cod:m[1],nome:resto,un:un};
+  }
+  /** Garante que todo pai citado por um código exista como linha de grupo. */
+  function eapCompletaPais(itens){
+    var porCod={}; itens.forEach(function(it){ porCod[it.cod]=it; });
+    itens.slice().forEach(function(it){
+      var p=eapPai(it.cod);
+      while(p&&!porCod[p]){
+        var novo={cod:p,nome:'',un:'',contratual:'',svc:null,controle:[],orc:null,auto:true};
+        porCod[p]=novo; itens.push(novo);
+        p=eapPai(p);
+      }
+    });
+    itens.sort(eapOrdena);
+    return itens;
+  }
+  function eapServicoNome(id){ var s=SERV.filter(function(x){ return x.id===id; })[0]; return s?s.n:''; }
+  function eapOrcItens(){
+    var O=(typeof orcAtual==='function')?orcAtual():null;
+    if(!O||!O.itens||!O.itens.length)return [];
+    return O.itens.filter(function(i){ return i.nivel<=3; });
+  }
+  function eapOrcNome(id){
+    var it=eapOrcItens().filter(function(x){ return x.id===id; })[0];
+    return it?(it.cod+' '+it.nome):'';
+  }
+  /* ---------- importação ---------- */
+  function eapNormaliza(linhas,arquivo){
+    var novo=eapVazio();
+    novo.cfg.arquivo=arquivo||''; novo.cfg.importadoEm=new Date().toISOString();
+    var vistos={};
+    linhas.forEach(function(l){
+      if(!l.cod||vistos[l.cod])return;
+      vistos[l.cod]=1;
+      novo.itens.push({cod:l.cod,nome:l.nome||'',un:l.un||'',contratual:l.contratual||'',
+        svc:l.svc||null,controle:(l.controle||[]).filter(Boolean),orc:l.orc||null,
+        sug:l.sug||null});
+    });
+    eapCompletaPais(novo.itens);
+    return novo;
+  }
+  /** Planilha genérica de 7 colunas. Acha o cabeçalho pelo nome, não pela posição. */
+  function eapLerWorkbook(wb,arquivo){
+    var nomes=wb.SheetNames||[];
+    var aba=nomes.filter(function(n){ return /eap/i.test(n); })[0]||nomes[0];
+    var aoa=XLSX.utils.sheet_to_json(wb.Sheets[aba],{header:1,raw:true,defval:null});
+    var cab=-1, col={};
+    var alvos=[['cod',/^c[óo]d/i],['nome',/^(descri|nome)/i],['un',/^(un|unid)/i],
+      ['contratual',/contratual|^c[óo]d.*contrat/i],['svc',/planejad/i],
+      ['controle',/controlad/i],['orc',/or[çc]amento/i]];
+    for(var i=0;i<Math.min(20,aoa.length);i++){
+      var l=aoa[i]||[], achou={};
+      l.forEach(function(v,ci){
+        var t=String(v==null?'':v).replace(/\s+/g,' ').trim();
+        if(!t)return;
+        alvos.forEach(function(a){ if(achou[a[0]]===undefined&&a[1].test(t))achou[a[0]]=ci; });
+      });
+      if(achou.cod!==undefined&&achou.nome!==undefined){ cab=i; col=achou; break; }
+    }
+    if(cab<0)throw new Error('Não achei o cabeçalho. A planilha precisa ter pelo menos as colunas "Código" e "Descrição".');
+    var svcPorNome={}; SERV.forEach(function(s){ svcPorNome[chaveNomeServ(s.n)]=s.id; });
+    var orcPorCod={}; eapOrcItens().forEach(function(o){ orcPorCod[chaveNomeServ(o.cod+' '+o.nome)]=o.id; orcPorCod[o.cod]=o.id; });
+    var linhas=[];
+    for(var r=cab+1;r<aoa.length;r++){
+      var row=aoa[r]||[];
+      var cod=String(row[col.cod]==null?'':row[col.cod]).replace(/\s+/g,'').trim();
+      if(!cod||!/^\d+(\.\d+)*$/.test(cod))continue;
+      var nome=String(row[col.nome]==null?'':row[col.nome]).replace(/\s+/g,' ').trim();
+      var g=function(k){ return col[k]===undefined?'':String(row[col[k]]==null?'':row[col[k]]).replace(/\s+/g,' ').trim(); };
+      var svcTxt=g('svc'), orcTxt=g('orc');
+      linhas.push({cod:cod,nome:nome,un:g('un'),contratual:g('contratual'),
+        svc:svcTxt?(svcPorNome[chaveNomeServ(svcTxt)]||null):null,
+        controle:g('controle').split(';').map(function(x){ return x.trim(); }).filter(Boolean),
+        orc:orcTxt?(orcPorCod[chaveNomeServ(orcTxt)]||orcPorCod[orcTxt.split(' ')[0]]||null):null});
+    }
+    if(!linhas.length)throw new Error('O cabeçalho foi encontrado, mas nenhuma linha trouxe código no formato 2.1.1.');
+    return eapNormaliza(linhas,arquivo);
+  }
+  /** Extrai a EAP do próprio arquivo de Informes: os nomes estão na linha de cabeçalho da aba
+   *  RODOVIA, em colunas alternadas (INÍCIO/TÉRMINO), e o código contratual na linha de cima,
+   *  em células mescladas — por isso ele é arrastado pra frente até aparecer outro. */
+  function eapLerInformes(wb,arquivo){
+    var nome=(wb.SheetNames||[]).filter(function(n){ return /rodovia/i.test(n); })[0];
+    if(!nome)throw new Error('Não achei a aba "RODOVIA" neste arquivo.');
+    var wsR=wb.Sheets[nome];
+    var aoa=XLSX.utils.sheet_to_json(wsR,{header:1,raw:true,defval:null});
+    var merges=wsR['!merges']||[];
+    /* O código contratual só é lido onde ESTÁ escrito — inclusive através de mescla, quando a
+     * planilha usa uma. Arrastar o último valor pra frente até aparecer outro parecia certo e não
+     * era: neste arquivo não há mescla nenhuma na linha dos T, então o arrasto carimbava
+     * Sinalização, Defensas, Hidrossemeadura e Grama como T11.3, que é o código do Dreno.
+     * O que falta fica em branco e quem preenche é quem sabe — tem botão pra isso na tela. */
+    function valorMesclado(linha,ci){
+      var v=(aoa[linha]||[])[ci];
+      if(v!=null&&String(v).trim())return String(v).trim();
+      for(var m=0;m<merges.length;m++){
+        var g=merges[m];
+        if(g.s.r<=linha&&linha<=g.e.r&&g.s.c<=ci&&ci<=g.e.c){
+          var tv=(aoa[g.s.r]||[])[g.s.c];
+          return tv==null?'':String(tv).trim();
+        }
+      }
+      return '';
+    }
+    // a linha de cabeçalho é a que traz "ESTACAS"
+    var cab=-1;
+    for(var i=0;i<Math.min(30,aoa.length);i++){
+      var l=aoa[i]||[];
+      for(var c=0;c<Math.min(20,l.length);c++)
+        if(/^estacas?$/i.test(String(l[c]==null?'':l[c]).trim())){ cab=i; break; }
+      if(cab>=0)break;
+    }
+    if(cab<0)throw new Error('A aba "RODOVIA" não tem a linha de cabeçalho com "ESTACAS".');
+    var linhaNomes=aoa[cab]||[], linhaIT=aoa[cab+1]||[];
+    var linhas=[];
+    for(var ci=0;ci<linhaNomes.length;ci++){
+      // só vale a coluna que abre um par INÍCIO/TÉRMINO
+      if(!/^in[íi]cio$/i.test(String(linhaIT[ci]==null?'':linhaIT[ci]).trim()))continue;
+      var q=eapQuebraRotulo(linhaNomes[ci]);
+      if(!q||!q.cod)continue;
+      var tc=valorMesclado(cab-1,ci);
+      linhas.push({cod:q.cod,nome:q.nome,un:q.un,contratual:/^T\d/i.test(tc)?tc:'',
+        controle:[String(linhaNomes[ci]).replace(/\s+/g,' ').trim()]});
+    }
+    if(!linhas.length)throw new Error('Não achei pares INÍCIO/TÉRMINO com código de EAP na aba "RODOVIA".');
+    return eapNormaliza(linhas,arquivo);
+  }
+  /** Sugere os dois vínculos por semelhança de nome. Sugestão NÃO é vínculo: fica marcada como
+   *  pendente até alguém confirmar — adivinhar calado é pior que não adivinhar. */
+  function eapSugere(novo){
+    var orcs=eapOrcItens();
+    novo.itens.forEach(function(it){
+      if(it.auto||!it.nome)return;
+      if(!it.svc){
+        var n=servicoParecido(it.nome);
+        // "Corte" não chega perto de "Terraplenagem — Corte" por distância de edição, mas está
+        // contido nele. Conter é sinal bom o bastante pra uma SUGESTÃO, que vai marcada.
+        if(!n){
+          var k=chaveNomeServ(it.nome);
+          if(k.length>=4){
+            var cands=SERV.filter(function(x){
+              var c=chaveNomeServ(x.n);
+              return c&&(c.indexOf(k)>=0||k.indexOf(c)>=0);
+            });
+            if(cands.length===1)n=cands[0].n;
+          }
+        }
+        if(n){ var s=SERV.filter(function(x){ return x.n===n; })[0];
+          if(s){ it.svc=s.id; it.sug=Object.assign({},it.sug,{svc:true}); } }
+      }
+      if(!it.orc&&orcs.length){
+        var k=chaveNomeServ(it.nome), melhor=null, md=1e9;
+        orcs.forEach(function(o){
+          var c=chaveNomeServ(o.nome); if(!c)return;
+          var lim=Math.max(1,Math.floor(Math.min(k.length,c.length)*0.25));
+          var d=distEdicao(k,c);
+          if(d<=lim&&d<md){ md=d; melhor=o; }
+        });
+        if(melhor){ it.orc=melhor.id; it.sug=Object.assign({},it.sug,{orc:true}); }
+      }
+    });
+    return novo;
+  }
+  function eapImportar(origem){
+    if(!eapPodeEditar()){ alert('Só planejador e desenvolvedor editam a EAP.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var novo;
+        try{ novo=(origem==='informes')?eapLerInformes(wb,file.name):eapLerWorkbook(wb,file.name); }
+        catch(e){ alert('Não consegui ler a planilha: '+((e&&e.message)||e)); return; }
+        eapSugere(novo);
+        eapDialogoImport(novo);
+      }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function eapDialogoImport(novo){
+    var antigo=EAP&&EAP.itens?EAP.itens:[];
+    var velho={}; antigo.forEach(function(i){ velho[i.cod]=i; });
+    // o que já estava vinculado é preservado pelo código, e a sugestão não sobrepõe escolha feita
+    novo.itens.forEach(function(it){
+      var v=velho[it.cod]; if(!v)return;
+      if(v.svc&&!(v.sug&&v.sug.svc)){ it.svc=v.svc; it.sug=Object.assign({},it.sug,{svc:false}); }
+      if(v.orc&&!(v.sug&&v.sug.orc)){ it.orc=v.orc; it.sug=Object.assign({},it.sug,{orc:false}); }
+      if(v.controle&&v.controle.length)
+        it.controle=v.controle.concat((it.controle||[]).filter(function(x){ return v.controle.indexOf(x)<0; }));
+      if(v.nome&&it.auto)it.nome=v.nome;
+    });
+    var novoCods={}; novo.itens.forEach(function(i){ novoCods[i.cod]=1; });
+    var sairam=antigo.filter(function(i){ return !novoCods[i.cod]&&!i.auto; });
+    var nSvc=novo.itens.filter(function(i){ return i.svc; }).length;
+    var nOrc=novo.itens.filter(function(i){ return i.orc; }).length;
+    var nSug=novo.itens.filter(function(i){ return i.sug&&(i.sug.svc||i.sug.orc); }).length;
+    var folhas=novo.itens.filter(function(i){ return !i.auto; }).length;
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:640px;max-height:88vh;overflow:auto">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar EAP de serviços</div>'+
+      '<div class="note" style="margin-bottom:12px">Confira antes de gravar.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><tbody>'+
+        '<tr><td>Arquivo</td><td class="r mono">'+escAttr(novo.cfg.arquivo||'—')+'</td></tr>'+
+        '<tr><td>Itens</td><td class="r mono">'+folhas+(novo.itens.length>folhas?(' (+'+(novo.itens.length-folhas)+' grupo(s) criado(s) pelo código)'):'')+'</td></tr>'+
+        '<tr><td>Com serviço planejado</td><td class="r mono">'+nSvc+'</td></tr>'+
+        '<tr><td>Com item de orçamento</td><td class="r mono">'+nOrc+(eapOrcItens().length?'':' <span style="color:var(--warn)">(sem orçamento importado)</span>')+'</td></tr>'+
+        '<tr><td>Com código contratual</td><td class="r mono">'+novo.itens.filter(function(i){ return i.contratual; }).length+
+          ' <span class="note">(só onde estava escrito na planilha)</span></td></tr>'+
+        (nSug?('<tr><td style="color:var(--warn)">Sugeridos por nome</td><td class="r mono" style="color:var(--warn)">'+nSug+' — entram marcados como <b>a confirmar</b></td></tr>'):'')+
+        (sairam.length?('<tr><td style="color:var(--crit)">Saem da EAP</td><td class="r mono" style="color:var(--crit)">'+sairam.length+' item(ns)</td></tr>'):'')+
+      '</tbody></table></div>'+
+      (sairam.length?('<div class="note" style="margin-top:10px">Não estão na planilha nova: '+
+        sairam.slice(0,12).map(function(i){ return '<b>'+escAttr(i.cod)+'</b> '+escAttr(i.nome); }).join(' · ')+
+        (sairam.length>12?(' +'+(sairam.length-12)):'')+'. Eles saem do cadastro — os vínculos deles se perdem.</div>'):'')+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="eiCancel">Cancelar</button>'+
+        '<button class="btn primary" id="eiOk">Importar</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#eiCancel').addEventListener('click',fecha);
+    back.querySelector('#eiOk').addEventListener('click',function(){
+      EAP=novo; eapSujo(); fecha(); go('cad-eap');
+      toast(folhas+' item(ns) na EAP. Confirme as sugestões e salve.');
+    });
+  }
+  /* ---------- persistência ---------- */
+  async function eapSalvar(){
+    if(!selectedObra||!SB){ toast('Abra uma obra conectada pra salvar.'); return; }
+    try{
+      await sbUpdateObra(selectedObra.id,{eap:EAP});
+      EAP_DIRTY=false; toast('EAP salva.'); go('cad-eap');
+    }catch(e){
+      alert('Falha ao salvar: '+((e&&e.message)||e)+'\n\nSe a mensagem fala em coluna "eap", rode sql/33_eap_servicos.sql no Supabase.');
+    }
+  }
+  /* ---------- tela ---------- */
+  function eapLinhaHTML(it,pode){
+    var temFilho=eapAtual().itens.some(function(x){ return eapPai(x.cod)===it.cod; });
+    var aberto=EAP_OPEN[it.cod]!==false;
+    var svcOpts='<option value="">—</option>'+SERV.map(function(s){
+      return '<option value="'+s.id+'"'+(it.svc===s.id?' selected':'')+'>'+escAttr(s.n)+'</option>';
+    }).join('');
+    var orcs=eapOrcItens();
+    var orcOpts='<option value="">—</option>'+orcs.map(function(o){
+      return '<option value="'+escAttr(o.id)+'"'+(it.orc===o.id?' selected':'')+'>'+escAttr(o.cod+' '+o.nome)+'</option>';
+    }).join('');
+    var sugSvc=!!(it.sug&&it.sug.svc&&it.svc), sugOrc=!!(it.sug&&it.sug.orc&&it.orc);
+    var pend=(sugSvc||sugOrc)?'<span class="pill warn" title="Veio de semelhança de nome — confirme">a confirmar</span>':'';
+    return '<tr class="eap-n'+eapNivel(it.cod)+'" data-eapcod="'+escAttr(it.cod)+'">'+
+      '<td style="padding-left:'+(6+(eapNivel(it.cod)-1)*16)+'px;white-space:nowrap">'+
+        (temFilho?('<button class="iconbtn" data-eaptog="'+escAttr(it.cod)+'" style="margin-right:4px">'+(aberto?'▾':'▸')+'</button>'):'<span style="display:inline-block;width:22px"></span>')+
+        '<b class="mono">'+escAttr(it.cod)+'</b></td>'+
+      '<td>'+(pode?('<input class="einp" data-eapf="nome" value="'+escAttr(it.nome)+'" style="min-width:200px">'):escAttr(it.nome))+'</td>'+
+      '<td>'+(pode?('<input class="einp" data-eapf="un" value="'+escAttr(it.un)+'" style="width:60px">'):escAttr(it.un))+'</td>'+
+      '<td>'+(pode?('<input class="einp" data-eapf="contratual" value="'+escAttr(it.contratual)+'" style="width:76px">'):escAttr(it.contratual))+'</td>'+
+      '<td'+(sugSvc?' style="background:var(--warn-bg)"':'')+'>'+(pode?('<select class="einp" data-eapf="svc" style="min-width:160px">'+svcOpts+'</select>'):escAttr(eapServicoNome(it.svc)))+'</td>'+
+      '<td>'+(pode?('<input class="einp" data-eapf="controle" value="'+escAttr((it.controle||[]).join('; '))+'" style="min-width:200px" placeholder="apelido1; apelido2">'):escAttr((it.controle||[]).join('; ')))+'</td>'+
+      '<td'+(sugOrc?' style="background:var(--warn-bg)"':'')+'>'+(pode?('<select class="einp" data-eapf="orc" style="min-width:170px">'+orcOpts+'</select>'):escAttr(eapOrcNome(it.orc)))+'</td>'+
+      '<td>'+pend+'</td></tr>';
+  }
+  VIEWS['cad-eap']=function(){
+    if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
+    var pode=eapPodeEditar();
+    var acoes=(pode?('<button class="btn" id="eapImp">↥ Importar Excel</button>'+
+      '<button class="btn" id="eapImpInf" title="Lê a aba RODOVIA de um arquivo de Informes de Produção e monta a EAP com código, descrição, contratual e serviço controlado">↥ Importar do arquivo de Informes</button>'+
+      '<button class="btn" id="eapModelo">↧ Baixar modelo</button>'):'')+
+      (eapTem()?'<button class="btn" id="eapExp">↧ Exportar</button>':'')+
+      (pode&&eapTem()?'<button class="btn" id="eapLimpar">🗑 Limpar</button>':'')+
+      (pode?('<button class="btn primary" id="eapSalvar"'+(EAP_DIRTY?'':' disabled')+'>💾 Salvar EAP</button>'):'');
+    var topo=head('EAP de serviços','O de-para entre o código da obra, o serviço do Tempo-Caminho e o item do orçamento. Não guarda quantidade.',acoes);
+    if(!eapTem())
+      return topo+'<div class="card"><div class="eyebrow" style="margin-bottom:4px">Nenhuma EAP cadastrada</div>'+
+        '<div class="note">A EAP amarra as quatro linguagens da obra: o <b>código de controle</b> (2.2.1), o <b>código contratual</b> (T04), o <b>serviço planejado</b> do Tempo-Caminho e o <b>item do orçamento</b>.<br><br>'+
+        (pode?'Importe uma planilha de sete colunas (<b>↧ Baixar modelo</b> traz o formato já preenchido com os serviços desta obra), ou puxe direto de um arquivo de <b>Informes de Produção</b>.'
+             :'Só planejador e desenvolvedor cadastram a EAP.')+
+        '<br><br>Serviço do app pode continuar existindo sem item de EAP — ela é uma camada de leitura, não um portão.</div></div>';
+
+    var E=eapAtual();
+    var itens=E.itens.slice().sort(eapOrdena);
+    var folhas=itens.filter(function(i){ return !i.auto; });
+    var comSvc=folhas.filter(function(i){ return i.svc; }).length;
+    var comOrc=folhas.filter(function(i){ return i.orc; }).length;
+    var aConfirmar=folhas.filter(function(i){ return i.sug&&(i.sug.svc||i.sug.orc); }).length;
+    var temOrc=eapOrcItens().length>0;
+
+    var kpis='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('info','Itens na EAP',String(folhas.length),itens.length-folhas.length+' grupo(s) de agrupamento')+
+      kpi(comSvc?'good':'crit','Com serviço planejado',fmtDec(folhas.length?100*comSvc/folhas.length:0,0)+'%',comSvc+' de '+folhas.length)+
+      kpi(temOrc?(comOrc?'good':'warn'):'info','Com item de orçamento',temOrc?(fmtDec(folhas.length?100*comOrc/folhas.length:0,0)+'%'):'—',temOrc?(comOrc+' de '+folhas.length):'orçamento não importado')+
+      kpi(aConfirmar?'warn':'good','A confirmar',String(aConfirmar),aConfirmar?'vínculos sugeridos por nome':'nenhuma sugestão pendente')+
+      '</div>';
+
+    var vis=[];
+    itens.forEach(function(it){
+      var p=eapPai(it.cod), mostra=true;
+      while(p){ if(EAP_OPEN[p]===false){ mostra=false; break; } p=eapPai(p); }
+      if(mostra)vis.push(it);
+    });
+    var tabela='<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
+      '<div><div class="eyebrow" style="margin:0">Itens</div>'+
+      '<div class="note">Um item aponta para no máximo um serviço e um item de orçamento; vários itens podem apontar para o mesmo. '+
+      'Em <b>Serviço controlado</b> vão os apelidos separados por <b>;</b> — o nome da coluna muda de revisão para revisão da planilha de controle.</div></div>'+
+      '<div style="display:flex;gap:8px">'+
+        '<button class="btn" id="eapAbrir" style="padding:4px 10px;font-size:11.5px">Abrir tudo</button>'+
+        '<button class="btn" id="eapFechar" style="padding:4px 10px;font-size:11.5px">Fechar tudo</button>'+
+        (pode&&folhas.filter(function(i){ return !i.contratual; }).length
+          ?('<button class="btn" id="eapContrat" style="padding:4px 10px;font-size:11.5px" title="Repete o último código contratual do grupo nas linhas em branco — não atravessa de um grupo de nível 1 para outro">Completar contratual pelo grupo</button>'):'')+
+        (pode&&aConfirmar?('<button class="btn primary" id="eapConfirmar" style="padding:4px 10px;font-size:11.5px">Confirmar as '+aConfirmar+' sugestões</button>'):'')+
+      '</div></div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th>Código</th><th>Descrição</th><th>Un.</th><th>Contratual</th>'+
+        '<th>Serviço planejado</th><th>Serviço controlado (apelidos)</th><th>Item do orçamento</th><th></th>'+
+      '</tr></thead><tbody>'+vis.map(function(it){ return eapLinhaHTML(it,pode); }).join('')+'</tbody></table></div></div>';
+
+    var semSvc=folhas.filter(function(i){ return !i.svc; });
+    var codPorSvc={}; folhas.forEach(function(i){ if(i.svc)codPorSvc[i.svc]=1; });
+    var svcSemEap=SERV.filter(function(s){ return !codPorSvc[s.id]; });
+    var pend='<div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+
+      '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Itens sem serviço planejado</div>'+
+      '<div class="note" style="margin-bottom:8px">Não entram em avanço nem em relatório enquanto não forem ligados</div>'+
+      (semSvc.length?('<div class="note">'+semSvc.slice(0,30).map(function(i){ return '<b class="mono">'+escAttr(i.cod)+'</b> '+escAttr(i.nome); }).join('<br>')+
+        (semSvc.length>30?('<br>+ '+(semSvc.length-30)+' outros'):'')+'</div>'):'<div class="note" style="color:var(--good)">Todos ligados.</div>')+'</div>'+
+      '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Serviços sem item de EAP</div>'+
+      '<div class="note" style="margin-bottom:8px">Permitido — a EAP é uma camada de leitura, não um portão</div>'+
+      (svcSemEap.length?('<div class="note">'+svcSemEap.map(function(s){ return escAttr(s.n); }).join('<br>')+'</div>'):'<div class="note" style="color:var(--good)">Todos na EAP.</div>')+'</div>'+
+      '</div>';
+    return topo+kpis+tabela+pend;
+  };
+  function eapItemPorCod(cod){ return eapAtual().itens.filter(function(i){ return i.cod===cod; })[0]; }
+  function eapWire(){
+    var pode=eapPodeEditar();
+    var b;
+    if((b=document.getElementById('eapImp')))b.addEventListener('click',function(){ eapImportar('generico'); });
+    if((b=document.getElementById('eapImpInf')))b.addEventListener('click',function(){ eapImportar('informes'); });
+    if((b=document.getElementById('eapModelo')))b.addEventListener('click',function(){ comCarga(eapModeloExcel); });
+    if((b=document.getElementById('eapExp')))b.addEventListener('click',function(){ comCarga(exportEapExcel); });
+    if((b=document.getElementById('eapSalvar')))b.addEventListener('click',function(){ comCarga(eapSalvar); });
+    if((b=document.getElementById('eapLimpar')))b.addEventListener('click',function(){
+      if(!confirm('Apagar a EAP desta obra? Os vínculos com serviços e com o orçamento vão junto.'))return;
+      EAP=eapVazio(); eapSujo(); go('cad-eap');
+    });
+    document.querySelectorAll('[data-eaptog]').forEach(function(t){
+      t.addEventListener('click',function(){
+        var k=t.getAttribute('data-eaptog');
+        EAP_OPEN[k]=(EAP_OPEN[k]===false);
+        go('cad-eap');
+      });
+    });
+    if((b=document.getElementById('eapAbrir')))b.addEventListener('click',function(){ EAP_OPEN={}; go('cad-eap'); });
+    if((b=document.getElementById('eapFechar')))b.addEventListener('click',function(){
+      eapAtual().itens.forEach(function(i){ if(eapNivel(i.cod)===1)EAP_OPEN[i.cod]=false; });
+      go('cad-eap');
+    });
+    if((b=document.getElementById('eapContrat')))b.addEventListener('click',function(){
+      /* Repete o código do grupo nas linhas em branco, SEM atravessar de um grupo de nível 1 pro
+       * outro — foi exatamente assim que o Dreno virou Sinalização na primeira tentativa. */
+      var itens=eapAtual().itens.slice().sort(eapOrdena), grupo='', ultimo='', n=0;
+      itens.forEach(function(it){
+        var g=String(it.cod).split('.')[0];
+        if(g!==grupo){ grupo=g; ultimo=''; }
+        if(it.contratual){ ultimo=it.contratual; return; }
+        if(it.auto||!ultimo)return;
+        it.contratual=ultimo; n++;
+      });
+      eapSujo(); go('cad-eap');
+      toast(n?(n+' código(s) contratual(is) preenchido(s) pelo grupo. Confira antes de salvar.'):'Nada a completar — cada grupo começa sem código.');
+    });
+    if((b=document.getElementById('eapConfirmar')))b.addEventListener('click',function(){
+      var n=0;
+      eapAtual().itens.forEach(function(i){ if(i.sug&&(i.sug.svc||i.sug.orc)){ delete i.sug; n++; } });
+      eapSujo(); go('cad-eap');
+      toast(n+' vínculo(s) confirmado(s).');
+    });
+    if(!pode)return;
+    document.querySelectorAll('[data-eapf]').forEach(function(el){
+      el.addEventListener('change',function(){
+        var tr=el.closest('tr'); if(!tr)return;
+        var it=eapItemPorCod(tr.getAttribute('data-eapcod')); if(!it)return;
+        var campo=el.getAttribute('data-eapf'), v=el.value;
+        if(campo==='controle')it.controle=v.split(';').map(function(x){ return x.trim(); }).filter(Boolean);
+        else if(campo==='svc'){ it.svc=v||null; if(it.sug)delete it.sug.svc; }
+        else if(campo==='orc'){ it.orc=v||null; if(it.sug)delete it.sug.orc; }
+        else it[campo]=v.trim();
+        if(it.auto&&campo==='nome'&&v.trim())delete it.auto;
+        eapSujo();
+        if(campo==='svc'||campo==='orc')go('cad-eap');
+      });
+    });
+  }
+  /* ---------- Excel ---------- */
+  var EAP_COLS=['Código','Descrição','Unidade','Contratual','Serviço planejado','Serviço controlado','Item do orçamento'];
+  async function eapPlanilha(nomeArq,linhas,nota){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
+    var wb=new ExcelJS.Workbook(); wb.creator='LPS Tripoloni'; wb.created=new Date();
+    var ws=wb.addWorksheet('EAP',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(ws,EAP_COLS,[12,42,9,13,28,34,30]);
+    linhas.forEach(function(l){ var r=ws.addRow(l); r.font={size:10}; });
+    if(nota){ ws.addRow([]); var n=ws.addRow([nota]); n.font={size:9,italic:true}; }
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download=nomeArq+'_'+nome+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+  }
+  async function eapModeloExcel(){
+    // o modelo já vem com os serviços da obra: é mais fácil acrescentar código do que redigitar nome
+    var linhas=SERV.map(function(s){ return ['',s.n,s.u||'','',s.n,'','']; });
+    if(!linhas.length)linhas=[['2','TERRAPLENAGEM','','','','',''],['2.1','Corte','m³','T02','','2.1 Corte','']];
+    await eapPlanilha('modelo_eap',linhas,
+      'Preencha o Código (2.1, 2.2.1 …) — a hierarquia sai dele. Em Serviço controlado dá pra pôr vários apelidos separados por ponto e vírgula. Não há coluna de quantidade: ela vive em Lotes & Quantidades e no orçamento.');
+    toast('Modelo da EAP baixado.');
+  }
+  async function exportEapExcel(){
+    var itens=eapAtual().itens.slice().sort(eapOrdena);
+    var linhas=itens.map(function(it){
+      return [it.cod,it.nome,it.un,it.contratual,eapServicoNome(it.svc),
+        (it.controle||[]).join('; '),eapOrcNome(it.orc)];
+    });
+    await eapPlanilha('eap',linhas,'Exportado de LPS Tripoloni · Cadastro → EAP de serviços.');
+    toast('EAP exportada.');
   }
   /* ================= Orçamento do projeto e AVA =================
    * O orçamento entra pela planilha de composições da obra (PLANILHAS_COMPOR) e serve a uma
