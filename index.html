@@ -91,6 +91,9 @@
   body.ro #topSaveBtn{display:none!important}
   body.ro .tcm-seg{cursor:default}
   body.ro .tcm-grip{display:none}
+  /* Matriz da linha de base: retrato, não prancheta. Sem alça de arrasto e sem cursor de mão. */
+  .tc-soleitura .tcm-grip{display:none}
+  .tc-soleitura .tcm-seg{cursor:default}
   body.ro #cronoToolbar [data-act^="imp"],body.ro #cronoToolbar [data-act="rev00"]{display:none!important}
   .top-right{margin-left:auto;display:flex;align-items:center;gap:9px}
   .icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);display:grid;place-items:center;cursor:pointer}
@@ -9583,6 +9586,9 @@
    *  mas não reabre o plano congelado: é o compromisso da obra, e reabrir sem gerar revisão nova
    *  é como mudar o contrato sem assinar aditivo. Pra estudar outro plano existe o cenário. */
   function podeDestravar(){ return IS_APP_ADMIN&&!isReadOnly(); }
+  /** Quem não planeja fica na linha de base: o rascunho em edição e a prancheta do manual são
+   *  trabalho em andamento, e circular isso como se fosse o plano da obra confunde quem executa. */
+  function soLinhaDeBase(){ return !!activeBaseline()&&!isPlanejador(); }
   function tcDestrava(v){
     if(!podeDestravar())return;
     if(v)OVR.__editavel=true; else delete OVR.__editavel;
@@ -9593,6 +9599,7 @@
    * no ritmo que os apontamentos mostram. Com linha de base ativa, 'base' é o padrão. */
   var TC_VISTA=null;
   function tcVistaAtual(){
+    if(soLinhaDeBase())return 'base';                 // perfil restrito não sai da linha de base
     if(TC_VISTA==='projecao')return 'projecao';
     // Dentro de um cenário aberto, "linha de base" não é vista: o que está na tela é o cenário.
     if(ACTIVE_CENARIO||CENARIO_VISTA)return 'plano';
@@ -9600,6 +9607,8 @@
     return (TC_VISTA==='plano')?'plano':'base';
   }
   function tcVistaBotoesHTML(){
+    if(soLinhaDeBase())
+      return '<button class="subtab active" data-tcvista="base" title="Seu perfil acessa a linha de base da obra">Linha de base</button>';
     var atual=tcVistaAtual(), temBase=!!activeBaseline()&&!ACTIVE_CENARIO&&!CENARIO_VISTA;
     var opts=temBase
       ? [['base','Linha de base'],['plano','Planejado (em edição)'],['projecao','Projeção pelo ritmo real']]
@@ -13791,7 +13800,9 @@
     return '<table class="tcm'+(opts.apontar?' apontar':'')+'"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
   }
   function matrixTableHTML(withSummary,segsOverride,opts){
+    opts=opts||{};
     var tableHtml=matrixTableCore(withSummary,viewLotIdxs(),segsOverride||buildSchedule(),opts);
+    if(opts.soLeitura)tableHtml='<div class="tc-soleitura">'+tableHtml+'</div>';
     var anyHidden=SERV.some(function(s,si){return !!TC_HIDDEN_SVC[si];});
     var svcToggles=SERV.length?('<div class="tc-svctoggle">'+
       SERV.map(function(sv,si){
@@ -15554,6 +15565,22 @@
   function cronoContent(){
     var tab=window._cronoTab||'tc';
     var avFalta=tcmAvisoFaltaHTML();
+    /* A vista "Linha de base" é o retrato congelado, e isso vale TAMBÉM no modo manual. Antes a
+     * prancheta de desenho vinha primeiro na ordem, então escolher "Linha de base" com o modo
+     * manual ligado abria o editor, com as pendências do rascunho por cima. Retrato não se
+     * desenha — se lê. */
+    if(tab==='tc'&&tcVistaAtual()==='base'){
+      var bl=activeBaseline();
+      var segsBase=(bl&&bl.snap)?scheduleWithSnapshot(bl.snap):buildSchedule();
+      return fsBarHTML()+
+        '<div class="banner" style="margin-bottom:10px">'+
+          '🔒 <b>Linha de base '+escAttr((bl&&bl.revisao)||'')+'</b> — o retrato congelado que alimenta a Curva S, o histograma, a AVA e os relatórios. '+
+          (soLinhaDeBase()
+            ? 'É a vista do seu perfil.'
+            : 'Para mexer no cronograma use <b>Planejado (em edição)</b>; para estudar outro plano, <b>Cenários</b>.')+
+        '</div>'+
+        matrixTableHTML(true,segsBase,{soLeitura:true});
+    }
     if(tab==='ajuste') return fsBarHTML()+'<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
       '<div><h3>Ajuste manual (arraste para mover)</h3>'+
       '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.'+
@@ -15940,6 +15967,9 @@
           // personalizar) ou o primeiro dos dois cliques de um dblclick (reseta o ajuste, ver
           // abaixo). Espera um pouco pra ver se vem um segundo clique antes de abrir o menu.
           var liC=d.li, siC=si;
+          // Barra da linha de base: o clique não abre "Personalizar", senão o ajuste cairia no
+          // cronograma ao vivo, que não é o que está na tela.
+          if(el.closest&&el.closest('.tc-soleitura'))return;
           if(_segClickEl===el&&(Date.now()-_segClickAt)<400){
             clearTimeout(_segClickTimer); _segClickTimer=null; _segClickEl=null;
           } else {
