@@ -1130,7 +1130,10 @@
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
     ORC=(obra.orcamento&&typeof obra.orcamento==='object'&&obra.orcamento.itens)?obra.orcamento:null;
     ORC_DIRTY=false; ORC_OPEN={}; AVA_CORTE=null; AVA_TAB='painel';
+    /* Entrar na obra é entrar na linha de base: vista 'base' (TC_VISTA null), aba do tempo-
+     * caminho, sem cenário carregado e sem vista de cenário de uma sessão anterior. */
     ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; CENARIO_VISTA=null; TC_VISTA=null;
+    window._cronoTab='tc';
     SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; ESTACA_VOL={}; EST_OPEN={};
     REC_DIRTY={}; REALIZADO_DIRTY={}; APOIO_DIRTY={}; APOIO_SELECTED={};
@@ -3308,7 +3311,10 @@
           (tr?'🔒 ':'🔓 ')+'<b>Linha de base '+escAttr(b.revisao||'')+'</b>'+escAttr(cong)+' — '+
           (tr?'esta é a referência de previsto do projeto e a matriz está <b>travada</b> para edição.'
              :'a matriz está <b>liberada</b> para edição. A linha de base em si não muda; para que o previsto passe a valer o novo plano, gere uma revisão.')+
-          (isReadOnly()?'':(' <button class="btn" id="tcTrava" style="margin-left:8px;padding:3px 10px;font-size:11.5px">'+(tr?'🔓 Liberar edição':'🔒 Travar de novo')+'</button>'))+
+          (podeDestravar()
+            ? (' <button class="btn" id="tcTrava" style="margin-left:8px;padding:3px 10px;font-size:11.5px" title="Só o desenvolvedor libera a linha de base">'+(tr?'🔓 Liberar edição (desenvolvedor)':'🔒 Travar de novo')+'</button>')
+            : (tr?(' <span class="note" style="margin-left:6px">Para estudar outro plano, use <b>Cenários</b> — lá dá pra mexer à vontade sem tocar nesta linha de base.</span>')
+                 :(' <span class="note" style="margin-left:6px;color:var(--warn)">Liberada pelo desenvolvedor.</span>')))+
         '</div>';
       })()+
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
@@ -9070,6 +9076,9 @@
   var REF_DENTRO=0;         // >0: já estamos dentro de um withSnapshot, não empilhar outro
   function snapRef(){
     if(CENARIO_VISTA)return CENARIO_VISTA.snap||null;
+    // Cenário aberto no editor: o estado ao vivo JÁ é ele. Apontar pra linha de base aqui faria
+    // o planejador editar uma coisa e ver outra na tela.
+    if(ACTIVE_CENARIO)return null;
     var b=activeBaseline();
     return (b&&b.snap)?b.snap:null;
   }
@@ -9077,6 +9086,7 @@
   /** O que está valendo como referência agora, pra escrever na tela. */
   function refRotulo(){
     if(CENARIO_VISTA)return 'cenário "'+CENARIO_VISTA.nome+'"';
+    if(ACTIVE_CENARIO)return 'cenário "'+ACTIVE_CENARIO.nome+'" (em edição)';
     var b=activeBaseline();
     return b?('linha de base '+(b.revisao||'')).trim():'cronograma ao vivo';
   }
@@ -9559,9 +9569,22 @@
   /* Com linha de base congelada, a matriz fica trancada: o plano virou compromisso e mexer nele
    * sem querer apaga a referência de quem está atrasado. A liberação é explícita e fica gravada
    * (em ajustes_manuais, junto do resto), pra equipe toda ver que o cronograma está aberto. */
-  function tcTravada(){ return !!(activeBaseline()&&!(OVR&&OVR.__editavel)); }
+  /* A trava protege a linha de base, não o cenário: dentro de um cenário aberto pra edição não
+   * há o que proteger — o que se salva ali vai pro cenário, e a base fica onde está. Sem essa
+   * exceção o planejador abria o cenário e encontrava a matriz trancada, sem ter o que fazer. */
+  function tcTravada(){
+    // A liberação é gravada (a equipe toda vê que o plano está aberto), mas só VALE pra quem
+    // pode liberar. Assim uma liberação antiga não reabre o plano na mão de outra pessoa, e
+    // ninguém precisa apagar o registro de que ele foi aberto.
+    return !!(activeBaseline()&&!ACTIVE_CENARIO&&!(IS_APP_ADMIN&&OVR&&OVR.__editavel));
+  }
   function matBloqueada(){ return isReadOnly()||tcTravada(); }
+  /** Destravar a linha de base é do desenvolvedor. Planejador gera a revisão (isso sim é dele),
+   *  mas não reabre o plano congelado: é o compromisso da obra, e reabrir sem gerar revisão nova
+   *  é como mudar o contrato sem assinar aditivo. Pra estudar outro plano existe o cenário. */
+  function podeDestravar(){ return IS_APP_ADMIN&&!isReadOnly(); }
   function tcDestrava(v){
+    if(!podeDestravar())return;
     if(v)OVR.__editavel=true; else delete OVR.__editavel;
     adjDirty();
   }
@@ -9570,13 +9593,14 @@
    * no ritmo que os apontamentos mostram. Com linha de base ativa, 'base' é o padrão. */
   var TC_VISTA=null;
   function tcVistaAtual(){
-    var temBase=!!activeBaseline();
     if(TC_VISTA==='projecao')return 'projecao';
-    if(!temBase)return 'plano';                       // sem linha de base só existe o plano
+    // Dentro de um cenário aberto, "linha de base" não é vista: o que está na tela é o cenário.
+    if(ACTIVE_CENARIO||CENARIO_VISTA)return 'plano';
+    if(!activeBaseline())return 'plano';              // sem linha de base só existe o plano
     return (TC_VISTA==='plano')?'plano':'base';
   }
   function tcVistaBotoesHTML(){
-    var atual=tcVistaAtual(), temBase=!!activeBaseline();
+    var atual=tcVistaAtual(), temBase=!!activeBaseline()&&!ACTIVE_CENARIO&&!CENARIO_VISTA;
     var opts=temBase
       ? [['base','Linha de base'],['plano','Planejado (em edição)'],['projecao','Projeção pelo ritmo real']]
       : [['plano','Planejado'],['projecao','Projeção pelo ritmo real']];
@@ -15554,7 +15578,7 @@
           ' Esta vista é só leitura: nem o plano nem a linha de base mudam.</div>'+
         matrixTableHTML(true,proj);
     }
-    if(tab==='tc'&&tcVistaAtual()==='plano'&&activeBaseline()){
+    if(tab==='tc'&&tcVistaAtual()==='plano'&&activeBaseline()&&!ACTIVE_CENARIO&&!CENARIO_VISTA){
       var dv=tcDesvioDaBase();
       var aviso='<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
         '<b>Planejado (em edição).</b> Este é o rascunho da matriz, não a referência da obra. '+
@@ -16071,7 +16095,7 @@
   function wireTrava(){
     var b=document.getElementById('tcTrava');
     if(b)b.addEventListener('click',function(){
-      if(isReadOnly())return;
+      if(!podeDestravar()){ toast('Só o desenvolvedor libera a linha de base. Para estudar outro plano, crie um cenário.'); return; }
       var tr=tcTravada();
       if(tr&&!confirm('Liberar a matriz para edição?'+String.fromCharCode(10)+String.fromCharCode(10)+
         'A linha de base continua intacta — ela é o previsto do projeto e não muda. O que você editar daqui em diante passa a divergir dela, e essa diferença é o que aparece como atraso ou adiantamento.'+
