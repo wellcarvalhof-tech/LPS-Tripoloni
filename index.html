@@ -11832,9 +11832,12 @@
     return fmtMoeda(n);
   }
   /* ---------- tela: Cadastro → Orçamento ---------- */
+  function orcNoAberto(it){
+    return (ORC_OPEN[it.id]!==false&&it.nivel<=1)||ORC_OPEN[it.id]===true;
+  }
   function orcLinhaHTML(no,arv,total){
     var it=no.it, temFilho=!!no.filhos.length;
-    var aberto=ORC_OPEN[it.id]!==false&&it.nivel<=1||ORC_OPEN[it.id]===true;
+    var aberto=orcNoAberto(it);
     var pct=total>0?(100*no.peso/total):0;
     var uni=orcSvcSubarvore(no);
     var selId=temFilho?uni.svc:(it.svc||null);
@@ -12034,7 +12037,8 @@
   var AVA_CORTE=null;        // índice do mês de corte (null = último com lançamento)
   var AVA_UNID='pct';        // 'pct' | 'rs'
   var AVA_TAB='painel';      // 'painel' | 'lanc' | 'dist'
-  var AVA_DIST_MED='qtd';    // 'qtd' | 'pct' | 'rs' — o que a tabela da distribuição mostra
+  var AVA_DIST_MED='qtd';    // 'qtd' | 'pct' | 'rs' | 'pm' — o que a tabela da distribuição mostra
+  var AVA_DIST_EIXO='svc';   // 'svc' | 'item' — linhas por serviço do app ou pela EAP do orçamento
 
   function avaMeses(){
     var O=orcAtual(), m={};
@@ -12153,6 +12157,46 @@
     return {meses:meses,N:N,linhas:linhas,totRs:totRs,somaRs:somaRs,
       accRs:accRs,cotaMes:cotaMes,accCota:accCota,semVinc:V.semVinc,
       semValor:linhas.filter(function(L){ return !(L.valor>0); }).length};
+  }
+  /** A mesma distribuição, mas com as linhas da EAP do orçamento em vez dos serviços.
+   *  Cada FOLHA pega a curva mensal do serviço a que está vinculada e distribui o próprio valor
+   *  (e a própria quantidade, que aí tem unidade) por ela. Grupo é a soma dos filhos — em R$,
+   *  que é o que soma; o percentual do grupo sai do dinheiro dele, e quantidade de grupo não
+   *  existe, porque mistura unidade.
+   *  Vai junto a série que a PLANILHA trouxe (o cronograma de custo), pra dar pra ver item a
+   *  item onde as duas leituras se afastam. */
+  function avaDistItens(){
+    var X=avaDistribuicao();
+    if(!X)return null;
+    var pctDe={}; X.linhas.forEach(function(L){ pctDe[L.sv.id]=L.pct; });
+    var arv=orcArvore(), N=X.N, idx={};
+    X.meses.forEach(function(k,i){ idx[k]=i; });
+    var zeros=function(){ var a=[]; for(var i=0;i<N;i++)a.push(0); return a; };
+    function monta(no){
+      var pm=zeros();
+      Object.keys(no.pm||{}).forEach(function(k){ if(idx[k]!=null)pm[idx[k]]+=orcNum(no.pm[k]); });
+      if(!no.filhos.length){
+        var pct=pctDe[no.it.svc]||null;
+        var rs=zeros(), qtd=zeros();
+        if(pct)for(var i=0;i<N;i++){ rs[i]=no.peso*pct[i]; qtd[i]=orcNum(no.it.qtd)*pct[i]; }
+        return {no:no,folha:true,temCurva:!!pct,rs:rs,qtd:qtd,pm:pm,
+          pct:pct?pct.slice():zeros(),filhos:[]};
+      }
+      var filhos=no.filhos.map(monta), rs2=zeros(), temCurva=false;
+      filhos.forEach(function(f){ if(f.temCurva)temCurva=true; for(var i=0;i<N;i++)rs2[i]+=f.rs[i]; });
+      var pct2=zeros();
+      if(no.peso>0)for(var j=0;j<N;j++)pct2[j]=rs2[j]/no.peso;
+      return {no:no,folha:false,temCurva:temCurva,rs:rs2,qtd:null,pm:pm,pct:pct2,filhos:filhos};
+    }
+    var raizes=arv.raizes.map(monta);
+    var totRs=zeros(), totPm=zeros(), soma=0, semCurva=0;
+    raizes.forEach(function(r){
+      soma+=r.no.peso;
+      for(var i=0;i<N;i++){ totRs[i]+=r.rs[i]; totPm[i]+=r.pm[i]; }
+    });
+    (function anda(l){ l.forEach(function(x){
+      if(x.folha&&!x.temCurva)semCurva+=x.no.peso; else anda(x.filhos); }); })(raizes);
+    return {meses:X.meses,N:N,raizes:raizes,totRs:totRs,totPm:totPm,soma:soma,semCurva:semCurva,X:X};
   }
   /** De onde sai o avanço de uma atividade: de um serviço só, dos itens dentro dela (grupo
    *  ajustado item a item) ou do lançamento manual. Decide o que a tela mostra e o que ela
@@ -12417,9 +12461,16 @@
       return '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Sem cronograma pra distribuir</div>'+
         '<div class="note">Esta aba lê o cronograma do Tempo-Caminho: quantidade de cada serviço em cada mês. '+
         'Cadastre as quantidades por lote e monte o cronograma pra ver a distribuição.</div></div>';
+    var porItem=AVA_DIST_EIXO==='item';
     var med=AVA_DIST_MED, N=X.N;
-    var medBtns=[['qtd','Quantidade'],['pct','% do serviço'],['rs','R$']].map(function(o){
+    if(!porItem&&med==='pm')med='rs';
+    var medOps=[['qtd','Quantidade'],['pct',porItem?'% do item':'% do serviço'],['rs','R$']];
+    if(porItem)medOps.push(['pm','R$ da planilha']);
+    var medBtns=medOps.map(function(o){
       return '<button class="subtab'+(med===o[0]?' active':'')+'" data-avadistmed="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+    var eixoBtns=[['svc','Por serviço'],['item','Por item do orçamento']].map(function(o){
+      return '<button class="subtab'+(AVA_DIST_EIXO===o[0]?' active':'')+'" data-avadisteixo="'+o[0]+'">'+o[1]+'</button>';
     }).join('');
 
     var totQtdSvc=0; X.linhas.forEach(function(L){ totQtdSvc++; });
@@ -12447,7 +12498,7 @@
       avaLegenda([{lab:'Pelo cronograma do app',cor:cssHex('--accent')},{lab:'COTA da planilha',cor:cssHex('--warn'),trace:true}])+
       '<svg class="chart" id="avaDistSvg" style="width:100%;height:auto"></svg></div>';
 
-    var th='<th style="min-width:190px">Serviço</th><th>Un.</th>';
+    var th='<th style="min-width:190px">'+(porItem?'Item do orçamento':'Serviço')+'</th><th>Un.</th>';
     X.meses.forEach(function(m){ th+='<th class="r">'+orcMesLabel(m)+'</th>'; });
     th+='<th class="r">Total</th>';
 
@@ -12456,6 +12507,7 @@
       if(med==='pct')return L.pct[i]>0?fmtDec(100*L.pct[i],1)+'%':'—';
       return L.rs[i]>0?fmtMoeda(L.rs[i]):'—';
     };
+    if(porItem)return avaDistItensHTML(kpis,grafico,th,med,medBtns,eixoBtns);
     var corpo=X.linhas.map(function(L){
       var tds='';
       for(var i=0;i<N;i++)tds+='<td class="r mono">'+celula(L,i)+'</td>';
@@ -12498,11 +12550,84 @@
     var tabela='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
       '<div><div class="eyebrow" style="margin:0">Distribuição por serviço e mês</div>'+
       '<div class="note">'+nota+(fD?(' <b style="color:var(--warn)">'+escAttr(fD)+'</b> — a quantidade sai só desses lotes; o valor do orçamento é o do contrato inteiro.'):'')+'</div></div>'+
-      '<div style="display:flex;gap:6px">'+medBtns+'</div></div>'+
+      '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
+        '<div style="display:flex;gap:6px">'+eixoBtns+'</div>'+
+        '<div style="display:flex;gap:6px">'+medBtns+'</div></div></div>'+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:11.5px"><thead><tr>'+th+'</tr></thead>'+
       '<tbody>'+corpo+linhaTot+linhaAcc+'</tbody></table></div></div>';
 
     return kpis+grafico+tabela;
+  }
+  /** A mesma distribuição com as linhas da EAP. A árvore abre e fecha pelos mesmos ORC_OPEN da
+   *  tela do orçamento — quem abriu um grupo lá encontra ele aberto aqui. */
+  function avaDistItensHTML(kpis,grafico,th,med,medBtns,eixoBtns){
+    var I=avaDistItens();
+    if(!I)return kpis+grafico+'<div class="card"><div class="note">Sem cronograma pra distribuir.</div></div>';
+    var N=I.N;
+    function cel(x,i){
+      if(med==='qtd')return x.folha?(x.qtd[i]>0?fmtDec(x.qtd[i],2):'—'):'—';
+      if(med==='pct')return x.pct[i]>0?fmtDec(100*x.pct[i],1)+'%':'—';
+      if(med==='pm')return x.pm[i]>0?fmtMoeda(x.pm[i]):'—';
+      return x.rs[i]>0?fmtMoeda(x.rs[i]):'—';
+    }
+    function totalDe(x){
+      if(med==='qtd')return x.folha?fmtDec(orcNum(x.no.it.qtd),2):'—';
+      if(med==='pct')return x.temCurva?'100%':'—';
+      if(med==='pm'){ var t=0; x.pm.forEach(function(v){ t+=v; }); return t>0?fmtMoeda(t):'—'; }
+      return fmtMoeda(x.no.peso);
+    }
+    var linhas='';
+    (function anda(lista){
+      lista.forEach(function(x){
+        var it=x.no.it, temFilho=!!x.filhos.length;
+        var aberto=orcNoAberto(it);
+        var tds='';
+        for(var i=0;i<N;i++)tds+='<td class="r mono">'+cel(x,i)+'</td>';
+        var alerta=(x.folha&&!x.temCurva&&x.no.peso>0&&med!=='pm');
+        linhas+='<tr class="orc-n'+it.nivel+'"'+(alerta?' style="opacity:.6"':'')+'>'+
+          '<td style="padding-left:'+(6+(it.nivel-1)*14)+'px;white-space:nowrap">'+
+          (temFilho?'<button class="iconbtn" data-avatog="'+escAttr(it.id)+'" style="margin-right:4px">'+(aberto?'▾':'▸')+'</button>'
+                   :'<span style="display:inline-block;width:22px"></span>')+
+          '<b class="mono">'+escAttr(it.cod)+'</b> '+escAttr(it.nome)+
+          (alerta?' <span class="pill mut" title="Nenhum serviço do cronograma está vinculado a este item — ele não entra na distribuição">sem curva</span>':'')+'</td>'+
+          '<td class="mono note">'+escAttr(x.folha?(it.un||''):'')+'</td>'+tds+
+          '<td class="r mono" style="font-weight:700">'+totalDe(x)+'</td></tr>';
+        if(temFilho&&aberto)anda(x.filhos);
+      });
+    })(I.raizes);
+
+    var tdsT='', acc=0, tdsA='';
+    for(var i2=0;i2<N;i2++){
+      var serie=(med==='pm')?I.totPm:I.totRs, v;
+      if(med==='qtd')v='—';
+      else if(med==='pct')v=I.soma>0?fmtDec(100*I.totRs[i2]/I.soma,1)+'%':'—';
+      else v=serie[i2]>0?fmtMoeda(serie[i2]):'—';
+      tdsT+='<td class="r mono">'+v+'</td>';
+      acc+=serie[i2];
+      tdsA+='<td class="r mono note">'+(med==='qtd'?'—':(med==='pct'?(I.soma>0?fmtDec(100*acc/I.soma,1)+'%':'—'):fmtMoeda(acc)))+'</td>';
+    }
+    var totG=med==='qtd'?'—':(med==='pct'?'100%':fmtMoeda(acc));
+    var linhaTot='<tr style="background:var(--elev);font-weight:700"><td>Total</td><td></td>'+tdsT+'<td class="r mono">'+totG+'</td></tr>';
+    var linhaAcc='<tr style="background:var(--elev)"><td class="note">Acumulado</td><td></td>'+tdsA+'<td></td></tr>';
+
+    var nota=med==='pm'
+      ? 'O que a <b>planilha</b> trouxe no cronograma de custo, item a item. É a outra leitura — compare com a coluna R$ pra ver onde as duas discordam.'
+      : (med==='qtd'
+        ? 'Quantidade do item distribuída pela curva mensal do serviço vinculado a ele. Grupo não tem quantidade: mistura unidade.'
+        : (med==='pct'
+          ? 'Quanto do item cai em cada mês. No grupo, o percentual sai do dinheiro dos filhos.'
+          : 'Valor do item distribuído pela curva mensal do serviço vinculado a ele. Grupo é a soma dos filhos.'));
+    var semCurva=I.semCurva>0?(' <b style="color:var(--warn)">'+fmtMoedaCurta(I.semCurva)+' em itens sem serviço vinculado</b> — ficam fora da distribuição.'):'';
+    var fD=filtroLotesTexto();
+
+    return kpis+grafico+'<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
+      '<div><div class="eyebrow" style="margin:0">Distribuição por item do orçamento</div>'+
+      '<div class="note">'+nota+semCurva+(fD?(' <b style="color:var(--warn)">'+escAttr(fD)+'</b> — a curva mensal vem desses lotes.'):'')+'</div></div>'+
+      '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
+        '<div style="display:flex;gap:6px">'+eixoBtns+'</div>'+
+        '<div style="display:flex;gap:6px">'+medBtns+'</div></div></div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11.5px"><thead><tr>'+th+'</tr></thead>'+
+      '<tbody>'+linhas+linhaTot+linhaAcc+'</tbody></table></div></div>';
   }
   function avaLancHTML(D){
     var O=orcAtual(), meses=D.meses;
@@ -12615,6 +12740,24 @@
     });
     document.querySelectorAll('[data-avadistmed]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_DIST_MED=b.getAttribute('data-avadistmed'); go('ac-ava'); });
+    });
+    document.querySelectorAll('[data-avadisteixo]').forEach(function(b){
+      b.addEventListener('click',function(){
+        AVA_DIST_EIXO=b.getAttribute('data-avadisteixo');
+        if(AVA_DIST_EIXO!=='item'&&AVA_DIST_MED==='pm')AVA_DIST_MED='rs';  // 'pm' só existe por item
+        // na EAP os níveis de cima são grupos, e grupo não tem quantidade: cair em Quantidade
+        // mostraria uma tabela de traços. Dinheiro é a única medida que lê em todos os níveis.
+        if(AVA_DIST_EIXO==='item'&&AVA_DIST_MED==='qtd')AVA_DIST_MED='rs';
+        go('ac-ava');
+      });
+    });
+    document.querySelectorAll('[data-avatog]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var k=b.getAttribute('data-avatog');
+        var it=orcAtual().itens.filter(function(i){ return i.id===k; })[0];
+        if(it)ORC_OPEN[k]=!orcNoAberto(it);
+        go('ac-ava');
+      });
     });
     document.querySelectorAll('[data-avaunid]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_UNID=b.getAttribute('data-avaunid'); go('ac-ava'); });
@@ -12729,6 +12872,33 @@
         var rC=wsF.addRow(['COTA da planilha (acumulada)',''].concat(X.accCota).concat(['']));
         rC.font={size:10,italic:true};
         for(var cc=3;cc<=2+X.N;cc++)rC.getCell(cc).numFmt='#,##0.00';
+      }
+      /* ---- a mesma distribuição pela EAP, com as duas leituras lado a lado ---- */
+      var I=avaDistItens();
+      if(I){
+        var wsI=wb.addWorksheet('Distribuição · itens',{views:[{state:'frozen',xSplit:5,ySplit:1}]});
+        var cabI=['Código','Item','Nível','Un.','Medida'];
+        X.meses.forEach(function(m){ cabI.push(orcMesLabel(m)); });
+        cabI.push('Total');
+        relCabecalho(wsI,cabI,[14,46,7,10,20].concat(X.meses.map(function(){ return 14; })).concat([16]));
+        (function anda(lista){
+          lista.forEach(function(x){
+            var it=x.no.it;
+            var base=[it.cod,it.nome,it.nivel,x.folha?(it.un||''):''];
+            var soma=function(a){ var t=0; a.forEach(function(v){ t+=v; }); return t; };
+            var linhas=[['R$ pelo cronograma',x.rs,x.no.peso],['R$ da planilha',x.pm,soma(x.pm)]];
+            if(x.folha)linhas.unshift(['Quantidade',x.qtd||[],orcNum(it.qtd)]);
+            linhas.forEach(function(L){
+              var r=wsI.addRow(base.concat([L[0]]).concat(L[1]).concat([L[2]]));
+              r.font={size:10,bold:it.nivel<=2};
+              for(var c=6;c<=6+X.N;c++)r.getCell(c).numFmt='#,##0.00';
+            });
+            anda(x.filhos);
+          });
+        })(I.raizes);
+        wsI.addRow([]);
+        var notaI=wsI.addRow(['','','','','Cada item pega a curva mensal do serviço vinculado a ele e distribui por ela o próprio valor e a própria quantidade. "R$ da planilha" é o cronograma de custo que veio na importação — as duas linhas respondem a mesma pergunta por caminhos diferentes. Item sem serviço vinculado fica zerado na linha do cronograma.']);
+        notaI.font={size:9,italic:true};
       }
       wsF.addRow([]);
       var notaF=wsF.addRow(['','','A distribuição sai do cronograma do app: a quantidade de cada serviço em cada mês vira percentual, e o percentual distribui o valor que o orçamento dá àquele serviço (soma das folhas vinculadas a ele). Não é a COTA da planilha — são duas leituras do mesmo orçamento, e a diferença entre elas é informação.']);
