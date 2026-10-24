@@ -11713,6 +11713,33 @@
     raizes.forEach(soma);
     return {mapa:mapa,raizes:raizes,base:base};
   }
+  /** O vínculo de uma subárvore inteira: {svc, misto}. svc é o serviço quando TODOS os nós
+   *  abaixo apontam pro mesmo; misto marca que o grupo foi aberto e ajustado item a item. */
+  function orcSvcSubarvore(no){
+    if(no._uni)return no._uni;
+    if(!no.filhos.length)return (no._uni={svc:no.it.svc||null,misto:false});
+    var achado=null, misto=false, vazio=false;
+    no.filhos.forEach(function(f){
+      var u=orcSvcSubarvore(f);
+      if(u.misto)misto=true;
+      if(!u.svc)vazio=true;
+      else if(achado==null)achado=u.svc;
+      else if(achado!==u.svc)misto=true;
+    });
+    if(achado&&vazio)misto=true;    // parte do grupo vinculada, parte não
+    return (no._uni={svc:misto?null:achado,misto:misto});
+  }
+  /** Nomear o serviço de um grupo vale pra tudo que está dentro dele — é o que se espera de uma
+   *  EAP: o item 12.1 "Drenagem superficial" não tem como ser de um serviço e as sarjetas dele
+   *  de outro, a não ser que alguém abra o grupo e diga isso item a item. */
+  function orcAplicaSvc(no,svcId){
+    var n=0;
+    (function anda(x){
+      x.it.svc=svcId||null; n++;
+      x.filhos.forEach(anda);
+    })(no);
+    return n;
+  }
   /** As atividades da AVA: os nós de nível 2 (é onde a obra mede avanço). */
   function orcAtividades(arv){
     var out=[];
@@ -11809,9 +11836,12 @@
     var it=no.it, temFilho=!!no.filhos.length;
     var aberto=ORC_OPEN[it.id]!==false&&it.nivel<=1||ORC_OPEN[it.id]===true;
     var pct=total>0?(100*no.peso/total):0;
-    var svcOpts='<option value="">—</option>'+SERV.map(function(sv){
-      return '<option value="'+sv.id+'"'+(it.svc===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>';
-    }).join('');
+    var uni=orcSvcSubarvore(no);
+    var selId=temFilho?uni.svc:(it.svc||null);
+    var svcOpts=(temFilho&&uni.misto?'<option value="" selected>— vários —</option>':'<option value=""'+(selId?'':' selected')+'>—</option>')+
+      SERV.map(function(sv){
+        return '<option value="'+sv.id+'"'+(selId===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>';
+      }).join('');
     var html='<tr class="orc-n'+it.nivel+'" data-orcid="'+escAttr(it.id)+'">'+
       '<td style="padding-left:'+(6+(it.nivel-1)*16)+'px;white-space:nowrap">'+
         (temFilho?'<button class="iconbtn" data-orctog="'+escAttr(it.id)+'" style="margin-right:4px">'+(aberto?'▾':'▸')+'</button>':'<span style="display:inline-block;width:22px"></span>')+
@@ -11822,7 +11852,12 @@
       '<td class="r mono">'+(no.filhos.length?'—':(it.cu?fmtMoeda(it.cu):'—'))+'</td>'+
       '<td class="r mono">'+fmtMoeda(no.peso)+'</td>'+
       '<td class="r mono">'+fmtDec(pct,2)+'%</td>'+
-      '<td>'+(it.nivel===2?('<select class="einp" data-orcsvc="'+escAttr(it.id)+'" style="min-width:150px">'+svcOpts+'</select>'):'')+'</td>'+
+      '<td'+(temFilho&&uni.misto?' style="background:var(--warn-bg)"':'')+'>'+
+        '<select class="einp" data-orcsvc="'+escAttr(it.id)+'" style="min-width:150px" title="'+
+        (temFilho&&uni.misto
+          ? 'Os itens dentro deste grupo não apontam todos pro mesmo serviço — ou são serviços diferentes, ou parte está sem vínculo. Escolher um aqui aplica a todos de uma vez.'
+          : (temFilho?'Escolher aqui aplica a todos os itens dentro do grupo. Abra o grupo pra ajustar item a item.':'Serviço deste item'))+
+        '">'+svcOpts+'</select></td>'+
       '</tr>';
     if(aberto)no.filhos.forEach(function(f){ html+=orcLinhaHTML(f,arv,total); });
     return html;
@@ -11847,7 +11882,10 @@
     O.itens.forEach(function(i){ if(!i.folha)return; tc+=i.custo; tv+=i.venda; nFolhas++; });
     var bac=orcBAC();
     var vinc=0, pesoVinc=0;
-    orcAtividades(arv).forEach(function(n){ if(n.it.svc){ vinc++; pesoVinc+=n.peso; } });
+    orcAtividades(arv).forEach(function(n){
+      var u=orcSvcSubarvore(n);
+      if(n.it.svc||u.svc||u.misto){ vinc++; pesoVinc+=n.peso; }
+    });
     var nAtv=orcAtividades(arv).length;
 
     var kpis='<div class="kpis" style="margin-bottom:12px">'+
@@ -11877,7 +11915,8 @@
     var tabela='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
       '<div><div class="eyebrow" style="margin:0">EAP e pesos</div>'+
       '<div class="note">Cronograma de custo: '+periodo+'. O peso de cada nó é a soma das composições abaixo dele. '+
-      'No nível 2 dá pra vincular a atividade a um serviço do app — é assim que o realizado da obra alimenta a AVA.</div></div>'+
+      'Vincular um grupo a um serviço do app aplica o vínculo a <b>todos os itens dentro dele</b> — é assim que o realizado da obra alimenta a AVA. '+
+      'Pra tratar um item à parte, abra o grupo e troque só a linha dele: o grupo passa a mostrar <b>— vários —</b> e a AVA usa a média dos filhos, ponderada pelo custo de cada um.</div></div>'+
       '<div style="display:flex;gap:8px"><button class="btn" id="orcExpTudo" style="padding:4px 10px;font-size:11.5px">Abrir tudo</button>'+
       '<button class="btn" id="orcColTudo" style="padding:4px 10px;font-size:11.5px">Fechar tudo</button>'+
       '<button class="btn" id="orcAuto" style="padding:4px 10px;font-size:11.5px" title="Vincula por semelhança de nome com os serviços cadastrados">Vincular por nome</button></div></div>'+
@@ -11922,8 +11961,12 @@
     document.querySelectorAll('[data-orcsvc]').forEach(function(sel){
       sel.addEventListener('change',function(){
         var id=sel.getAttribute('data-orcsvc');
-        var it=orcAtual().itens.filter(function(i){ return i.id===id; })[0];
-        if(it){ it.svc=sel.value||null; orcSujo(); }
+        var no=orcArvore().mapa[id];
+        if(!no)return;
+        var n=orcAplicaSvc(no,sel.value||null);
+        orcSujo();
+        if(n>1)toast((sel.value?'Serviço aplicado':'Vínculo removido')+' em '+n+' itens do grupo.');
+        go('cad-orc');   // redesenha: os filhos passam a mostrar o serviço do grupo
       });
     });
     var et=document.getElementById('orcExpTudo');
@@ -11934,11 +11977,11 @@
     if(au)au.addEventListener('click',function(){
       var n=0;
       orcAtividades().forEach(function(no){
-        if(no.it.svc)return;
+        if(no.it.svc||orcSvcSubarvore(no).svc)return;
         var nomeSvc=servicoParecido(no.it.nome);   // devolve o NOME do serviço, ou ''
         if(!nomeSvc)return;
         var sv=SERV.filter(function(x){ return x.n===nomeSvc; })[0];
-        if(sv){ no.it.svc=sv.id; n++; }
+        if(sv){ orcAplicaSvc(no,sv.id); n++; }
       });
       orcSujo(); go('cad-orc');
       toast(n?(n+' atividade(s) vinculada(s) por semelhança de nome. Confira antes de salvar.'):'Nenhum nome bateu com os serviços cadastrados.');
@@ -11955,9 +11998,9 @@
     relCabecalho(ws,cab,[18,12,7,46,8,15,14,16,14,16,24].concat(O.meses.map(function(){ return 14; })));
     O.itens.forEach(function(it){
       var no=arv.mapa[it.id];
-      var sv=SERV.filter(function(s){ return s.id===it.svc; })[0];
+      var fonte=no?avaFonteDoNo(no):null;
       var lin=[orcSecaoNome(it.sec),it.cod,it.nivel,it.nome,it.un,it.qtd,it.cu,
-        no?no.peso:it.custo,it.vu,it.venda,sv?sv.n:''];
+        no?no.peso:it.custo,it.vu,it.venda,(fonte&&fonte.tipo!=='manual')?fonte.nome:''];
       O.meses.forEach(function(m){ lin.push((no&&no.pm[m])||0); });
       var r=ws.addRow(lin); r.font={size:10,bold:it.nivel<=2};
       for(var c=6;c<=10;c++)r.getCell(c).numFmt='#,##0.00';
@@ -12022,6 +12065,38 @@
     });
     return Math.max(0,Math.min(1,feito/total));
   }
+  /** Avanço de um nó do orçamento. Quando a subárvore inteira aponta pro mesmo serviço é uma
+   *  consulta só. Quando o grupo foi aberto e ajustado item a item, vira a média dos filhos
+   *  ponderada pelo peso deles — senão editar um item específico não mudaria nada no COTR.
+   *  Filho sem vínculo entra com 0, a mesma regra que a AVA já aplica na atividade solta; se
+   *  NENHUM filho tem de onde tirar avanço, devolve null e o lançamento manual assume. */
+  function avaAvancoNo(no,mes){
+    if(!no.filhos.length)return no.it.svc?avaAvancoServico(no.it.svc,mes):null;
+    var uni=orcSvcSubarvore(no);
+    if(uni.svc&&!uni.misto)return avaAvancoServico(uni.svc,mes);
+    var somaP=0, somaV=0, algum=false;
+    no.filhos.forEach(function(f){
+      if(!(f.peso>0))return;
+      var v=avaAvancoNo(f,mes);
+      somaP+=f.peso;
+      if(v!=null){ somaV+=f.peso*v; algum=true; }
+    });
+    if(!algum)return no.it.svc?avaAvancoServico(no.it.svc,mes):null;
+    return somaP>0?somaV/somaP:null;
+  }
+  /** De onde sai o avanço de uma atividade: de um serviço só, dos itens dentro dela (grupo
+   *  ajustado item a item) ou do lançamento manual. Decide o que a tela mostra e o que ela
+   *  deixa editar — campo editável numa atividade que já tira avanço de serviço é armadilha. */
+  function avaFonteDoNo(no){
+    var uni=orcSvcSubarvore(no);
+    var id=no.filhos.length?uni.svc:(no.it.svc||null);
+    if(id){
+      var sv=SERV.filter(function(s){ return s.id===id; })[0];
+      return {tipo:'servico',id:id,nome:sv?sv.n:'serviço removido'};
+    }
+    if(uni.misto)return {tipo:'misto',id:null,nome:'vários serviços'};
+    return {tipo:'manual',id:null,nome:''};
+  }
   /** Série acumulada da AVA. Devolve tudo em fração do BAC (0..1) + os valores em R$. */
   function avaCalcular(){
     var O=orcAtual();
@@ -12040,8 +12115,7 @@
       for(var t=0;t<N;t++){
         acc+=orcNum(no.pm[meses[t]]);
         pv.push(no.peso>0?Math.min(1,acc/no.peso):0);
-        var r=null;
-        if(no.it.svc)r=avaAvancoServico(no.it.svc,meses[t]);
+        var r=avaAvancoNo(no,meses[t]);
         if(r==null){
           // lançamento manual: o valor vale do mês dele em diante (é acumulado)
           var ult=null;
@@ -12065,7 +12139,8 @@
     // não vinculada enterra os avisos que importam.
     var semFonte=0, pesoSemFonte=0;
     linhas.forEach(function(L){
-      if(L.no.peso>0&&!L.no.it.svc&&!(L.no.it.rm&&Object.keys(L.no.it.rm).length)){ semFonte++; pesoSemFonte+=L.w; }
+      var uL=orcSvcSubarvore(L.no), temVinc=L.no.it.svc||uL.svc||uL.misto;
+      if(L.no.peso>0&&!temVinc&&!(L.no.it.rm&&Object.keys(L.no.it.rm).length)){ semFonte++; pesoSemFonte+=L.w; }
     });
     if(semFonte)alertas.push({n:'info',cod:'—',txt:semFonte+' atividade(s) sem vínculo com serviço e sem avanço lançado, somando '+
       fmtDec(100*pesoSemFonte,1)+'% do orçamento. Enquanto estiverem assim, contam como 0% no COTR.'});
@@ -12227,7 +12302,7 @@
         '<td></td></tr>';
       grupo.forEach(function(L){
         var pv=L.pv[D.corte], ev=L.ev[D.corte], d=(ev-pv)*L.w;
-        var sv=SERV.filter(function(s){ return s.id===L.no.it.svc; })[0];
+        var fonte=avaFonteDoNo(L.no), sv=fonte.tipo==='manual'?null:{n:fonte.nome};
         corpo+='<tr><td style="padding-left:22px">'+escAttr(L.no.it.nome)+
           ' <span class="note mono">'+escAttr(L.no.it.cod)+'</span></td>'+
           '<td class="r mono">'+fmtDec(100*L.w,2)+'%</td>'+
@@ -12277,12 +12352,14 @@
     linCusto+='</tr>';
     var corpo='';
     D.linhas.forEach(function(L){
-      var it=L.no.it, sv=SERV.filter(function(s){ return s.id===it.svc; })[0];
+      var it=L.no.it, fonte=avaFonteDoNo(L.no), sv=fonte.tipo==='manual'?null:fonte;
       corpo+='<tr><td>'+escAttr(it.nome)+' <span class="note mono">'+escAttr(it.cod)+'</span>'+
-        (sv?(' <span class="pill mut" title="Avanço vem do serviço vinculado — não é editável aqui">'+escAttr(sv.n)+'</span>'):'')+'</td>';
+        (sv?(' <span class="pill mut" title="'+(fonte.tipo==='misto'
+              ? 'Os itens dentro desta atividade não apontam todos pro mesmo serviço: o avanço é a média deles, ponderada pelo custo (item sem vínculo entra como 0%). Ajuste item a item no orçamento.'
+              : 'Avanço vem do serviço vinculado — não é editável aqui')+'">'+escAttr(sv.nome)+'</span>'):'')+'</td>';
       meses.forEach(function(m,i){
         if(sv){
-          var v=avaAvancoServico(it.svc,m);
+          var v=avaAvancoNo(L.no,m);
           corpo+='<td class="r mono note">'+(v==null?'—':fmtDec(100*v,1)+'%')+'</td>';
         }else{
           corpo+='<td><input class="einp" type="number" step="0.1" min="0" max="150" data-avarm="'+escAttr(it.id)+'" data-avames="'+m+'" value="'+((it.rm&&it.rm[m]!=null&&it.rm[m]!=='')?it.rm[m]:'')+'" style="width:72px;text-align:right" placeholder="%"></td>';
