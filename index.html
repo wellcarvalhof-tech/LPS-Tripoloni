@@ -12033,7 +12033,8 @@
    * dá IDP-t, o índice de prazo que não volta pra 1,00 no fim da obra como o IDP tradicional. */
   var AVA_CORTE=null;        // índice do mês de corte (null = último com lançamento)
   var AVA_UNID='pct';        // 'pct' | 'rs'
-  var AVA_TAB='painel';      // 'painel' | 'lanc'
+  var AVA_TAB='painel';      // 'painel' | 'lanc' | 'dist'
+  var AVA_DIST_MED='qtd';    // 'qtd' | 'pct' | 'rs' — o que a tabela da distribuição mostra
 
   function avaMeses(){
     var O=orcAtual(), m={};
@@ -12083,6 +12084,75 @@
     });
     if(!algum)return no.it.svc?avaAvancoServico(no.it.svc,mes):null;
     return somaP>0?somaV/somaP:null;
+  }
+  /* ================= Distribuição pelo cronograma =================
+   * O COTA do painel vem do cronograma de CUSTO que veio na planilha do orçamento. Aqui a conta
+   * é outra: a distribuição sai do CRONOGRAMA DO APP — o que o Tempo-Caminho diz que cada
+   * serviço produz em cada mês — e o dinheiro é consequência disso.
+   *
+   * Quantidade: soma das quantidades semanais do serviço (já filtradas pelos lotes em exibição).
+   * Percentual: quanto daquele serviço cai naquele mês.
+   * Financeiro: o valor do serviço no orçamento × esse percentual. O valor de cada serviço é a
+   *   soma das FOLHAS do orçamento vinculadas a ele — folha, não grupo, senão grupo e filho
+   *   seriam contados duas vezes.
+   *
+   * O total de quantidade não existe: cada serviço tem a sua unidade e somar m³ com m² não diz
+   * nada. O total de percentual é o ponderado pelo dinheiro — que é justamente a curva física. */
+  function avaRsPorServico(){
+    var arv=orcArvore(), rs={}, semVinc=0;
+    Object.keys(arv.mapa).forEach(function(k){
+      var no=arv.mapa[k];
+      if(no.filhos.length)return;
+      if(no.it.svc)rs[no.it.svc]=(rs[no.it.svc]||0)+no.peso;
+      else semVinc+=no.peso;
+    });
+    return {rs:rs,semVinc:semVinc};
+  }
+  function avaDistribuicao(){
+    var wq=weeklyQtyBySvc(), tw=wq.tw;
+    if(!tw)return null;
+    var V=avaRsPorServico();
+    // meses do cronograma, mais os do orçamento, pra poder comparar as duas curvas no mesmo eixo
+    var mesSet={}, mesDaSem=[];
+    for(var w=1;w<=tw;w++){
+      var k=orcMesKey(calWeekDate(w));
+      mesDaSem[w]=k; mesSet[k]=1;
+    }
+    var O=orcAtual();
+    (O.meses||[]).forEach(function(k){ mesSet[k]=1; });
+    var meses=Object.keys(mesSet).sort(), N=meses.length, idx={};
+    meses.forEach(function(k,i){ idx[k]=i; });
+
+    var linhas=[];
+    SERV.forEach(function(sv,si){
+      var serie=wq.M[si]||[], porMes=[], tot=0;
+      for(var i=0;i<N;i++)porMes.push(0);
+      for(var w2=1;w2<=tw;w2++){
+        var q=serie[w2]||0; if(!q)continue;
+        porMes[idx[mesDaSem[w2]]]+=q; tot+=q;
+      }
+      if(!(tot>0))return;
+      var valor=V.rs[sv.id]||0;
+      var pct=porMes.map(function(q){ return tot>0?q/tot:0; });
+      linhas.push({si:si,sv:sv,un:sv.u||'',qtd:porMes,tot:tot,valor:valor,
+        pct:pct,rs:pct.map(function(f){ return f*valor; })});
+    });
+
+    var totRs=[], somaRs=0;
+    for(var i2=0;i2<N;i2++)totRs.push(0);
+    linhas.forEach(function(L){ somaRs+=L.valor; L.rs.forEach(function(v,i){ totRs[i]+=v; }); });
+    // curva do orçamento (COTA da planilha), pro mesmo eixo
+    var arv=orcArvore(), cotaMes=[];
+    for(var i3=0;i3<N;i3++)cotaMes.push(0);
+    (O.itens||[]).forEach(function(it){
+      if(!it.folha)return;
+      Object.keys(it.pm||{}).forEach(function(k){ if(idx[k]!=null)cotaMes[idx[k]]+=orcNum(it.pm[k]); });
+    });
+    var accRs=[], accCota=[], a1=0, a2=0;
+    for(var i4=0;i4<N;i4++){ a1+=totRs[i4]; accRs.push(a1); a2+=cotaMes[i4]; accCota.push(a2); }
+    return {meses:meses,N:N,linhas:linhas,totRs:totRs,somaRs:somaRs,
+      accRs:accRs,cotaMes:cotaMes,accCota:accCota,semVinc:V.semVinc,
+      semValor:linhas.filter(function(L){ return !(L.valor>0); }).length};
   }
   /** De onde sai o avanço de uma atividade: de um serviço só, dos itens dentro dela (grupo
    *  ajustado item a item) ou do lançamento manual. Decide o que a tela mostra e o que ela
@@ -12341,6 +12411,99 @@
 
     return kpis+painel+indices+tabela+listaAtraso+alertas;
   }
+  function avaDistHTML(){
+    var X=avaDistribuicao();
+    if(!X||!X.linhas.length)
+      return '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Sem cronograma pra distribuir</div>'+
+        '<div class="note">Esta aba lê o cronograma do Tempo-Caminho: quantidade de cada serviço em cada mês. '+
+        'Cadastre as quantidades por lote e monte o cronograma pra ver a distribuição.</div></div>';
+    var med=AVA_DIST_MED, N=X.N;
+    var medBtns=[['qtd','Quantidade'],['pct','% do serviço'],['rs','R$']].map(function(o){
+      return '<button class="subtab'+(med===o[0]?' active':'')+'" data-avadistmed="'+o[0]+'">'+o[1]+'</button>';
+    }).join('');
+
+    var totQtdSvc=0; X.linhas.forEach(function(L){ totQtdSvc++; });
+    var pico=0, mesPico=null;
+    X.totRs.forEach(function(v,i){ if(v>pico){ pico=v; mesPico=X.meses[i]; } });
+    var temCota=X.accCota[N-1]>0, maxDif=0, mesDif=null;
+    if(temCota)for(var iD=0;iD<N;iD++){
+      var d=X.accRs[iD]-X.accCota[iD];
+      if(Math.abs(d)>Math.abs(maxDif)){ maxDif=d; mesDif=X.meses[iD]; }
+    }
+    var kpis='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('info','Serviços no cronograma',totQtdSvc+'',X.semValor?(X.semValor+' sem valor no orçamento'):'todos com valor')+
+      kpi('accent','Valor distribuído',fmtMoedaCurta(X.somaRs),X.semVinc>0?(fmtMoedaCurta(X.semVinc)+' do orçamento sem vínculo'):'orçamento todo vinculado')+
+      kpi('warn','Pico mensal',fmtMoedaCurta(pico),mesPico?orcMesLabel(mesPico):'—')+
+      kpi(!temCota?'info':(Math.abs(maxDif)<0.05*X.somaRs?'good':'warn'),'Maior afastamento da COTA',
+        temCota?((maxDif>=0?'+':'−')+fmtMoedaCurta(Math.abs(maxDif)).replace('R$ ','')+' R$'):'—',
+        temCota?(orcMesLabel(mesDif)+' · '+(maxDif>=0?'cronograma do app adiantado':'atrasado')+' em relação à planilha')
+               :'a planilha não trouxe custo por mês')+
+      '</div>';
+
+    var grafico='<div class="card" style="margin-bottom:12px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Distribuição financeira pelo cronograma</div>'+
+      '<div class="note" style="margin-bottom:6px">Acumulado mês a mês. A linha tracejada é a COTA que veio no cronograma de custo da planilha — '+
+      'quando as duas se afastam, o cronograma do app e o do orçamento contam histórias diferentes.</div>'+
+      avaLegenda([{lab:'Pelo cronograma do app',cor:cssHex('--accent')},{lab:'COTA da planilha',cor:cssHex('--warn'),trace:true}])+
+      '<svg class="chart" id="avaDistSvg" style="width:100%;height:auto"></svg></div>';
+
+    var th='<th style="min-width:190px">Serviço</th><th>Un.</th>';
+    X.meses.forEach(function(m){ th+='<th class="r">'+orcMesLabel(m)+'</th>'; });
+    th+='<th class="r">Total</th>';
+
+    var celula=function(L,i){
+      if(med==='qtd')return L.qtd[i]>0?fmtDec(L.qtd[i],2):'—';
+      if(med==='pct')return L.pct[i]>0?fmtDec(100*L.pct[i],1)+'%':'—';
+      return L.rs[i]>0?fmtMoeda(L.rs[i]):'—';
+    };
+    var corpo=X.linhas.map(function(L){
+      var tds='';
+      for(var i=0;i<N;i++)tds+='<td class="r mono">'+celula(L,i)+'</td>';
+      var tot=med==='qtd'?fmtDec(L.tot,2):(med==='pct'?'100%':fmtMoeda(L.valor));
+      return '<tr><td><span class="swatch" style="background:'+svcColor(L.sv)+'"></span>'+escAttr(L.sv.n)+
+        (med==='rs'&&!(L.valor>0)?' <span class="pill mut" title="Nenhuma folha do orçamento está vinculada a este serviço">sem valor</span>':'')+'</td>'+
+        '<td class="mono note">'+escAttr(L.un)+'</td>'+tds+
+        '<td class="r mono" style="font-weight:700">'+tot+'</td></tr>';
+    }).join('');
+
+    var tdsT='';
+    for(var i2=0;i2<N;i2++){
+      var v;
+      if(med==='qtd')v='—';
+      else if(med==='pct')v=X.somaRs>0?fmtDec(100*X.totRs[i2]/X.somaRs,1)+'%':'—';
+      else v=X.totRs[i2]>0?fmtMoeda(X.totRs[i2]):'—';
+      tdsT+='<td class="r mono">'+v+'</td>';
+    }
+    var totGeral=med==='qtd'?'—':(med==='pct'?'100%':fmtMoeda(X.somaRs));
+    var linhaTot='<tr style="background:var(--elev);font-weight:700"><td>Total</td><td></td>'+tdsT+
+      '<td class="r mono">'+totGeral+'</td></tr>';
+
+    var tdsA='';
+    for(var i3=0;i3<N;i3++){
+      var a;
+      if(med==='qtd')a='—';
+      else if(med==='pct')a=X.somaRs>0?fmtDec(100*X.accRs[i3]/X.somaRs,1)+'%':'—';
+      else a=fmtMoeda(X.accRs[i3]);
+      tdsA+='<td class="r mono note">'+a+'</td>';
+    }
+    var linhaAcc='<tr style="background:var(--elev)"><td class="note">Acumulado</td><td></td>'+tdsA+'<td></td></tr>';
+
+    var nota=med==='qtd'
+      ? 'Quantidade de cada serviço em cada mês, direto do cronograma. Não há total por mês: cada serviço tem a sua unidade e somar m³ com m² não diz nada.'
+      : (med==='pct'
+        ? 'Quanto de cada serviço cai em cada mês. A linha de total é o percentual <b>ponderado pelo dinheiro</b> — é a curva física da obra.'
+        : 'Valor do serviço no orçamento distribuído pelo percentual físico do mês. O valor de cada serviço é a soma das folhas do orçamento vinculadas a ele.');
+
+    var fD=filtroLotesTexto();
+    var tabela='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
+      '<div><div class="eyebrow" style="margin:0">Distribuição por serviço e mês</div>'+
+      '<div class="note">'+nota+(fD?(' <b style="color:var(--warn)">'+escAttr(fD)+'</b> — a quantidade sai só desses lotes; o valor do orçamento é o do contrato inteiro.'):'')+'</div></div>'+
+      '<div style="display:flex;gap:6px">'+medBtns+'</div></div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:11.5px"><thead><tr>'+th+'</tr></thead>'+
+      '<tbody>'+corpo+linhaTot+linhaAcc+'</tbody></table></div></div>';
+
+    return kpis+grafico+tabela;
+  }
   function avaLancHTML(D){
     var O=orcAtual(), meses=D.meses;
     var th='<th style="min-width:230px">Atividade</th>';
@@ -12382,27 +12545,47 @@
         '<div class="note">A AVA precisa do peso financeiro de cada atividade. Importe a planilha de orçamento em '+
         '<b>Cadastro → Orçamento do projeto</b> e volte aqui.</div>'+
         '<div style="margin-top:10px"><button class="btn primary" id="avaIrOrc">Ir para o orçamento</button></div></div>';
+    /* Painel e Lançamentos precisam dos meses do orçamento; a Distribuição não — ela sai do
+     * cronograma do app. Planilha sem cronograma de custo não pode trancar a aba inteira. */
     var D=avaCalcular();
-    if(!D)return head('AVA','','')+'<div class="card"><div class="note">Orçamento sem meses de cronograma.</div></div>';
-    var opts=D.meses.map(function(m,i){
+    var opts=D?D.meses.map(function(m,i){
       return '<option value="'+i+'"'+(i===D.corte?' selected':'')+'>'+orcMesLabel(m)+'</option>';
-    }).join('');
-    var acoes='<span class="note" style="margin-right:4px">Data de corte</span>'+
-      '<select class="inp" id="avaCorte" style="width:120px">'+opts+'</select>'+
+    }).join(''):'';
+    var acoes=(D?('<span class="note" style="margin-right:4px">Data de corte</span>'+
+      '<select class="inp" id="avaCorte" style="width:120px">'+opts+'</select>'):'')+
       '<button class="btn" id="avaExp">↧ Exportar Excel</button>'+
       '<button class="btn primary" id="avaSalvar"'+(ORC_DIRTY?'':' disabled')+'>💾 Salvar lançamentos</button>';
     var tabs='<div class="subtabs" style="margin-bottom:12px">'+
       '<button class="subtab'+(AVA_TAB==='painel'?' active':'')+'" data-avatab="painel">Painel</button>'+
+      '<button class="subtab'+(AVA_TAB==='dist'?' active':'')+'" data-avatab="dist" title="Quantidade, percentual e financeiro mês a mês, saindo do cronograma do app">Distribuição</button>'+
       '<button class="subtab'+(AVA_TAB==='lanc'?' active':'')+'" data-avatab="lanc">Lançamentos</button></div>';
     var fAva=filtroLotesTexto();
     var avisoAva=fAva?('<div class="banner" style="margin-bottom:12px">'+escAttr(fAva)+'. '+
       'O <b>peso</b> de cada atividade vem do orçamento, que não tem lote — ele continua o do contrato inteiro. '+
       'Já o <b>avanço</b> dos serviços vinculados é o produzido ÷ quantidade cadastrada <b>desses lotes</b>.</div>'):'';
+    var corpo;
+    if(AVA_TAB==='dist')corpo=avaDistHTML();
+    else if(!D)corpo='<div class="card"><div class="eyebrow" style="margin-bottom:4px">Orçamento sem cronograma de custo</div>'+
+      '<div class="note">A planilha importada não trouxe custo distribuído por mês, então não há eixo de tempo pra COTA, '+
+      'o COTR e o CRTR. A aba <b>Distribuição</b> funciona assim mesmo — ela monta o eixo pelo cronograma do app.</div></div>';
+    else corpo=(AVA_TAB==='lanc'?avaLancHTML(D):avaPainelHTML(D));
     return head('AVA — Análise do Valor Agregado','COTA, COTR e CRTR acumulados por mês, na base financeira do orçamento importado.',acoes)+
-      tabs+avisoAva+(AVA_TAB==='lanc'?avaLancHTML(D):avaPainelHTML(D));
+      tabs+avisoAva+corpo;
   };
   function avaDraw(){
-    if(!orcTem()||AVA_TAB!=='painel')return;
+    if(!orcTem())return;
+    if(AVA_TAB==='dist'){
+      var elD=document.getElementById('avaDistSvg');
+      if(elD){
+        var X=avaDistribuicao();
+        if(X)avaLinhaSVG(elD,[
+          {lab:'Pelo cronograma do app',v:X.accRs,cor:cssHex('--accent')},
+          {lab:'COTA da planilha',v:(X.accCota[X.N-1]>0?X.accCota:X.accCota.map(function(){return null;})),cor:cssHex('--warn'),trace:true}
+        ],X.meses,{fmt:fmtMoedaCurta});
+      }
+      return;
+    }
+    if(AVA_TAB!=='painel')return;
     var D=avaCalcular(); if(!D)return;
     var el=document.getElementById('avaCurva');
     if(el){
@@ -12429,6 +12612,9 @@
     var ir=document.getElementById('avaIrOrc'); if(ir)ir.addEventListener('click',function(){ go('cad-orc'); });
     document.querySelectorAll('[data-avatab]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_TAB=b.getAttribute('data-avatab'); go('ac-ava'); });
+    });
+    document.querySelectorAll('[data-avadistmed]').forEach(function(b){
+      b.addEventListener('click',function(){ AVA_DIST_MED=b.getAttribute('data-avadistmed'); go('ac-ava'); });
     });
     document.querySelectorAll('[data-avaunid]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_UNID=b.getAttribute('data-avaunid'); go('ac-ava'); });
@@ -12461,9 +12647,11 @@
   }
   async function exportAvaExcel(){
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
-    var D=avaCalcular(); if(!D){ alert('Sem dados pra exportar.'); return; }
+    var D=avaCalcular(), X=avaDistribuicao();
+    if(!D&&!(X&&X.linhas.length)){ alert('Sem dados pra exportar.'); return; }
     var O=orcAtual(), wb=new ExcelJS.Workbook();
     wb.creator='LPS Tripoloni'; wb.created=new Date();
+    if(D){
     var k=D.kpi;
     var wsR=wb.addWorksheet('Resumo'); wsR.columns=[{width:40},{width:26}];
     [['Obra',(window._OBRA&&window._OBRA.nome)||''],['Mês de corte',orcMesLabel(D.meses[D.corte])],
@@ -12505,6 +12693,47 @@
       r.getCell(5).numFmt='#,##0.00';
       [6,7,8,9].forEach(function(c){ r.getCell(c).numFmt='0.00'; });
     });
+    }
+    /* ---- Distribuição pelo cronograma: quantidade, percentual e financeiro ---- */
+    if(X&&X.linhas.length){
+      var fazAba=function(titulo,pega,fmt,total){
+        var ws=wb.addWorksheet(titulo,{views:[{state:'frozen',xSplit:2,ySplit:1}]});
+        var cab=['Serviço','Un.'];
+        X.meses.forEach(function(m){ cab.push(orcMesLabel(m)); });
+        cab.push('Total');
+        relCabecalho(ws,cab,[32,10].concat(X.meses.map(function(){ return 14; })).concat([16]));
+        X.linhas.forEach(function(L){
+          var lin=[L.sv.n,L.un];
+          for(var i=0;i<X.N;i++)lin.push(pega(L,i));
+          lin.push(total(L));
+          var r=ws.addRow(lin); r.font={size:10};
+          for(var c=3;c<=3+X.N;c++)r.getCell(c).numFmt=fmt;
+        });
+        return ws;
+      };
+      // quantidade não tem total por mês: cada serviço na sua unidade
+      fazAba('Distribuição · quantidade',function(L,i){ return L.qtd[i]||0; },'#,##0.00',function(L){ return L.tot; });
+      var wsP=fazAba('Distribuição · percentual',function(L,i){ return L.pct[i]||0; },'0.0%',function(){ return 1; });
+      var rP=wsP.addRow(['Total (ponderado pelo valor)','']
+        .concat(X.totRs.map(function(v){ return X.somaRs>0?v/X.somaRs:0; })).concat([1]));
+      rP.font={size:10,bold:true};
+      for(var cp=3;cp<=3+X.N;cp++)rP.getCell(cp).numFmt='0.0%';
+      var wsF=fazAba('Distribuição · financeiro',function(L,i){ return L.rs[i]||0; },'#,##0.00',function(L){ return L.valor; });
+      var rT=wsF.addRow(['Total',''].concat(X.totRs).concat([X.somaRs]));
+      rT.font={size:10,bold:true};
+      for(var cf=3;cf<=3+X.N;cf++)rT.getCell(cf).numFmt='#,##0.00';
+      var rA=wsF.addRow(['Acumulado',''].concat(X.accRs).concat(['']));
+      rA.font={size:10,italic:true};
+      for(var ca=3;ca<=2+X.N;ca++)rA.getCell(ca).numFmt='#,##0.00';
+      if(X.accCota[X.N-1]>0){
+        var rC=wsF.addRow(['COTA da planilha (acumulada)',''].concat(X.accCota).concat(['']));
+        rC.font={size:10,italic:true};
+        for(var cc=3;cc<=2+X.N;cc++)rC.getCell(cc).numFmt='#,##0.00';
+      }
+      wsF.addRow([]);
+      var notaF=wsF.addRow(['','','A distribuição sai do cronograma do app: a quantidade de cada serviço em cada mês vira percentual, e o percentual distribui o valor que o orçamento dá àquele serviço (soma das folhas vinculadas a ele). Não é a COTA da planilha — são duas leituras do mesmo orçamento, e a diferença entre elas é informação.']);
+      notaF.font={size:9,italic:true};
+    }
     var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
