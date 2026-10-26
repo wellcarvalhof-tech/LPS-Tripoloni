@@ -37,6 +37,7 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `31_estaca_volume_realizado.sql` | `volume_realizado` por estaca — o avanço volumétrico, que não sai das datas (uma estaca pode estar 95% cortada) | ⚠️ novo — rodar junto com a 29 e a 30 |
 | `32_orcamento_ava.sql` | Coluna `obras.orcamento` — orçamento do projeto importado da planilha de composições e os lançamentos da AVA (valor agregado) | ⚠️ novo — rodar pra usar Cadastro → Orçamento e Acompanhamento → AVA |
 | `33_eap_servicos.sql` | Coluna `obras.eap` — EAP de serviços e o de-para entre código de controle, código contratual, serviço do Tempo-Caminho e item do orçamento | ⚠️ novo — rodar pra usar Cadastro → EAP de serviços |
+| `34_cadastro_so_por_convite.sql` | Criar conta só com o e-mail convidado — a trava fica no banco (trigger em `auth.users`), então vale também pra quem chamar a API direto | ⚠️ novo — rodar pra fechar o cadastro aberto |
 
 Pra saber **o que já rodou neste banco**, cole `CHECK_migracoes.sql` no SQL Editor do Supabase: ele lista cada migração com rodou/falta, sem alterar nada.
 

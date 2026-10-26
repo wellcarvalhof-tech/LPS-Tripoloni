@@ -674,7 +674,7 @@
     <div class="authf"><label>Senha</label><input id="authPass" type="password" autocomplete="current-password" required></div>
     <div class="autherr" id="authErr" hidden></div>
     <div class="authbtns"><button type="submit" class="btn primary" id="authIn">Entrar</button><button type="button" class="btn" id="authUp">Criar conta</button></div>
-    <div class="authnote">Dados protegidos por conta (RLS). Abra este arquivo localmente para conectar.</div>
+    <div class="authnote">Conta só por convite: o planejador libera o seu e-mail em Cadastro &rarr; Acessos, e aí você cria a conta aqui com esse mesmo e-mail.</div>
   </form>
 </div>
 
@@ -1205,7 +1205,15 @@
       if(r.error)throw r.error;
       if(mode==='up' && !(r.data&&r.data.session)){err.style.color='var(--good)';err.textContent='Conta criada. Se pedir confirmação de e-mail, confirme e depois entre.';err.hidden=false;return;}
       hideAuth(); await enterApp();
-    }catch(e){err.style.color='var(--crit)';err.textContent='Falha: '+((e&&e.message)||e);err.hidden=false;}
+    }catch(e){
+      var msg=(e&&e.message)||String(e);
+      /* Cadastro só por convite (migração 34): a recusa vem da trigger no banco. O GoTrue
+       * entrega isso como "Database error saving new user" — mensagem que não ajuda ninguém. */
+      if(mode==='up'&&/convidad|database error|unexpected_failure/i.test(msg))
+        msg='Este e-mail não está convidado. Peça ao planejador da obra para liberar o seu acesso em Cadastro → Acessos, e tente de novo com o mesmo e-mail.';
+      else msg='Falha: '+msg;
+      err.style.color='var(--crit)';err.textContent=msg;err.hidden=false;
+    }
   }
   async function signOut(){ try{ if(SB)await SB.auth.signOut(); }catch(e){} location.reload(); }
   /** Avatar do topo: inicial do e-mail da conta logada (e o e-mail inteiro no tooltip) —
