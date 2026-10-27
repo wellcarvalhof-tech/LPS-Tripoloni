@@ -7070,7 +7070,9 @@
         var res=await estGerarRealizado(unicos);
         msgReal='\n\n'+res.gravadas+' linha(s) de produção geradas das estacas concluídas'+
           ' ('+res.doInforme+' com volume executado, '+res.doProjeto+' com volume de projeto, '+res.doPlanejada+' com quantidade planejada).'+
-          (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora: sem volume realizado e sem quantidade planejada.'):'');
+          (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora: sem nenhuma quantidade.'):'')+
+          (res.antesDoPlano?('\n'+res.antesDoPlano+' estaca(s) concluídas antes do início do cronograma ficaram de fora — esse avanço já está descontado do saldo.'):'')+
+          (res.depoisDoPlano?('\n'+res.depoisDoPlano+' estaca(s) concluídas depois da última semana do cronograma entraram na produção, mas a Curva S não tem semana pra elas.'):'');
       }catch(e2){ msgReal='\n\nAs estacas entraram, mas falhou gerar o realizado: '+((e2&&e2.message)||e2); }
       finally{ cargaMenos(); }
     }
@@ -7238,8 +7240,10 @@
     cargaMenos();
     if(!prev.linhas.length){
       alert('Nenhuma estaca concluída com quantidade pra lançar.'+
-        (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) têm data de término mas não têm volume realizado nem quantidade planejada.'):
-                     '\n\nPreencha a data de término das estacas, ou importe os informes de produção.'));
+        (prev.antesDoPlano?('\n\n'+prev.antesDoPlano+' estaca(s) foram concluídas ANTES do início do cronograma ('+prev.ini+'). '+
+          'Esse avanço é história: o saldo planejado já o desconta, e lançá-lo contaria duas vezes.'):'')+
+        (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) têm data de término mas não têm volume nem quantidade.'):'')+
+        ((!prev.antesDoPlano&&!prev.semQtd)?'\n\nPreencha a data de término das estacas, ou importe os informes de produção.':''));
       return;
     }
     var cont=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
@@ -7250,7 +7254,9 @@
       '  '+cont('executado')+' do volume executado do informe\n'+
       '  '+cont('projeto')+' do volume de projeto da estaca\n'+
       '  '+cont('planejada')+' da quantidade planejada da estaca'+
-      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter nenhuma das três.'):'')))return;
+      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter nenhuma das três.'):'')+
+      (prev.antesDoPlano?('\n'+prev.antesDoPlano+' estaca(s) concluídas antes da semana 1 ficam de fora: esse avanço já está descontado do saldo, lançar de novo contaria duas vezes.'):'')+
+      (prev.depoisDoPlano?('\n'+prev.depoisDoPlano+' estaca(s) concluídas depois da última semana entram, mas a Curva S não tem semana pra desenhá-las.'):'')))return;
     cargaMais();
     try{
       var res=await estGerarRealizado(ids);
@@ -7434,15 +7440,29 @@
    * Estaca terminada sem nenhuma das três não vira produção — lançar zero sujaria a curva.
    *
    * Não duplica: a linha de produção fica amarrada ao apontamento por producao_diaria_id, que é
-   * o mesmo vínculo que o lançamento manual usa. Rodar de novo atualiza, não soma. */
+   * o mesmo vínculo que o lançamento manual usa. Rodar de novo atualiza, não soma.
+   *
+   * SÓ ENTRA O QUE FOI CONCLUÍDO DENTRO DO CRONOGRAMA. Estaca terminada ANTES da semana 1 é
+   * história: o app planeja o SALDO, e o saldo já é projeto − realizado, com esse realizado
+   * descontado. Lançar de novo contaria duas vezes — a Curva S e o COTR da AVA passariam de
+   * 100% sem a obra ter feito nada a mais. Essas ficam de fora e são contadas à parte.
+   * Término DEPOIS da última semana é o contrário: é avanço real de serviço atrasado. Entra na
+   * produção, mas a Curva S não tem onde desenhar — o aviso diz quantas são. */
   function estRealizadoPrevia(loteIds){
-    var out={linhas:[],semQtd:0,lotes:0};
+    var out={linhas:[],semQtd:0,lotes:0,antesDoPlano:0,depoisDoPlano:0,ini:null,fim:null};
+    var tw=0; buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); });
+    try{
+      out.ini=mondayOf(1).toISOString().slice(0,10);
+      out.fim=tw?mondayOf(tw).toISOString().slice(0,10):null;
+    }catch(e){}
     (loteIds||[]).forEach(function(loteId){
       var av=ESTACA_AVANCO[loteId]; if(!av)return;
       out.lotes++;
       var qtyM=ESTACA_QTY[loteId]||{}, volM=ESTACA_VOL[loteId]||{};
       Object.keys(av).forEach(function(k){
         var a=av[k]; if(!a||!a.fim)return;
+        if(out.ini&&a.fim<out.ini){ out.antesDoPlano++; return; }
+        if(out.fim&&a.fim>out.fim)out.depoisDoPlano++;
         var v=volM[k]||{}, qtd=0, fonte='';
         if(v.real!=null&&v.real>0){ qtd=v.real; fonte='executado'; }
         else if(v.proj!=null&&v.proj>0){ qtd=v.proj; fonte='projeto'; }
@@ -7486,6 +7506,7 @@
     });
     var conta=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
     return {gravadas:prev.linhas.length,semQtd:prev.semQtd,
+            antesDoPlano:prev.antesDoPlano,depoisDoPlano:prev.depoisDoPlano,
             doInforme:conta('executado'),doProjeto:conta('projeto'),doPlanejada:conta('planejada')};
   }
   /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
