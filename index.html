@@ -6898,13 +6898,25 @@
     // daquela estaca. É de lá que sai o avanço volumétrico — ele não é derivável das datas,
     // porque uma estaca pode estar 95% cortada sem ter término.
     var ehServ={}; servCols.forEach(function(x){ ehServ[x.c]=1; ehServ[x.c+1]=1; });
-    var realCol={};
+    /* A coluna de volume executado tem o mesmo nome do serviço, só que sem o número do item
+     * e sem a unidade entre parênteses: a coluna de datas diz "2.2.1 CFT 01 (M)" e a de volume
+     * diz "2.2.1 CFT 01" — e em Pavimento Rígido nem o número bate ("3.4" nas datas, "3.5" no
+     * volume). Comparando o nome inteiro, só Corte e Aterro casavam, que por acaso não levam
+     * "(M)"; todo o resto do pavimento ficava com realizado zerado.
+     * Então o casamento é pelo NOME limpo, e só vale quando ele aparece uma vez — nome repetido
+     * atribuiria volume ao serviço errado, o que é pior do que não atribuir. */
+    function estChaveVol(nome){
+      return estNorm(nome).replace(/^[\d.]+\s*/,'').replace(/\s*\(\s*M[23²³]?\s*\)\s*$/,'').trim();
+    }
+    var realCol={}, volCands={};
+    hItens.forEach(function(nm,j){
+      if(!nm||ehServ[j])return;
+      var k=estChaveVol(nm); if(!k)return;
+      (volCands[k]||(volCands[k]=[])).push(j);
+    });
     servCols.forEach(function(sv){
-      var alvo=estNorm(sv.nome);
-      for(var j=0;j<hItens.length;j++){
-        if(j===sv.c||ehServ[j])continue;
-        if(hItens[j]===alvo){ realCol[sv.c]=j; break; }
-      }
+      var lista=volCands[estChaveVol(sv.nome)];
+      if(lista&&lista.length===1)realCol[sv.c]=lista[0];
     });
 
     // 3) linhas de dados agrupadas por KM
@@ -6989,7 +7001,7 @@
     });
 
     var escolha=await estDialogoImport({kms:kms,porKm:porKm,servCols:servCols,loteDe:loteDe,
-      kmSemLote:kmSemLote,servDe:servDe,servSemPar:servSemPar,linhasOk:linhasOk});
+      kmSemLote:kmSemLote,servDe:servDe,servSemPar:servSemPar,linhasOk:linhasOk,realCol:realCol});
     if(!escolha)return;
     Object.keys(escolha.servDe).forEach(function(c){ if(escolha.servDe[c])servDe[c]=escolha.servDe[c]; else delete servDe[c]; });
 
@@ -7057,7 +7069,7 @@
         for(var li4=0;li4<unicos.length;li4++)if(!ESTACA_AVANCO[unicos[li4]])await sbLoadEstacas(unicos[li4]);
         var res=await estGerarRealizado(unicos);
         msgReal='\n\n'+res.gravadas+' linha(s) de produção geradas das estacas concluídas'+
-          (res.doInforme?(' ('+res.doInforme+' com o volume realizado do informe)'):'')+'.'+
+          ' ('+res.doInforme+' com volume executado, '+res.doProjeto+' com volume de projeto, '+res.doPlanejada+' com quantidade planejada).'+
           (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora: sem volume realizado e sem quantidade planejada.'):'');
       }catch(e2){ msgReal='\n\nAs estacas entraram, mas falhou gerar o realizado: '+((e2&&e2.message)||e2); }
       finally{ cargaMenos(); }
@@ -7084,12 +7096,30 @@
           return '<option value="'+s.id+'"'+(s.id===sel?' selected':'')+'>'+escAttr(s.n)+'</option>';
         }).join('');
       };
+      /* O que cada serviço traz da planilha. Sem isso não dava pra saber por que um serviço
+       * entra com as datas e fica com realizado zerado: faltava a coluna de volume executado. */
+      var temDado={};
+      info.kms.forEach(function(km){ info.porKm[km].forEach(function(r){
+        Object.keys(r.datas).forEach(function(c){ (temDado[c]||(temDado[c]={})).dt=1; });
+        Object.keys(r.vols||{}).forEach(function(c){ (temDado[c]||(temDado[c]={})).pj=1; });
+        Object.keys(r.reals||{}).forEach(function(c){ (temDado[c]||(temDado[c]={})).ex=1; });
+      }); });
+      var pilula=function(ok,txt,dica){
+        return '<span class="pill'+(ok?'':' mut')+'" title="'+escAttr(dica)+'" style="font-size:9.5px'+
+          (ok?';background:var(--good);color:#fff':'')+'">'+txt+'</span> ';
+      };
+      var semVolume=0;
       var linhasDe=info.servCols.map(function(s){
-        var alvo=info.servDe[s.c]||'';
+        var alvo=info.servDe[s.c]||'', d=temDado[s.c]||{};
+        if(alvo&&!d.ex&&!d.pj)semVolume++;
         return '<tr'+(alvo?'':' style="background:var(--warn-bg)"')+'>'+
           '<td style="white-space:nowrap">'+(alvo?'<span style="color:var(--good)">✓</span> ':'<span style="color:var(--warn)">•</span> ')+
             escAttr(s.nome)+(s.codigo?' <span class="note">'+escAttr(s.codigo)+'</span>':'')+'</td>'+
-          '<td><select class="esel" data-estdepara="'+s.c+'" style="max-width:260px">'+opt(alvo)+'</select></td></tr>';
+          '<td style="white-space:nowrap">'+
+            pilula(!!d.dt,'datas','Colunas de início e término por estaca')+
+            pilula(!!d.pj,'projeto','Volume de projeto por estaca (cubação ou largura × espessura)')+
+            pilula(!!d.ex,'executado','Coluna de volume executado — é dela que sai o realizado em volume')+'</td>'+
+          '<td><select class="esel" data-estdepara="'+s.c+'" style="max-width:230px">'+opt(alvo)+'</select></td></tr>';
       }).join('');
       back.innerHTML='<div class="segmenu-panel card" style="max-width:680px;max-height:86vh;overflow:auto">'+
         '<div class="eyebrow" style="margin-bottom:2px">Importar informes de produção</div>'+
@@ -7098,7 +7128,9 @@
           (info.kmSemLote.length?' Sem lote (ficam de fora): <b>'+escAttr(info.kmSemLote.join(', '))+'</b> — crie esses lotes antes se quiser importá-los.':'')+'</div>'+
         '<div class="note" style="margin-top:6px"><b>'+(info.servCols.length-info.servSemPar.length)+'</b> de '+info.servCols.length+' serviços casaram automaticamente (por código da EAP ou nome).</div>'+
         (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços da planilha ('+info.servCols.length+') — <span class="note">✓ já casou · • precisa escolher</span></div>'+
-          '<div class="tbl-wrap" style="max-height:290px;overflow:auto"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>':'')+
+          '<div class="tbl-wrap" style="max-height:290px;overflow:auto"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Traz</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>'+
+          (semVolume?('<div class="note" style="margin-top:6px;color:var(--warn)"><b>'+semVolume+'</b> serviço(s) casados não têm volume na planilha — só datas. '+
+            'O realizado deles sai da extensão concluída, não de volume.</div>'):''):'')+
         '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto e <b>'+nReal+'</b> volumes realizados.</div>'+
         '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
         'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
@@ -7210,12 +7242,15 @@
                      '\n\nPreencha a data de término das estacas, ou importe os informes de produção.'));
       return;
     }
-    var doInf=prev.linhas.filter(function(L){ return L.fonte==='informe'; }).length;
+    var cont=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
     var novas=prev.linhas.filter(function(L){ return !L.prodId; }).length;
     if(!confirm('Gerar o realizado de '+prev.linhas.length+' estaca(s) concluída(s), em '+prev.lotes+' lote(s)?\n\n'+
-      novas+' linha(s) novas de produção e '+(prev.linhas.length-novas)+' atualizada(s).\n'+
-      doInf+' com o volume realizado do informe; o resto com a quantidade planejada da estaca.'+
-      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter quantidade.'):'')))return;
+      novas+' linha(s) novas de produção e '+(prev.linhas.length-novas)+' atualizada(s).\n\n'+
+      'De onde sai a quantidade:\n'+
+      '  '+cont('executado')+' do volume executado do informe\n'+
+      '  '+cont('projeto')+' do volume de projeto da estaca\n'+
+      '  '+cont('planejada')+' da quantidade planejada da estaca'+
+      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter nenhuma das três.'):'')))return;
     cargaMais();
     try{
       var res=await estGerarRealizado(ids);
@@ -7391,9 +7426,12 @@
    *
    * Esta função fecha esse caminho. Pra cada estaca × serviço com data de TÉRMINO, gera (ou
    * atualiza) uma linha de produção naquela data. A quantidade sai, nesta ordem:
-   *   1) volume realizado do informe, quando veio;
-   *   2) quantidade planejada daquela estaca pro serviço.
-   * Estaca terminada sem nenhuma das duas não vira produção — lançar zero sujaria a curva.
+   *   1) volume realizado do informe, quando a planilha trouxe a coluna;
+   *   2) volume de PROJETO daquela estaca — estaca concluída executou o volume dela, e é o que
+   *      sobra quando a planilha não tem coluna de executado pro serviço (o caso das camadas
+   *      de pavimento);
+   *   3) quantidade planejada da estaca, pra quem preencheu à mão.
+   * Estaca terminada sem nenhuma das três não vira produção — lançar zero sujaria a curva.
    *
    * Não duplica: a linha de produção fica amarrada ao apontamento por producao_diaria_id, que é
    * o mesmo vínculo que o lançamento manual usa. Rodar de novo atualiza, não soma. */
@@ -7405,12 +7443,14 @@
       var qtyM=ESTACA_QTY[loteId]||{}, volM=ESTACA_VOL[loteId]||{};
       Object.keys(av).forEach(function(k){
         var a=av[k]; if(!a||!a.fim)return;
-        var vol=volM[k]&&volM[k].real!=null?volM[k].real:null;
-        var qtd=(vol!=null&&vol>0)?vol:(qtyM[k]||0);
+        var v=volM[k]||{}, qtd=0, fonte='';
+        if(v.real!=null&&v.real>0){ qtd=v.real; fonte='executado'; }
+        else if(v.proj!=null&&v.proj>0){ qtd=v.proj; fonte='projeto'; }
+        else if(qtyM[k]>0){ qtd=qtyM[k]; fonte='planejada'; }
         if(!(qtd>0)){ out.semQtd++; return; }
         var par=k.split('::');
         out.linhas.push({loteId:loteId,estacaId:par[0],servicoId:par[1],data:a.fim,qtd:qtd,
-                         prodId:a.prodId||null,fonte:(vol!=null&&vol>0)?'informe':'planejada'});
+                         prodId:a.prodId||null,fonte:fonte});
       });
     });
     return out;
@@ -7444,8 +7484,9 @@
       if(ex){ ex.data=L.data; ex.qtd=L.qtd; ex.servId=L.servicoId; ex.loteId=L.loteId; }
       else window.PROD_LIST.unshift({id:L.novoId,data:L.data,servId:L.servicoId,loteId:L.loteId,qtd:L.qtd});
     });
+    var conta=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
     return {gravadas:prev.linhas.length,semQtd:prev.semQtd,
-            doInforme:prev.linhas.filter(function(L){ return L.fonte==='informe'; }).length};
+            doInforme:conta('executado'),doProjeto:conta('projeto'),doPlanejada:conta('planejada')};
   }
   /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
    * em lotes de escrita (upsert em massa) em vez de uma chamada por estaca. */
