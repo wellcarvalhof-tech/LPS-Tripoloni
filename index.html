@@ -7069,8 +7069,8 @@
         for(var li4=0;li4<unicos.length;li4++)if(!ESTACA_AVANCO[unicos[li4]])await sbLoadEstacas(unicos[li4]);
         var res=await estGerarRealizado(unicos);
         msgReal='\n\n'+res.gravadas+' linha(s) de produção geradas das estacas concluídas'+
-          ' ('+res.doInforme+' com volume executado, '+res.doProjeto+' com volume de projeto, '+res.doPlanejada+' com quantidade planejada).'+
-          (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora: sem nenhuma quantidade.'):'')+
+          ' ('+res.daCadastrada+' com a quantidade cadastrada da estaca, '+res.doRateio+' rateadas pelo volume cadastrado).'+
+          (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora por não ter de onde tirar quantidade.'):'')+
           (res.antesDoPlano?('\n'+res.antesDoPlano+' estaca(s) concluídas antes do início do cronograma ficaram de fora — esse avanço já está descontado do saldo.'):'')+
           (res.depoisDoPlano?('\n'+res.depoisDoPlano+' estaca(s) concluídas depois da última semana do cronograma entraram na produção, mas a Curva S não tem semana pra elas.'):'');
       }catch(e2){ msgReal='\n\nAs estacas entraram, mas falhou gerar o realizado: '+((e2&&e2.message)||e2); }
@@ -7131,8 +7131,8 @@
         '<div class="note" style="margin-top:6px"><b>'+(info.servCols.length-info.servSemPar.length)+'</b> de '+info.servCols.length+' serviços casaram automaticamente (por código da EAP ou nome).</div>'+
         (linhasDe?'<div class="eyebrow" style="margin:14px 0 6px">Serviços da planilha ('+info.servCols.length+') — <span class="note">✓ já casou · • precisa escolher</span></div>'+
           '<div class="tbl-wrap" style="max-height:290px;overflow:auto"><table class="edtbl" style="min-width:0"><thead><tr><th>Na planilha</th><th>Traz</th><th>Serviço do app</th></tr></thead><tbody>'+linhasDe+'</tbody></table></div>'+
-          (semVolume?('<div class="note" style="margin-top:6px;color:var(--warn)"><b>'+semVolume+'</b> serviço(s) casados não têm volume na planilha — só datas. '+
-            'O realizado deles sai da extensão concluída, não de volume.</div>'):''):'')+
+          (semVolume?('<div class="note" style="margin-top:6px;color:var(--warn)"><b>'+semVolume+'</b> serviço(s) casados vêm só com datas, sem volume. '+
+            'Sem volume cadastrado, a estaca concluída só vira produção se tiver quantidade cadastrada por estaca.</div>'):''):'')+
         '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto e <b>'+nReal+'</b> volumes realizados.</div>'+
         '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
         'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
@@ -7140,7 +7140,7 @@
           '<input type="checkbox" id="estImpReal" checked style="margin-top:3px">'+
           '<span class="note" style="margin:0">Atualizar também o <b>realizado</b> com as estacas concluídas. '+
           'Cada estaca com data de término vira uma linha de produção naquela data — é isso que alimenta a Curva S, a AVA e o realizado por serviço. '+
-          'A quantidade sai do volume realizado do informe, e na falta dele da quantidade planejada da estaca. Rodar de novo atualiza, não soma.</span></label>'+
+          'A quantidade sai do que está <b>cadastrado</b>: a quantidade da estaca, ou o rateio da quantidade do lote pelo volume cadastrado — assim o percentual fecha com o planejamento. Rodar de novo atualiza, não soma.</span></label>'+
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
           '<button class="btn" id="estImpCancel">Cancelar</button>'+
           '<button class="btn primary" id="estImpOk">Importar</button></div></div>';
@@ -7242,7 +7242,7 @@
       alert('Nenhuma estaca concluída com quantidade pra lançar.'+
         (prev.antesDoPlano?('\n\n'+prev.antesDoPlano+' estaca(s) foram concluídas ANTES do início do cronograma ('+prev.ini+'). '+
           'Esse avanço é história: o saldo planejado já o desconta, e lançá-lo contaria duas vezes.'):'')+
-        (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) têm data de término mas não têm volume nem quantidade.'):'')+
+        (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) têm data de término mas não têm quantidade cadastrada nem volume — e sem um dos dois não dá pra saber quanto foi feito.'):'')+
         ((!prev.antesDoPlano&&!prev.semQtd)?'\n\nPreencha a data de término das estacas, ou importe os informes de produção.':''));
       return;
     }
@@ -7251,10 +7251,9 @@
     if(!confirm('Gerar o realizado de '+prev.linhas.length+' estaca(s) concluída(s), em '+prev.lotes+' lote(s)?\n\n'+
       novas+' linha(s) novas de produção e '+(prev.linhas.length-novas)+' atualizada(s).\n\n'+
       'De onde sai a quantidade:\n'+
-      '  '+cont('executado')+' do volume executado do informe\n'+
-      '  '+cont('projeto')+' do volume de projeto da estaca\n'+
-      '  '+cont('planejada')+' da quantidade planejada da estaca'+
-      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter nenhuma das três.'):'')+
+      '  '+cont('cadastrada')+' da quantidade cadastrada da estaca\n'+
+      '  '+cont('rateio')+' do rateio da quantidade do lote pelo volume cadastrado'+
+      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter de onde tirar quantidade: sem volume cadastrado, ou num serviço já controlado por quantidade por estaca e com a estaca em branco.'):'')+
       (prev.antesDoPlano?('\n'+prev.antesDoPlano+' estaca(s) concluídas antes da semana 1 ficam de fora: esse avanço já está descontado do saldo, lançar de novo contaria duas vezes.'):'')+
       (prev.depoisDoPlano?('\n'+prev.depoisDoPlano+' estaca(s) concluídas depois da última semana entram, mas a Curva S não tem semana pra desenhá-las.'):'')))return;
     cargaMais();
@@ -7431,13 +7430,23 @@
    * leem mora em producao_diaria: as datas entravam e os gráficos continuavam vazios.
    *
    * Esta função fecha esse caminho. Pra cada estaca × serviço com data de TÉRMINO, gera (ou
-   * atualiza) uma linha de produção naquela data. A quantidade sai, nesta ordem:
-   *   1) volume realizado do informe, quando a planilha trouxe a coluna;
-   *   2) volume de PROJETO daquela estaca — estaca concluída executou o volume dela, e é o que
-   *      sobra quando a planilha não tem coluna de executado pro serviço (o caso das camadas
-   *      de pavimento);
-   *   3) quantidade planejada da estaca, pra quem preencheu à mão.
-   * Estaca terminada sem nenhuma das três não vira produção — lançar zero sujaria a curva.
+   * atualiza) uma linha de produção naquela data.
+   *
+   * A QUANTIDADE SAI DO QUE ESTÁ CADASTRADO, não do número de executado da planilha. O motivo
+   * é escala: a quantidade do planejamento é o SALDO, e o executado do informe é da obra
+   * inteira. Medir um contra o outro dá percentual que não fecha — serviço com todas as estacas
+   * prontas podia mostrar 130% ou 70%, dependendo de quanto da obra é anterior ao plano.
+   *
+   * Então:
+   *   1) quantidade cadastrada por estaca, quando o lote × serviço tem alguma — ela já soma
+   *      exatamente na quantidade do lote (é o que saveEstacaQtdAll grava);
+   *   2) senão, rateio da quantidade do lote × serviço pelo VOLUME CADASTRADO de cada estaca:
+   *      qtd = quantidade do lote × (volume da estaca ÷ volume das estacas daquele serviço).
+   *      Com todas as estacas concluídas o rateio soma 100% da quantidade planejada, nem mais
+   *      nem menos; com parte concluída, soma a parte proporcional ao volume.
+   * Estaca sem quantidade cadastrada e sem volume não vira produção — lançar zero sujaria a
+   * curva. O volume executado do informe continua sendo importado e aparece no resumo de
+   * produção; ele é conferência contra o projeto, não fonte do avanço do plano.
    *
    * Não duplica: a linha de produção fica amarrada ao apontamento por producao_diaria_id, que é
    * o mesmo vínculo que o lançamento manual usa. Rodar de novo atualiza, não soma.
@@ -7448,6 +7457,16 @@
    * 100% sem a obra ter feito nada a mais. Essas ficam de fora e são contadas à parte.
    * Término DEPOIS da última semana é o contrário: é avanço real de serviço atrasado. Entra na
    * produção, mas a Curva S não tem onde desenhar — o aviso diz quantas são. */
+  /** Soma do volume cadastrado das estacas de um lote num serviço — o denominador do rateio.
+   *  Usa o volume de projeto; onde ele não veio, vale o executado, que é melhor que nada. */
+  function estVolDoServico(loteId,servicoId){
+    var volM=ESTACA_VOL[loteId]||{}, t=0;
+    (ESTACAS[loteId]||[]).forEach(function(e){
+      var v=volM[e.id+'::'+servicoId]; if(!v)return;
+      t+=(v.proj>0?v.proj:(v.real>0?v.real:0));
+    });
+    return t;
+  }
   function estRealizadoPrevia(loteIds){
     var out={linhas:[],semQtd:0,lotes:0,antesDoPlano:0,depoisDoPlano:0,ini:null,fim:null};
     var tw=0; buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); });
@@ -7455,6 +7474,7 @@
       out.ini=mondayOf(1).toISOString().slice(0,10);
       out.fim=tw?mondayOf(tw).toISOString().slice(0,10):null;
     }catch(e){}
+    var rateioCache={}, modoCache={};
     (loteIds||[]).forEach(function(loteId){
       var av=ESTACA_AVANCO[loteId]; if(!av)return;
       out.lotes++;
@@ -7462,14 +7482,33 @@
       Object.keys(av).forEach(function(k){
         var a=av[k]; if(!a||!a.fim)return;
         if(out.ini&&a.fim<out.ini){ out.antesDoPlano++; return; }
-        if(out.fim&&a.fim>out.fim)out.depoisDoPlano++;
-        var v=volM[k]||{}, qtd=0, fonte='';
-        if(v.real!=null&&v.real>0){ qtd=v.real; fonte='executado'; }
-        else if(v.proj!=null&&v.proj>0){ qtd=v.proj; fonte='projeto'; }
-        else if(qtyM[k]>0){ qtd=qtyM[k]; fonte='planejada'; }
+        var par=k.split('::'), servicoId=par[1];
+        var ck=loteId+'::'+servicoId, qtd=0, fonte='';
+        /* A escolha entre cadastro e rateio e por lote x SERVICO, nao por estaca: misturando,
+         * uma estaca com quantidade cadastrada somaria o valor dela enquanto as vizinhas
+         * somariam o rateio da MESMA quantidade do lote, e o total estouraria o planejado. */
+        var modo=modoCache[ck];
+        if(modo===undefined){
+          var temCad=false;
+          (ESTACAS[loteId]||[]).forEach(function(e){ if((qtyM[e.id+'::'+servicoId]||0)>0)temCad=true; });
+          modo=modoCache[ck]=(temCad?'cadastrada':'rateio');
+        }
+        if(modo==='cadastrada'){
+          if(qtyM[k]>0){ qtd=qtyM[k]; fonte='cadastrada'; }
+        } else {
+          var li=(window._LOTIDS||[]).indexOf(loteId), si=-1;
+          SERV.forEach(function(sv,ix){ if(sv.id===servicoId)si=ix; });
+          var plan=(li>=0&&si>=0)?orcNum((QTY[li]||[])[si]):0;
+          var v=volM[k]||{}, peso=(v.proj>0?v.proj:(v.real>0?v.real:0));
+          if(plan>0&&peso>0){
+            var tot=rateioCache[ck];
+            if(tot===undefined)tot=rateioCache[ck]=estVolDoServico(loteId,servicoId);
+            if(tot>0){ qtd=plan*peso/tot; fonte='rateio'; }
+          }
+        }
         if(!(qtd>0)){ out.semQtd++; return; }
-        var par=k.split('::');
-        out.linhas.push({loteId:loteId,estacaId:par[0],servicoId:par[1],data:a.fim,qtd:qtd,
+        if(out.fim&&a.fim>out.fim)out.depoisDoPlano++;
+        out.linhas.push({loteId:loteId,estacaId:par[0],servicoId:servicoId,data:a.fim,qtd:qtd,
                          prodId:a.prodId||null,fonte:fonte});
       });
     });
@@ -7507,7 +7546,7 @@
     var conta=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
     return {gravadas:prev.linhas.length,semQtd:prev.semQtd,
             antesDoPlano:prev.antesDoPlano,depoisDoPlano:prev.depoisDoPlano,
-            doInforme:conta('executado'),doProjeto:conta('projeto'),doPlanejada:conta('planejada')};
+            daCadastrada:conta('cadastrada'),doRateio:conta('rateio')};
   }
   /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
    * em lotes de escrita (upsert em massa) em vez de uma chamada por estaca. */
