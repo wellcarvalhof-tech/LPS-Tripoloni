@@ -6908,9 +6908,17 @@
     function estChaveVol(nome){
       return estNorm(nome).replace(/^[\d.]+\s*/,'').replace(/\s*\(\s*M[23²³]?\s*\)\s*$/,'').trim();
     }
+    /* Candidata a coluna de volume é qualquer uma que NÃO seja de data. "ehServ" sozinho não
+     * basta: ele só cobre o primeiro bloco contíguo de INÍCIO/TÉRMINO, e a planilha repete o
+     * bloco inteiro mais adiante. Com o bloco repetido valendo como candidato, "2.1 CORTE"
+     * aparecia duas vezes, a regra de nome único desistia, e o realizado zerava até em corte e
+     * aterro — que antes funcionavam. Então toda coluna com INÍCIO ou TÉRMINO embaixo está
+     * fora, venha de onde vier. */
+    var ehData={};
+    hSub.forEach(function(v,j){ if(/^(INICIO|TERMINO)$/.test(v||''))ehData[j]=1; });
     var realCol={}, volCands={};
     hItens.forEach(function(nm,j){
-      if(!nm||ehServ[j])return;
+      if(!nm||ehServ[j]||ehData[j])return;
       var k=estChaveVol(nm); if(!k)return;
       (volCands[k]||(volCands[k]=[])).push(j);
     });
