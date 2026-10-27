@@ -7269,7 +7269,13 @@
     try{
       var res=await estGerarRealizado(ids);
       renderProd();
-      toast(res.gravadas+' linha(s) de produção atualizadas.');
+      var ds=prev.linhas.map(function(L){ return L.data; }).sort();
+      var sem={}; prev.linhas.forEach(function(L){ sem[mondayOfIso(L.data)]=1; });
+      var nSem=Object.keys(sem).length;
+      alert(res.gravadas+' linha(s) de produção gravadas.\n\n'+
+        'Período preenchido: '+brDate(ds[0])+' a '+brDate(ds[ds.length-1])+', em '+nSem+' semana(s).'+
+        (res.antesDoPlano?('\n\n'+res.antesDoPlano+' estaca(s) concluídas antes da semana 1 do cronograma ficaram de fora — não há célula pra elas no Tempo-Caminho.'):'')+
+        (res.depoisDoPlano?('\n'+res.depoisDoPlano+' concluída(s) depois da última semana entraram na produção, mas ficam fora do fim da matriz.'):''));
     }catch(e){ alert('Falha ao gravar: '+((e&&e.message)||e)); }
     finally{ cargaMenos(); }
   }
@@ -7508,7 +7514,9 @@
     var tw=0; buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); });
     try{
       out.ini=mondayOf(1).toISOString().slice(0,10);
-      out.fim=tw?mondayOf(tw).toISOString().slice(0,10):null;
+      // o fim é o DOMINGO da última semana, não a segunda: término na quarta-feira da última
+      // semana é dentro do cronograma, e comparando com a segunda ele caía como "depois do fim"
+      if(tw){ var f=mondayOf(tw); f.setDate(f.getDate()+6); out.fim=f.toISOString().slice(0,10); }
     }catch(e){}
     var rateioCache={}, modoCache={};
     (loteIds||[]).forEach(function(loteId){
@@ -7812,7 +7820,13 @@
   }
   function renderProd(){
     var root=document.getElementById('prodRoot');if(!root)return;
-    var tabs='<div class="subtabs" style="margin-bottom:14px">'+[['lista','Lista'],['tc','Tempo-Caminho'],['matriz','Matriz de estacas']].map(function(t){return '<button class="subtab'+(window._prodMode===t[0]?' active':'')+'" data-pmode="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>';
+    /* O botão de puxar o realizado das estacas vivia só na aba Matriz de estacas, e é na
+     * Tempo-Caminho que se olha pro que falta preencher. Agora ele fica ao lado das abas,
+     * nas três. */
+    var tabs='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">'+
+      '<div class="subtabs" style="margin:0">'+[['lista','Lista'],['tc','Tempo-Caminho'],['matriz','Matriz de estacas']].map(function(t){return '<button class="subtab'+(window._prodMode===t[0]?' active':'')+'" data-pmode="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>'+
+      '<button class="btn" id="estRealBtnTop" title="Preenche o realizado das estacas que já têm data de término — é o que traz o retroativo do informe de produção pra cá">↻ Puxar realizado das estacas</button>'+
+      '</div>';
     var content='';
     if(window._prodMode==='lista'){
       var svcOpts=SERV.map(function(s){return '<option value="'+s.id+'">'+s.n+'</option>';}).join('');
@@ -7857,6 +7871,8 @@
       });
     }
     root.querySelectorAll('[data-pmode]').forEach(function(b){b.addEventListener('click',function(){window._prodMode=b.getAttribute('data-pmode');renderProd();});});
+    var rbTop=document.getElementById('estRealBtnTop');
+    if(rbTop)rbTop.addEventListener('click',atualizarRealizadoDasEstacas);
     var add=document.getElementById('pdAdd');
     if(add)add.addEventListener('click',async function(){
       if(!selectedObra)return;
