@@ -7045,9 +7045,26 @@
       alert('Falha na importação: '+((e&&e.message)||e)+'\n\nSe fala em coluna que não existe, rode sql/29_estacas_geometria.sql no Supabase.');
       return;
     } finally { cargaMenos(); }
+    /* As datas sozinhas não movem a Curva S nem a AVA: o realizado que elas leem mora em
+     * producao_diaria. Com a opção marcada, a estaca concluída vira produção na data do
+     * término — o mesmo caminho do lançamento manual, feito de uma vez. */
+    var msgReal='';
+    if(escolha.gerarRealizado){
+      cargaMais();
+      try{
+        var lotesTocados=kms.map(function(km){ return loteDe[km]; }).filter(Boolean);
+        var unicos=lotesTocados.filter(function(v,i){ return lotesTocados.indexOf(v)===i; });
+        for(var li4=0;li4<unicos.length;li4++)if(!ESTACA_AVANCO[unicos[li4]])await sbLoadEstacas(unicos[li4]);
+        var res=await estGerarRealizado(unicos);
+        msgReal='\n\n'+res.gravadas+' linha(s) de produção geradas das estacas concluídas'+
+          (res.doInforme?(' ('+res.doInforme+' com o volume realizado do informe)'):'')+'.'+
+          (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora: sem volume realizado e sem quantidade planejada.'):'');
+      }catch(e2){ msgReal='\n\nAs estacas entraram, mas falhou gerar o realizado: '+((e2&&e2.message)||e2); }
+      finally{ cargaMenos(); }
+    }
     renderProd();
     alert(novasEst+' estaca(s) criadas, '+novosAp+' apontamento(s) e '+novosVol+' linha(s) de volume gravadas.'+
-      (pulados?'\n\n'+pulados+' linha(s) ficaram de fora: o KM não tem lote correspondente no app.':''));
+      (pulados?'\n\n'+pulados+' linha(s) ficaram de fora: o KM não tem lote correspondente no app.':'')+msgReal);
   }
   /** Resumo antes de gravar: o que casou, o que não casou e o de-para dos serviços que faltam. */
   function estDialogoImport(info){
@@ -7085,6 +7102,11 @@
         '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto e <b>'+nReal+'</b> volumes realizados.</div>'+
         '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
         'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
+        '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;cursor:pointer">'+
+          '<input type="checkbox" id="estImpReal" checked style="margin-top:3px">'+
+          '<span class="note" style="margin:0">Atualizar também o <b>realizado</b> com as estacas concluídas. '+
+          'Cada estaca com data de término vira uma linha de produção naquela data — é isso que alimenta a Curva S, a AVA e o realizado por serviço. '+
+          'A quantidade sai do volume realizado do informe, e na falta dele da quantidade planejada da estaca. Rodar de novo atualiza, não soma.</span></label>'+
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
           '<button class="btn" id="estImpCancel">Cancelar</button>'+
           '<button class="btn primary" id="estImpOk">Importar</button></div></div>';
@@ -7095,7 +7117,8 @@
       back.querySelector('#estImpOk').addEventListener('click',function(){
         var mapa={};
         back.querySelectorAll('[data-estdepara]').forEach(function(sel){ mapa[sel.getAttribute('data-estdepara')]=sel.value||''; });
-        fim({servDe:mapa});
+        var cb=back.querySelector('#estImpReal');
+        fim({servDe:mapa,gerarRealizado:!cb||cb.checked});
       });
     });
   }
@@ -7167,6 +7190,40 @@
       '<div class="note" style="margin-top:8px">O <b>Saldo</b> é projeto − realizado: é ele que deveria bater com a quantidade cadastrada no planejamento. '+
       'Em amarelo, os serviços onde extensão e volume contam histórias diferentes.</div></div>';
   }
+  /** Botão "Atualizar realizado das estacas": roda o mesmo caminho da importação pra quem já
+   *  importou o informe antes — ou pra quem preencheu as datas à mão e quer ver nos gráficos. */
+  async function atualizarRealizadoDasEstacas(){
+    if(!selectedObra){ alert('Abra uma obra.'); return; }
+    if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
+    var ids=(window._LOTIDS||[]).filter(function(id,li){ return id&&lotInView(li); });
+    if(!ids.length){ alert('Nenhum lote em exibição.'); return; }
+    cargaMais();
+    var prev;
+    try{
+      for(var i=0;i<ids.length;i++)if(!ESTACA_AVANCO[ids[i]])await sbLoadEstacas(ids[i]);
+      prev=estRealizadoPrevia(ids);
+    }catch(e){ cargaMenos(); alert('Falha ao ler as estacas: '+((e&&e.message)||e)); return; }
+    cargaMenos();
+    if(!prev.linhas.length){
+      alert('Nenhuma estaca concluída com quantidade pra lançar.'+
+        (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) têm data de término mas não têm volume realizado nem quantidade planejada.'):
+                     '\n\nPreencha a data de término das estacas, ou importe os informes de produção.'));
+      return;
+    }
+    var doInf=prev.linhas.filter(function(L){ return L.fonte==='informe'; }).length;
+    var novas=prev.linhas.filter(function(L){ return !L.prodId; }).length;
+    if(!confirm('Gerar o realizado de '+prev.linhas.length+' estaca(s) concluída(s), em '+prev.lotes+' lote(s)?\n\n'+
+      novas+' linha(s) novas de produção e '+(prev.linhas.length-novas)+' atualizada(s).\n'+
+      doInf+' com o volume realizado do informe; o resto com a quantidade planejada da estaca.'+
+      (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter quantidade.'):'')))return;
+    cargaMais();
+    try{
+      var res=await estGerarRealizado(ids);
+      renderProd();
+      toast(res.gravadas+' linha(s) de produção atualizadas.');
+    }catch(e){ alert('Falha ao gravar: '+((e&&e.message)||e)); }
+    finally{ cargaMenos(); }
+  }
   function estacasHTML(){
     if(!LOTS.length)return '<div class="card"><div class="note">Nenhum lote cadastrado ainda. Cadastre em "Lotes & Quantidades".</div></div>';
     var dirtyN=Object.keys(ESTACA_QTY_DIRTY).length;
@@ -7176,6 +7233,7 @@
         '<button class="btn" id="estModeloBtn">⇩ Planilha modelo</button>'+
         '<button class="btn" id="estImportBtn">↥ Importar estaqueamento</button>'+
         '<button class="btn" id="estInformesBtn">↥ Importar informes de produção</button>'+
+        '<button class="btn" id="estRealBtn" title="Gera a produção das estacas que já têm data de término, pra alimentar Curva S, AVA e o realizado por serviço">↻ Atualizar realizado das estacas</button>'+
         '<button class="btn primary" id="estSaveQtd"'+(dirtyN?'':' disabled')+'>💾 Salvar quantidades'+(dirtyN?' ('+dirtyN+')':'')+'</button>'+
       '</div></div></div>';
     return toolbar+estResumoHTML()+LOTS.map(function(l,li){return estLoteGroupHTML(li);}).join('');
@@ -7324,6 +7382,70 @@
       ESTACA_AVANCO[loteId][k]=ap;
       renderProd();
     }catch(e){ alert('Falha ao salvar avanço: '+((e&&e.message)||e)); }
+  }
+  /* ---------- Realizado a partir das estacas concluídas ----------
+   * O informe de produção traz, por estaca e serviço, as datas de início/término e (quando a
+   * planilha tem a coluna) o volume realizado. A importação gravava isso em estaca_apontamentos
+   * e estaca_quantidades — e parava aí. Só que o realizado que a Curva S, a AVA e o histograma
+   * leem mora em producao_diaria: as datas entravam e os gráficos continuavam vazios.
+   *
+   * Esta função fecha esse caminho. Pra cada estaca × serviço com data de TÉRMINO, gera (ou
+   * atualiza) uma linha de produção naquela data. A quantidade sai, nesta ordem:
+   *   1) volume realizado do informe, quando veio;
+   *   2) quantidade planejada daquela estaca pro serviço.
+   * Estaca terminada sem nenhuma das duas não vira produção — lançar zero sujaria a curva.
+   *
+   * Não duplica: a linha de produção fica amarrada ao apontamento por producao_diaria_id, que é
+   * o mesmo vínculo que o lançamento manual usa. Rodar de novo atualiza, não soma. */
+  function estRealizadoPrevia(loteIds){
+    var out={linhas:[],semQtd:0,lotes:0};
+    (loteIds||[]).forEach(function(loteId){
+      var av=ESTACA_AVANCO[loteId]; if(!av)return;
+      out.lotes++;
+      var qtyM=ESTACA_QTY[loteId]||{}, volM=ESTACA_VOL[loteId]||{};
+      Object.keys(av).forEach(function(k){
+        var a=av[k]; if(!a||!a.fim)return;
+        var vol=volM[k]&&volM[k].real!=null?volM[k].real:null;
+        var qtd=(vol!=null&&vol>0)?vol:(qtyM[k]||0);
+        if(!(qtd>0)){ out.semQtd++; return; }
+        var par=k.split('::');
+        out.linhas.push({loteId:loteId,estacaId:par[0],servicoId:par[1],data:a.fim,qtd:qtd,
+                         prodId:a.prodId||null,fonte:(vol!=null&&vol>0)?'informe':'planejada'});
+      });
+    });
+    return out;
+  }
+  async function estGerarRealizado(loteIds){
+    var prev=estRealizadoPrevia(loteIds);
+    if(!prev.linhas.length)return {gravadas:0,semQtd:prev.semQtd};
+    var ups=prev.linhas.map(function(L){
+      var id=L.prodId||newUuid();
+      L.novoId=id;
+      return {id:id,obra_id:selectedObra.id,servico_id:L.servicoId,lote_id:L.loteId,
+              data:L.data,quantidade:L.qtd,observacao:'Estaca concluída (informe de produção)'};
+    });
+    for(var i=0;i<ups.length;i+=400){
+      var r=await SB.from('producao_diaria').upsert(ups.slice(i,i+400),{onConflict:'id'});
+      if(r.error)throw r.error;
+    }
+    // amarra cada produção ao apontamento da estaca, pra rodar de novo atualizar em vez de somar
+    var aps=prev.linhas.map(function(L){
+      return {obra_id:selectedObra.id,lote_id:L.loteId,estaca_id:L.estacaId,servico_id:L.servicoId,
+              data_inicio:(ESTACA_AVANCO[L.loteId][L.estacaId+'::'+L.servicoId]||{}).inicio||null,
+              data_fim:L.data,producao_diaria_id:L.novoId};
+    });
+    for(var j=0;j<aps.length;j+=400){
+      var r2=await SB.from('estaca_apontamentos').upsert(aps.slice(j,j+400),{onConflict:'estaca_id,servico_id'});
+      if(r2.error)throw r2.error;
+    }
+    prev.linhas.forEach(function(L){
+      ESTACA_AVANCO[L.loteId][L.estacaId+'::'+L.servicoId].prodId=L.novoId;
+      var ex=window.PROD_LIST.filter(function(r){ return r.id===L.novoId; })[0];
+      if(ex){ ex.data=L.data; ex.qtd=L.qtd; ex.servId=L.servicoId; ex.loteId=L.loteId; }
+      else window.PROD_LIST.unshift({id:L.novoId,data:L.data,servId:L.servicoId,loteId:L.loteId,qtd:L.qtd});
+    });
+    return {gravadas:prev.linhas.length,semQtd:prev.semQtd,
+            doInforme:prev.linhas.filter(function(L){ return L.fonte==='informe'; }).length};
   }
   /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
    * em lotes de escrita (upsert em massa) em vez de uma chamada por estaca. */
@@ -7664,6 +7786,8 @@
       if(ctBtn)ctBtn.addEventListener('click',estCarregarTudo);
       var infBtn=document.getElementById('estInformesBtn');
       if(infBtn)infBtn.addEventListener('click',importarInformesArquivo);
+      var realBtn=document.getElementById('estRealBtn');
+      if(realBtn)realBtn.addEventListener('click',atualizarRealizadoDasEstacas);
       var importBtn=document.getElementById('estImportBtn');
       if(importBtn)importBtn.addEventListener('click',function(){
         pickExcelFile(function(file){readWorkbookFile(file).then(importEstacasWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});
