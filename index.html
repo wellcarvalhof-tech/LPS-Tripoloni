@@ -7069,7 +7069,7 @@
         for(var li4=0;li4<unicos.length;li4++)if(!ESTACA_AVANCO[unicos[li4]])await sbLoadEstacas(unicos[li4]);
         var res=await estGerarRealizado(unicos);
         msgReal='\n\n'+res.gravadas+' linha(s) de produção geradas das estacas concluídas'+
-          ' ('+res.daCadastrada+' com a quantidade cadastrada da estaca, '+res.doRateio+' rateadas pelo volume cadastrado).'+
+          ' ('+res.daCadastrada+' da quantidade cadastrada, '+res.doRateio+' rateadas pelo volume, '+(res.porExtensao||0)+' rateadas pela extensão da estaca).'+
           (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora por não ter de onde tirar quantidade.'):'')+
           (res.antesDoPlano?('\n'+res.antesDoPlano+' estaca(s) concluídas antes do início do cronograma ficaram de fora — esse avanço já está descontado do saldo.'):'')+
           (res.depoisDoPlano?('\n'+res.depoisDoPlano+' estaca(s) concluídas depois da última semana do cronograma entraram na produção, mas a Curva S não tem semana pra elas.'):'');
@@ -7140,7 +7140,7 @@
           '<input type="checkbox" id="estImpReal" checked style="margin-top:3px">'+
           '<span class="note" style="margin:0">Atualizar também o <b>realizado</b> com as estacas concluídas. '+
           'Cada estaca com data de término vira uma linha de produção naquela data — é isso que alimenta a Curva S, a AVA e o realizado por serviço. '+
-          'A quantidade sai do que está <b>cadastrado</b>: a quantidade da estaca, ou o rateio da quantidade do lote pelo volume cadastrado — assim o percentual fecha com o planejamento. Rodar de novo atualiza, não soma.</span></label>'+
+          'A quantidade sai do que está <b>cadastrado</b>: a quantidade da estaca, ou o rateio da quantidade do lote — pelo <b>volume</b> onde ele existe (corte e aterro) e pela <b>extensão da estaca</b> nos serviços medidos em metro. Assim o percentual fecha com o planejamento. Rodar de novo atualiza, não soma.</span></label>'+
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
           '<button class="btn" id="estImpCancel">Cancelar</button>'+
           '<button class="btn primary" id="estImpOk">Importar</button></div></div>';
@@ -7252,7 +7252,8 @@
       novas+' linha(s) novas de produção e '+(prev.linhas.length-novas)+' atualizada(s).\n\n'+
       'De onde sai a quantidade:\n'+
       '  '+cont('cadastrada')+' da quantidade cadastrada da estaca\n'+
-      '  '+cont('rateio')+' do rateio da quantidade do lote pelo volume cadastrado'+
+      '  '+cont('rateio')+' rateadas pelo volume cadastrado (corte e aterro)\n'+
+      '  '+cont('extensao')+' rateadas pela extensão da estaca (serviços medidos em metro)'+
       (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter de onde tirar quantidade: sem volume cadastrado, ou num serviço já controlado por quantidade por estaca e com a estaca em branco.'):'')+
       (prev.antesDoPlano?('\n'+prev.antesDoPlano+' estaca(s) concluídas antes da semana 1 ficam de fora: esse avanço já está descontado do saldo, lançar de novo contaria duas vezes.'):'')+
       (prev.depoisDoPlano?('\n'+prev.depoisDoPlano+' estaca(s) concluídas depois da última semana entram, mas a Curva S não tem semana pra desenhá-las.'):'')))return;
@@ -7457,15 +7458,42 @@
    * 100% sem a obra ter feito nada a mais. Essas ficam de fora e são contadas à parte.
    * Término DEPOIS da última semana é o contrário: é avanço real de serviço atrasado. Entra na
    * produção, mas a Curva S não tem onde desenhar — o aviso diz quantas são. */
-  /** Soma do volume cadastrado das estacas de um lote num serviço — o denominador do rateio.
-   *  Usa o volume de projeto; onde ele não veio, vale o executado, que é melhor que nada. */
-  function estVolDoServico(loteId,servicoId){
-    var volM=ESTACA_VOL[loteId]||{}, t=0;
-    (ESTACAS[loteId]||[]).forEach(function(e){
-      var v=volM[e.id+'::'+servicoId]; if(!v)return;
-      t+=(v.proj>0?v.proj:(v.real>0?v.real:0));
+  /** Peso de cada estaca no rateio de um serviço, e a soma deles (o denominador).
+   *
+   *  Corte e aterro têm VOLUME cadastrado por estaca — o peso é esse volume, porque uma estaca
+   *  de corte profundo vale muito mais que uma de corte raso.
+   *
+   *  Os demais (CFT, sub-base, base, CBUQ, pavimento rígido, drenagem) são medidos em METRO:
+   *  na planilha o próprio cabeçalho diz "(M)". Aí não há volume cadastrado, e o peso é o
+   *  COMPRIMENTO da estaca — 20 m na obra, ou o espaçamento cadastrado do lote. Uma estaca
+   *  concluída vale o trecho dela, que é como a extensão é medida.
+   *
+   *  A escolha é por lote × serviço: se alguma estaca tem volume, manda o volume em todas (e a
+   *  estaca sem volume é estaca onde o serviço não existe). Senão, manda o comprimento, e
+   *  entram as estacas que têm apontamento — início ou término — porque é o que diz onde o
+   *  serviço passa. Misturar m³ com m no mesmo denominador daria um número sem significado. */
+  function estPesosDoServico(loteId,servicoId){
+    var volM=ESTACA_VOL[loteId]||{}, apM=ESTACA_AVANCO[loteId]||{}, ests=ESTACAS[loteId]||[];
+    var li=(window._LOTIDS||[]).indexOf(loteId);
+    var espac=(li>=0&&LOTE_ESPAC[li])?LOTE_ESPAC[li]:20;
+    var temVol=false;
+    ests.forEach(function(e){
+      var v=volM[e.id+'::'+servicoId];
+      if(v&&(v.proj>0||v.real>0))temVol=true;
     });
-    return t;
+    var peso={}, tot=0;
+    ests.forEach(function(e){
+      var k=e.id+'::'+servicoId, w=0;
+      if(temVol){
+        var v=volM[k];
+        w=v?(v.proj>0?v.proj:(v.real>0?v.real:0)):0;
+      }else{
+        var a=apM[k];
+        if(a&&(a.inicio||a.fim))w=espac;
+      }
+      if(w>0){ peso[k]=w; tot+=w; }
+    });
+    return {peso:peso,tot:tot,porVolume:temVol,espac:espac};
   }
   function estRealizadoPrevia(loteIds){
     var out={linhas:[],semQtd:0,lotes:0,antesDoPlano:0,depoisDoPlano:0,ini:null,fim:null};
@@ -7499,12 +7527,10 @@
           var li=(window._LOTIDS||[]).indexOf(loteId), si=-1;
           SERV.forEach(function(sv,ix){ if(sv.id===servicoId)si=ix; });
           var plan=(li>=0&&si>=0)?orcNum((QTY[li]||[])[si]):0;
-          var v=volM[k]||{}, peso=(v.proj>0?v.proj:(v.real>0?v.real:0));
-          if(plan>0&&peso>0){
-            var tot=rateioCache[ck];
-            if(tot===undefined)tot=rateioCache[ck]=estVolDoServico(loteId,servicoId);
-            if(tot>0){ qtd=plan*peso/tot; fonte='rateio'; }
-          }
+          var R=rateioCache[ck];
+          if(R===undefined)R=rateioCache[ck]=estPesosDoServico(loteId,servicoId);
+          var peso=R.peso[k]||0;
+          if(plan>0&&peso>0&&R.tot>0){ qtd=plan*peso/R.tot; fonte=R.porVolume?'rateio':'extensao'; }
         }
         if(!(qtd>0)){ out.semQtd++; return; }
         if(out.fim&&a.fim>out.fim)out.depoisDoPlano++;
@@ -7516,7 +7542,10 @@
   }
   async function estGerarRealizado(loteIds){
     var prev=estRealizadoPrevia(loteIds);
-    if(!prev.linhas.length)return {gravadas:0,semQtd:prev.semQtd};
+    // sem linhas pra gravar, mas os contadores vão completos: faltando um deles, a mensagem
+    // mostrava "undefined" no lugar do número
+    if(!prev.linhas.length)return {gravadas:0,semQtd:prev.semQtd,daCadastrada:0,doRateio:0,porExtensao:0,
+      antesDoPlano:prev.antesDoPlano,depoisDoPlano:prev.depoisDoPlano};
     var ups=prev.linhas.map(function(L){
       var id=L.prodId||newUuid();
       L.novoId=id;
@@ -7546,7 +7575,7 @@
     var conta=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
     return {gravadas:prev.linhas.length,semQtd:prev.semQtd,
             antesDoPlano:prev.antesDoPlano,depoisDoPlano:prev.depoisDoPlano,
-            daCadastrada:conta('cadastrada'),doRateio:conta('rateio')};
+            daCadastrada:conta('cadastrada'),doRateio:conta('rateio'),porExtensao:conta('extensao')};
   }
   /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
    * em lotes de escrita (upsert em massa) em vez de uma chamada por estaca. */
