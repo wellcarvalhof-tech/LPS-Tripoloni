@@ -8749,19 +8749,15 @@
 
     // realizado: apontamentos reais de Produção Diária, agregados na semana de trabalho correspondente à data
     var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
-    var weekIdxCache={};
+    var weekIdxCache={}, semDaData=mapaSemanaPorData(tw);
     (window.PROD_LIST||[]).forEach(function(r){
       var li0=(window._LOTIDS||[]).indexOf(r.loteId);
       if(li0>=0&&!lotInView(li0))return;
       if(pacote){
         if(li0<0||pacoteOfLote(li0)!==pacote)return;
       }
-      var mon=mondayOfIso(r.data), w4=weekIdxCache[mon];
-      if(w4===undefined){
-        w4=null;
-        for(var wi=1;wi<=tw;wi++){ if(mondayOf(wi).toISOString().slice(0,10)===mon){w4=wi;break;} }
-        weekIdxCache[mon]=w4;
-      }
+      var w4=weekIdxCache[r.data];
+      if(w4===undefined)w4=weekIdxCache[r.data]=semDaData(r.data);
       if(w4==null)return;
       var si=null; SERV.forEach(function(s,i){if(s.id===r.servId)si=i;});
       if(si==null)return;
@@ -9817,19 +9813,52 @@
   }
   /** Soma do realizado (Produção Diária) apontado pra esse lote+serviço específico. */
   /** Produção apontada por semana do projeto, por lote e serviço: {w::li::si -> quantidade}. */
+  /** Devolve uma função data -> semana do cronograma.
+   *
+   *  A semana do cronograma PULA recesso e feriado (é assim que mondayOf conta), então
+   *  apontamento feito numa semana parada não tinha semana própria: o casamento por segunda-feira
+   *  não achava nada e a produção sumia da matriz e da curva, sem aviso nenhum. Quem apontou
+   *  olhava a tela e achava que não tinha gravado.
+   *
+   *  Agora, data que não cai numa semana de trabalho desce pra última semana de trabalho ANTES
+   *  dela — é onde a equipe estava, e é o período que a pessoa reconhece. Data anterior à semana
+   *  1 devolve null: aí não existe célula mesmo. */
+  function mapaSemanaPorData(maxW){
+    /* Monta as segundas-feiras das semanas de trabalho numa passada só. Chamar mondayOf(w) pra
+     * cada semana custava caro: cada chamada varre desde o início da obra, e isso aqui roda a
+     * cada desenho da matriz. A regra de pular recesso é a mesma de mondayOf — se ela mudar lá,
+     * muda aqui. */
+    var lim=maxW||520, mons=[], porMon={}, cache={};
+    var d=new Date(TC_START()+'T00:00:00');
+    var dia=d.getDay(); d.setDate(d.getDate()+(dia===0?-6:1-dia));
+    var fer={}; calHolidays().forEach(function(f){ fer[mondayOfIso(f)]=true; });
+    var guard=0;
+    while(mons.length<lim&&guard++<4000){
+      var iso=d.toISOString().slice(0,10);
+      if(!fer[iso]){ mons.push(iso); porMon[iso]=mons.length; }
+      d.setDate(d.getDate()+7);
+    }
+    return function(iso){
+      if(!iso)return null;
+      if(cache[iso]!==undefined)return cache[iso];
+      var mon=mondayOfIso(iso), r=porMon[mon];
+      if(r===undefined){
+        r=null;
+        for(var i=0;i<mons.length;i++){ if(mons[i]<mon)r=i+1; else break; }
+      }
+      cache[iso]=r;
+      return r;
+    };
+  }
   function realizadoPorSemana(){
-    var m={}, cacheMon={}, idxS={};
+    var m={}, idxS={};
     SERV.forEach(function(sv,i){ idxS[sv.id]=i; });
     var lotIds=window._LOTIDS||[];
+    var semDe=mapaSemanaPorData(520);
     (window.PROD_LIST||[]).forEach(function(r){
       var li=lotIds.indexOf(r.loteId); if(li<0)return;
       var si=idxS[r.servId]; if(si==null)return;
-      var mon=mondayOfIso(r.data), w=cacheMon[mon];
-      if(w===undefined){
-        w=null;
-        for(var i2=1;i2<=520;i2++){ if(mondayOf(i2).toISOString().slice(0,10)===mon){ w=i2; break; } }
-        cacheMon[mon]=w;
-      }
+      var w=semDe(r.data);
       if(w==null)return;
       var k=w+'::'+li+'::'+si;
       m[k]=(m[k]||0)+(+r.qtd||0);
@@ -9850,9 +9879,7 @@
     var minDate=null;
     (window.PROD_LIST||[]).forEach(function(r){ if(r.loteId===loteId&&r.servId===servId&&(!minDate||r.data<minDate))minDate=r.data; });
     if(!minDate)return null;
-    var mon=mondayOfIso(minDate);
-    for(var w=1;w<=1000;w++){ if(mondayOf(w).toISOString().slice(0,10)===mon)return w; }
-    return null;
+    return mapaSemanaPorData(520)(minDate);   // apontamento em semana parada cai na anterior
   }
   /** Semana de CALENDÁRIO w (1 = segunda-feira do início da obra), contando também as semanas
    *  de recesso/feriado — diferente de mondayOf(w), que pula essas semanas (semana de trabalho,
