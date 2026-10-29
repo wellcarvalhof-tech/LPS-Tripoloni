@@ -3450,7 +3450,11 @@
         : '');
     return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.'+(lotesDirty?' Há alterações não salvas.':''),impBtn()+
       (selCount?'<button class="btn" id="delSelLotes" style="color:var(--crit);border-color:var(--crit)">✕ Excluir selecionados ('+selCount+')</button>':'')+
-      '<button class="btn primary" id="addLote">+ Adicionar</button>'+'<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar alterações</button>')+
+      '<button class="btn primary" id="addLote">+ Adicionar</button>'+
+      (ACTIVE_CENARIO
+        ? ('<button class="btn" id="saveLotesObra"'+(lotesDirty?'':' disabled')+' title="Grava o saldo na obra: passa a valer pro cronograma ao vivo e pra toda base ou cenário que não tenha saldo próprio">💾 Salvar na obra</button>'+
+           '<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+' title="Grava só no cenário aberto — a obra e os outros cenários não mudam">💾 Salvar no cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</button>')
+        : ('<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar '+(CENARIOS.length?'na obra':'alterações')+'</button>')))+
     avisoSaldo+
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+pacoteOpts+
     '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes. <b>Pacote contratual</b> é opcional — preencha quando a obra for dividida em mais de um contrato (ex.: "Lote 1", "Lote 2") pra depois ver a Curva S e os relatórios separados por pacote, mesmo com o cronograma todo integrado. Clique em 📏 pra controlar a produção por estaca (corte, aterro, CFT, base...) dentro do lote, sem mudar o cronograma, que continua calculado por lote.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
@@ -4751,7 +4755,12 @@
     QTY_DIRTY[li+'::'+si]=true;
     go('cad-lotes');
   }
-  async function saveLotesAll(){
+  /** destino: 'obra' grava o saldo em lote_servico; 'cenario' grava no cenário aberto.
+   *  Sem destino, decide pelo estado — é o que o botão do topo usa. Nome do lote e pacote
+   *  contratual vão sempre pra obra: não são de cenário. */
+  async function saveLotesAll(destino){
+    if(!destino)destino=ACTIVE_CENARIO?'cenario':'obra';
+    if(destino==='cenario'&&!ACTIVE_CENARIO)destino='obra';
     var nameKeys=Object.keys(LOT_NAME_DIRTY).map(Number), qtyKeys=Object.keys(QTY_DIRTY), pacKeys=Object.keys(LOT_PACOTE_DIRTY).map(Number);
     if(!nameKeys.length&&!qtyKeys.length&&!pacKeys.length)return;
     try{
@@ -4759,8 +4768,7 @@
         var li=nameKeys[i], id=(window._LOTIDS||[])[li]; if(!id)continue;
         await sbUpdateLote(id,{nome:LOTS[li]});
       }
-      // com cenário aberto o saldo é do cenário — saveAllPending já gravou lá e limpou o dirty
-      if(!ACTIVE_CENARIO)for(var j=0;j<qtyKeys.length;j++){
+      if(destino==='obra')for(var j=0;j<qtyKeys.length;j++){
         var parts=qtyKeys[j].split('::'), li2=+parts[0], si2=+parts[1];
         var loteId=(window._LOTIDS||[])[li2], sv=SERV[si2];
         if(!loteId||!sv)continue;
@@ -4770,8 +4778,16 @@
         var li3=pacKeys[k], id3=(window._LOTIDS||[])[li3]; if(!id3)continue;
         await sbUpdateLote(id3,{pacote_contratual:LOTE_PACOTE[li3]||null});
       }
+      if(destino==='cenario'&&qtyKeys.length){
+        await saveIntoActiveCenario();   // o saldo entra no snapshot do cenário
+        LOT_NAME_DIRTY={}; LOT_PACOTE_DIRTY={};
+        go('cad-lotes'); return;
+      }
       LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={};
-      go('cad-lotes'); toast('Lotes e quantidades salvos.');
+      go('cad-lotes');
+      toast(destino==='obra'&&ACTIVE_CENARIO
+        ? 'Saldo gravado NA OBRA — vale pro cronograma ao vivo e pra quem não tem saldo próprio.'
+        : 'Lotes e quantidades salvos.');
     }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); go('cad-lotes'); }
   }
   async function deleteLoteRow(li){
@@ -8360,7 +8376,14 @@
       var addL=document.getElementById('addLote');
       if(addL)addL.addEventListener('click',addLoteRow);
       var saveL=document.getElementById('saveLotes');
-      if(saveL)saveL.addEventListener('click',saveLotesAll);
+      if(saveL)saveL.addEventListener('click',function(){ saveLotesAll(ACTIVE_CENARIO?'cenario':'obra'); });
+      var saveLO=document.getElementById('saveLotesObra');
+      if(saveLO)saveLO.addEventListener('click',function(){
+        /* Gravar na obra com um cenário aberto é decisão com consequência: o saldo passa a
+         * valer pro cronograma ao vivo e pra toda base ou cenário sem saldo próprio. Pergunta. */
+        if(!confirm('Gravar este saldo NA OBRA?\n\nEle passa a valer pro cronograma ao vivo e pra toda linha de base ou cenário que não tenha saldo próprio.\n\nO cenário "'+ACTIVE_CENARIO.nome+'" continua com o saldo dele — pra mudar o dele, use o outro botão.'))return;
+        saveLotesAll('obra');
+      });
     }
     if(view==='cad-apoio'){
       document.querySelectorAll('table.edtbl tbody tr[data-ai]').forEach(function(tr){
