@@ -1576,15 +1576,19 @@
     if(b){b.disabled=true;b.textContent='Salvando…';}
     try{
       if(ACTIVE_CENARIO){
-        if(Object.keys(SVC_DIRTY).length||CAL_DIRTY||ADJ_DIRTY){
+        /* Quantidade entra aqui junto do resto: com cenário aberto, o saldo é DELE. Indo pro
+         * caminho normal (lote_servico) ela mudaria o saldo da obra, e com ele o prazo da linha
+         * de base e de todos os outros cenários. */
+        if(Object.keys(SVC_DIRTY).length||CAL_DIRTY||ADJ_DIRTY||Object.keys(QTY_DIRTY).length){
           await saveIntoActiveCenario();
-          SVC_DIRTY={}; CAL_DIRTY=false;
+          SVC_DIRTY={}; CAL_DIRTY=false; QTY_DIRTY={};
         }
       }else{
         if(Object.keys(SVC_DIRTY).length)await saveServicosAll();
         if(CAL_DIRTY)await saveCalendarAll();
         if(ADJ_DIRTY){ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; if(current==='cr-matriz')go(current); }
       }
+      // nome do lote e pacote contratual são da obra, não do cenário: seguem pelo caminho normal
       if(Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length)await saveLotesAll();
       if(Object.keys(REC_DIRTY).length)await saveRecursosAll();
       if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
@@ -3433,9 +3437,21 @@
     var pacoteOpts='<datalist id="pacoteOpts">'+Object.keys(pacoteSet).map(function(p){return '<option value="'+escAttr(p)+'">';}).join('')+'</datalist>';
     var lotesDirty=Object.keys(LOT_NAME_DIRTY).length||Object.keys(QTY_DIRTY).length||Object.keys(LOT_PACOTE_DIRTY).length;
     var selCount=Object.keys(LOT_SELECTED).length;
+    /* O saldo agora tem dono: com cenário aberto ele é do cenário, senão é da obra. Sem dizer
+     * isso na tela, a pessoa muda a quantidade achando que mudou pra todo mundo — ou o
+     * contrário. O aviso fica onde o número é digitado. */
+    var avisoSaldo=ACTIVE_CENARIO
+      ? '<div class="banner" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">'+
+        'O saldo que você editar aqui é <b>do cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</b>. '+
+        'A obra, a linha de base e os outros cenários ficam com o saldo deles. Salve pelo botão do topo pra gravar no cenário.</div>'
+      : (CENARIOS.length
+        ? '<div class="note" style="margin-bottom:12px">O saldo abaixo é <b>o da obra</b> — vale pra linha de base e pra todo cenário que não tenha saldo próprio. '+
+          'Pra testar outro saldo sem mexer nisso, carregue um cenário em <b>Tempo Caminho → Cenários</b> e edite por lá.</div>'
+        : '');
     return head('Lotes & Quantidades','Sequência executiva dos lotes e saldo de cada serviço por lote — a matriz de entrada.'+(lotesDirty?' Há alterações não salvas.':''),impBtn()+
       (selCount?'<button class="btn" id="delSelLotes" style="color:var(--crit);border-color:var(--crit)">✕ Excluir selecionados ('+selCount+')</button>':'')+
       '<button class="btn primary" id="addLote">+ Adicionar</button>'+'<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar alterações</button>')+
+    avisoSaldo+
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+pacoteOpts+
     '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes. <b>Pacote contratual</b> é opcional — preencha quando a obra for dividida em mais de um contrato (ex.: "Lote 1", "Lote 2") pra depois ver a Curva S e os relatórios separados por pacote, mesmo com o cronograma todo integrado. Clique em 📏 pra controlar a produção por estaca (corte, aterro, CFT, base...) dentro do lote, sem mudar o cronograma, que continua calculado por lote.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
   };
@@ -4743,7 +4759,8 @@
         var li=nameKeys[i], id=(window._LOTIDS||[])[li]; if(!id)continue;
         await sbUpdateLote(id,{nome:LOTS[li]});
       }
-      for(var j=0;j<qtyKeys.length;j++){
+      // com cenário aberto o saldo é do cenário — saveAllPending já gravou lá e limpou o dirty
+      if(!ACTIVE_CENARIO)for(var j=0;j<qtyKeys.length;j++){
         var parts=qtyKeys[j].split('::'), li2=+parts[0], si2=+parts[1];
         var loteId=(window._LOTIDS||[])[li2], sv=SERV[si2];
         if(!loteId||!sv)continue;
@@ -8174,6 +8191,7 @@
             });
           }
           window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
+          aplicaQuantidadesDoSnap(snap);   // o saldo do cenário entra na edição junto com o resto
           adjDirty(); ADJ_PENDING={};
           ACTIVE_CENARIO={id:c.id,nome:c.nome};
           window._cronoTab='ajuste';
@@ -10058,6 +10076,22 @@
    *  serviço — equipes/produtividade/config) pelo snapshot guardado num cenário. Diferente de
    *  "Carregar" (que abre o cenário num modo de edição à parte, sem tocar na obra): isso grava
    *  direto nas tabelas reais (servicos, obras), igual "Salvar ajustes" faria. */
+  /** Joga o saldo guardado num snapshot dentro do QTY em memória. Par ausente fica como está —
+   *  lote ou serviço criado depois do cenário não existe lá e continua valendo o da obra. */
+  function aplicaQuantidadesDoSnap(snap){
+    if(!snap||!snap.quantidades)return 0;
+    var ids=window._LOTIDS||[], n=0;
+    LOTS.forEach(function(_,li){
+      var loteId=ids[li]; if(!loteId)return;
+      SERV.forEach(function(sv,si){
+        var v=snap.quantidades[loteId+'::'+sv.id];
+        if(v===undefined)return;
+        if(!QTY[li])QTY[li]=[];
+        if(orcNum(QTY[li][si])!==orcNum(v)){ QTY[li][si]=orcNum(v); n++; }
+      });
+    });
+    return n;
+  }
   async function applyCenarioToLive(c){
     if(!c||!selectedObra)return;
     var snap=c.snap||{ovr:{},feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
@@ -10078,16 +10112,48 @@
     }
     var feriados=snap.feriados||{holidayWeeks:[],rainPeriods:[]};
     await saveCalendarObj(feriados.holidayWeeks||[],feriados.rainPeriods||[]);
+    // "Aplicar na obra" grava de verdade: o saldo do cenário vira o saldo da obra, em lote_servico
+    if(snap.quantidades&&aplicaQuantidadesDoSnap(snap)){
+      var ids2=window._LOTIDS||[], lista=[];
+      LOTS.forEach(function(_,li){
+        var loteId=ids2[li]; if(!loteId)return;
+        SERV.forEach(function(sv,si){
+          if(snap.quantidades[loteId+'::'+sv.id]===undefined)return;
+          lista.push({loteId:loteId,servicoId:sv.id,quantidade:orcNum(QTY[li][si]),unidade:sv.u||null});
+        });
+      });
+      if(lista.length)await sbUpsertQuantidades(selectedObra.id,lista);
+    }
     await saveOverrides();
-    ADJ_DIRTY=false; ADJ_PENDING={};
+    ADJ_DIRTY=false; ADJ_PENDING={}; QTY_DIRTY={};
   }
-  /** Snapshot completo do estado ao vivo: ajustes manuais, calendário (feriados/chuvas) e os
-   *  parâmetros de cada serviço (produtividade, nº de equipes, predecessoras, etc). */
+  /** Snapshot completo do estado ao vivo: ajustes manuais, calendário (feriados/chuvas), os
+   *  parâmetros de cada serviço (produtividade, nº de equipes, predecessoras) e o SALDO.
+   *
+   *  O saldo estava de fora, e isso vazava: ele mora em lote_servico, uma linha por lote ×
+   *  serviço e nenhuma coluna de cenário. Mudar a quantidade com um cenário aberto mudava a
+   *  quantidade da obra — e o cronograma da linha de base, que lê a mesma QTY, mudava de prazo
+   *  sozinho, sem ninguém ter destravado nada.
+   *
+   *  A chave é loteId::servicoId, não índice: lote ou serviço criado depois não desloca o que
+   *  já estava gravado. Par que não existe no snapshot cai no saldo da obra. */
+  function captureQuantidades(){
+    var q={}, ids=window._LOTIDS||[];
+    LOTS.forEach(function(_,li){
+      var loteId=ids[li]; if(!loteId)return;
+      SERV.forEach(function(sv,si){
+        var v=orcNum((QTY[li]||[])[si]);
+        if(v)q[loteId+'::'+sv.id]=v;
+      });
+    });
+    return q;
+  }
   function captureLiveSnapshot(){
     return {
       ovr:JSON.parse(JSON.stringify(OVR)),
       feriados:JSON.parse(JSON.stringify(calData())),
-      servicos:SERV.map(function(s){return {id:s.id,nome:s.n,unidade:s.u,cor:s.hex,eq:s.eq,produtividade:s.p,lag:s.lag,config:JSON.parse(JSON.stringify(s.cfg||{}))};})
+      servicos:SERV.map(function(s){return {id:s.id,nome:s.n,unidade:s.u,cor:s.hex,eq:s.eq,produtividade:s.p,lag:s.lag,config:JSON.parse(JSON.stringify(s.cfg||{}))};}),
+      quantidades:captureQuantidades()
     };
   }
   /** Normaliza cenarios.ajustes_manuais: formato novo ({ovr,feriados,servicos}) ou o formato
@@ -10099,10 +10165,12 @@
       return {
         ovr:(raw.ovr&&typeof raw.ovr==='object')?raw.ovr:{},
         feriados:(raw.feriados&&typeof raw.feriados==='object')?raw.feriados:{holidayWeeks:[],rainPeriods:[]},
-        servicos:Array.isArray(raw.servicos)?raw.servicos:null
+        servicos:Array.isArray(raw.servicos)?raw.servicos:null,
+        // cenário gravado antes disso não tem saldo próprio: null = usa o da obra
+        quantidades:(raw.quantidades&&typeof raw.quantidades==='object')?raw.quantidades:null
       };
     }
-    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
+    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null,quantidades:null};
   }
   /** Roda buildSchedule() com um snapshot completo (ajustes + calendário + serviços) em vez do
    *  estado ao vivo, sem alterar o estado global (restaura tudo no finally). snap=null usa o
@@ -10115,6 +10183,7 @@
     if(!snap)return fn();
     REF_DENTRO++;
     var savedOVR=OVR, savedSERV=SERV, savedFeriados=window._OBRA?window._OBRA.feriados:null;
+    var savedQTY=QTY;
     OVR=snap.ovr||{};
     if(snap.servicos&&snap.servicos.length){
       SERV=snap.servicos.map(function(sc){
@@ -10122,10 +10191,27 @@
         return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:sc.config||{}};
       });
     }
+    /* O saldo entra DEPOIS dos serviços e é montado na ordem do SERV que vai valer: a coluna de
+     * QTY é índice dentro de SERV, e o cenário pode ter outra ordem (ou serviço que a obra já
+     * não tem). Montar na ordem ao vivo daria quantidade do serviço errado.
+     * Par ausente do snapshot cai no saldo da obra — lote ou serviço criado depois do cenário. */
+    if(snap.quantidades){
+      var ids=window._LOTIDS||[];
+      var colDe={}; savedSERV.forEach(function(sv,i){ colDe[sv.id]=i; });
+      QTY=LOTS.map(function(_,li){
+        var loteId=ids[li];
+        return SERV.map(function(sv){
+          var v=loteId?snap.quantidades[loteId+'::'+sv.id]:undefined;
+          if(v!==undefined)return orcNum(v);
+          var ci=colDe[sv.id];
+          return ci===undefined?0:orcNum((savedQTY[li]||[])[ci]);
+        });
+      });
+    }
     if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:snap.feriados||savedFeriados});
     try{ return fn(); }
     finally{
-      OVR=savedOVR; SERV=savedSERV;
+      OVR=savedOVR; SERV=savedSERV; QTY=savedQTY;
       if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:savedFeriados});
       REF_DENTRO--;
     }
@@ -17842,7 +17928,7 @@
       await sbUpdateCenario(ACTIVE_CENARIO.id,{ajustes_manuais:snap});
       var c=CENARIOS.filter(function(x){return x.id===ACTIVE_CENARIO.id;})[0];
       if(c)c.snap=snap;
-      ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; CAL_DIRTY=false;
+      ADJ_DIRTY=false; ADJ_PENDING={}; SVC_DIRTY={}; CAL_DIRTY=false; QTY_DIRTY={};
       toast('Alterações salvas no cenário "'+ACTIVE_CENARIO.nome+'".');
       go(current);
     }catch(e){ alert('Falha ao salvar no cenário: '+((e&&e.message)||e)); }
