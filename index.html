@@ -6815,6 +6815,26 @@
    *
    * Lote = KM. Só entra em lote que JÁ existe no app: criar lote mexe na matriz do
    * Tempo-Caminho, e isso não pode acontecer de surpresa dentro de uma importação. */
+  /* Semana a que o informe se refere. O avanço PARCIAL (estaca começada e não terminada) não
+   * tem data própria na planilha — o que a planilha diz é "até esta revisão, X% feito". Então a
+   * produção parcial é lançada na semana do informe, que vem do nome do arquivo
+   * (2026_S42_InformesdeProducao_Rev03_Irati -> S42 de 2026) e pode ser corrigida na importação. */
+  var EST_DATA_INFORME=null;   // 'YYYY-MM-DD' — segunda-feira da semana do informe
+  function estSegundaDaSemanaIso(ano,semana){
+    var q=new Date(ano,0,4);                       // 4 de janeiro cai sempre na semana 1
+    var dow=(q.getDay()+6)%7;                      // 0 = segunda
+    q.setDate(q.getDate()-dow+(semana-1)*7);
+    return q;
+  }
+  function estSemanaDoNome(nome){
+    var m=/(20\d{2})\D{0,3}S\s*(\d{1,2})/i.exec(String(nome||''));
+    if(!m)m=/S\s*(\d{1,2})\D{0,3}(20\d{2})/i.exec(String(nome||''));
+    if(!m)return null;
+    var ano=+m[1]>1000?+m[1]:+m[2], sem=+m[1]>1000?+m[2]:+m[1];
+    if(!(sem>=1&&sem<=53))return null;
+    var d=estSegundaDaSemanaIso(ano,sem);
+    return isFinite(d.getTime())?d.toISOString().slice(0,10):null;
+  }
   function estNorm(v){ return String(v==null?'':v).normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/\s+/g,' ').trim(); }
   function estAchaCol(h,regexes){
     for(var j=0;j<regexes.length;j++)
@@ -6826,12 +6846,12 @@
     if(!selectedObra){ alert('Abra uma obra antes de importar.'); return; }
     if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
     pickExcelFile(function(file){
-      readWorkbookFile(file).then(importarInformesWorkbook).catch(function(e){
+      readWorkbookFile(file).then(function(wb){ return importarInformesWorkbook(wb,file&&file.name); }).catch(function(e){
         alert('Não consegui ler o arquivo: '+((e&&e.message)||e));
       });
     });
   }
-  async function importarInformesWorkbook(wb){
+  async function importarInformesWorkbook(wb,nomeArquivo){
     // 1) acha a aba e a linha de cabeçalho (a que tem ESTACAS e os itens da EAP)
     var aoa=null,hdr=-1;
     for(var n=0;n<wb.SheetNames.length&&hdr<0;n++){
@@ -7009,8 +7029,10 @@
     });
 
     var escolha=await estDialogoImport({kms:kms,porKm:porKm,servCols:servCols,loteDe:loteDe,
-      kmSemLote:kmSemLote,servDe:servDe,servSemPar:servSemPar,linhasOk:linhasOk,realCol:realCol});
+      kmSemLote:kmSemLote,servDe:servDe,servSemPar:servSemPar,linhasOk:linhasOk,realCol:realCol,
+      semanaInforme:estSemanaDoNome(nomeArquivo)});
     if(!escolha)return;
+    EST_DATA_INFORME=escolha.semanaInforme||null;
     Object.keys(escolha.servDe).forEach(function(c){ if(escolha.servDe[c])servDe[c]=escolha.servDe[c]; else delete servDe[c]; });
 
     // 5) grava: estacas primeiro (sem repetir as que já existem), depois os apontamentos
@@ -7078,6 +7100,8 @@
         var res=await estGerarRealizado(unicos);
         msgReal='\n\n'+res.gravadas+' linha(s) de produção geradas das estacas concluídas'+
           ' ('+res.daCadastrada+' da quantidade cadastrada, '+res.doRateio+' rateadas pelo volume, '+(res.porExtensao||0)+' rateadas pela extensão da estaca).'+
+          ((res.emAndamento||0)?('\n'+res.emAndamento+' dela(s) são estacas EM ANDAMENTO, lançadas pelo percentual já executado na semana do informe.'):'')+
+          ((res.emAndamentoSemPct||0)?('\n'+res.emAndamentoSemPct+' estaca(s) em andamento ficaram só sinalizadas: sem volume executado e de projeto não dá pra saber o percentual.'):'')+
           (res.semQtd?('\n'+res.semQtd+' estaca(s) terminadas ficaram de fora por não ter de onde tirar quantidade.'):'')+
           (res.antesDoPlano?('\n'+res.antesDoPlano+' estaca(s) concluídas antes do início do cronograma ficaram de fora — esse avanço já está descontado do saldo.'):'')+
           (res.depoisDoPlano?('\n'+res.depoisDoPlano+' estaca(s) concluídas depois da última semana do cronograma entraram na produção, mas a Curva S não tem semana pra elas.'):'');
@@ -7144,6 +7168,12 @@
         '<div class="note" style="margin-top:6px"><b>'+nVols+'</b> volumes de projeto e <b>'+nReal+'</b> volumes realizados.</div>'+
         '<div class="banner" style="margin-top:12px">Os volumes entram como <b>volume de projeto</b> — o escopo da obra toda, que é o que a planilha controla. '+
         'A <b>quantidade</b> que o Tempo-Caminho usa continua sendo a do planejamento do saldo e não é tocada por esta importação.</div>'+
+        '<div style="display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap">'+
+          '<span class="note" style="margin:0">Semana a que este informe se refere:</span>'+
+          '<input type="date" class="inp" id="estImpSem" style="width:170px" value="'+escAttr(info.semanaInforme||'')+'">'+
+          '<span class="note" id="estImpSemLbl" style="margin:0"></span>'+
+        '</div>'+
+        '<div class="note" style="margin-top:4px">É nela que entra o avanço das estacas <b>começadas e não terminadas</b> — a planilha diz quanto já foi feito, mas não em que dia. '+(info.semanaInforme?'Veio do nome do arquivo; corrija se estiver errada.':'Não consegui ler do nome do arquivo — preencha, ou o avanço parcial fica de fora.')+'</div>'+
         '<label style="display:flex;align-items:flex-start;gap:8px;margin-top:12px;cursor:pointer">'+
           '<input type="checkbox" id="estImpReal" checked style="margin-top:3px">'+
           '<span class="note" style="margin:0">Atualizar também o <b>realizado</b> com as estacas concluídas. '+
@@ -7155,12 +7185,19 @@
       document.body.appendChild(back);
       function fim(v){ back.remove(); resolve(v); }
       back.addEventListener('pointerdown',function(e){ if(e.target===back)fim(null); });
+      (function(){
+        var sm=back.querySelector('#estImpSem'), lb=back.querySelector('#estImpSemLbl');
+        if(!sm||!lb)return;
+        var marca=function(){ lb.textContent=sm.value?rotSem(new Date(sm.value+'T12:00:00')):'—'; };
+        sm.addEventListener('change',marca); marca();
+      })();
       back.querySelector('#estImpCancel').addEventListener('click',function(){ fim(null); });
       back.querySelector('#estImpOk').addEventListener('click',function(){
         var mapa={};
         back.querySelectorAll('[data-estdepara]').forEach(function(sel){ mapa[sel.getAttribute('data-estdepara')]=sel.value||''; });
         var cb=back.querySelector('#estImpReal');
-        fim({servDe:mapa,gerarRealizado:!cb||cb.checked});
+        var sm=back.querySelector('#estImpSem');
+        fim({servDe:mapa,gerarRealizado:!cb||cb.checked,semanaInforme:(sm&&sm.value)||null});
       });
     });
   }
@@ -7197,7 +7234,7 @@
       '<div class="note" style="margin-top:10px">Abra um lote abaixo, ou carregue todos, pra ver o resumo.</div></div>';
     var espac=LOTE_ESPAC[0]||20;
     var linhas=SERV.map(function(sv){
-      var nTot=0,nFim=0,proj=0,real=0;
+      var nTot=0,nFim=0,proj=0,real=0,nAnd=0;
       carregados.forEach(function(loteId){
         var vol=ESTACA_VOL[loteId]||{}, ap=ESTACA_AVANCO[loteId]||{};
         (ESTACAS[loteId]||[]).forEach(function(e){
@@ -7205,15 +7242,18 @@
           var aplica=!!(v&&((v.proj||0)>0||(v.real||0)>0));
           if(!aplica)return;              // sem volume de projeto = o serviço não existe nesta estaca
           nTot++; proj+=v.proj||0; real+=v.real||0;
-          if((ap[k]||{}).fim)nFim++;
+          var a=ap[k]||{};
+          if(a.fim)nFim++;
+          else if(a.inicio)nAnd++;   // começada e não terminada — serviço aberto naquela estaca
         });
       });
       if(!nTot)return '';
       var pl=nTot?100*nFim/nTot:0, pv=proj?100*real/proj:0;
       var div=Math.abs(pl-pv)>=5;
-      return '<tr><td>'+escAttr(sv.n)+'</td>'+
+      return '<tr><td>'+escAttr(sv.n)+(nAnd?(' <span class="pill" style="background:var(--warn);color:#fff;font-size:9.5px" title="'+nAnd+' estaca(s) começadas e não terminadas">'+nAnd+' em andamento</span>'):'')+'</td>'+
         '<td class="r mono">'+fmtBR(nTot*espac)+' m</td>'+
         '<td class="r mono">'+fmtBR(nFim*espac)+' m</td>'+
+        '<td class="r mono"'+(nAnd?' style="color:var(--warn)"':'')+'>'+(nAnd?fmtBR(nAnd*espac)+' m':'—')+'</td>'+
         '<td class="r mono" style="font-weight:700">'+pl.toFixed(1)+'%</td>'+
         '<td class="r mono">'+fmtBR(proj)+'</td>'+
         '<td class="r mono">'+fmtBR(real)+'</td>'+
@@ -7224,13 +7264,14 @@
       '<div class="note" style="margin-top:10px">Nenhuma estaca com volume de projeto. Importe os informes de produção.</div></div>';
     return '<div class="card" style="margin-bottom:10px">'+cab+
       '<div class="tbl-wrap" style="margin-top:10px"><table class="edtbl" style="font-size:12.5px">'+
-      '<thead><tr><th rowspan="2">Serviço</th><th colspan="3" class="r">Extensão (das datas)</th>'+
+      '<thead><tr><th rowspan="2">Serviço</th><th colspan="4" class="r">Extensão (das datas)</th>'+
       '<th colspan="4" class="r">Volume (do executado)</th></tr>'+
-      '<tr><th class="r">Aplicável</th><th class="r">Concluída</th><th class="r">%</th>'+
+      '<tr><th class="r">Aplicável</th><th class="r">Concluída</th><th class="r" title="Estacas com início lançado e sem término — serviço aberto">Em andamento</th><th class="r">%</th>'+
       '<th class="r">Projeto</th><th class="r">Realizado</th><th class="r">%</th><th class="r">Saldo</th></tr></thead>'+
       '<tbody>'+linhas+'</tbody></table></div>'+
       '<div class="note" style="margin-top:8px">O <b>Saldo</b> é projeto − realizado: é ele que deveria bater com a quantidade cadastrada no planejamento. '+
-      'Em amarelo, os serviços onde extensão e volume contam histórias diferentes.</div></div>';
+      'Em amarelo, os serviços onde extensão e volume contam histórias diferentes. '+
+      '<b>Em andamento</b> são as estacas com início lançado e sem término: elas entram no realizado pelo percentual já executado (volume executado ÷ volume de projeto), na semana do informe.</div></div>';
   }
   /** Botão "Atualizar realizado das estacas": roda o mesmo caminho da importação pra quem já
    *  importou o informe antes — ou pra quem preencheu as datas à mão e quer ver nos gráficos. */
@@ -7262,6 +7303,8 @@
       '  '+cont('cadastrada')+' da quantidade cadastrada da estaca\n'+
       '  '+cont('rateio')+' rateadas pelo volume cadastrado (corte e aterro)\n'+
       '  '+cont('extensao')+' rateadas pela extensão da estaca (serviços medidos em metro)'+
+      (prev.emAndamento?('\n\n'+prev.emAndamento+' estaca(s) EM ANDAMENTO entram pelo percentual já executado, na semana do informe.'):'')+
+      (prev.emAndamentoSemPct?('\n'+prev.emAndamentoSemPct+' em andamento ficam de fora por não ter percentual.'):'')+
       (prev.semQtd?('\n\n'+prev.semQtd+' estaca(s) ficam de fora por não ter de onde tirar quantidade: sem volume cadastrado, ou num serviço já controlado por quantidade por estaca e com a estaca em branco.'):'')+
       (prev.antesDoPlano?('\n'+prev.antesDoPlano+' estaca(s) concluídas antes da semana 1 ficam de fora: esse avanço já está descontado do saldo, lançar de novo contaria duas vezes.'):'')+
       (prev.depoisDoPlano?('\n'+prev.depoisDoPlano+' estaca(s) concluídas depois da última semana entram, mas a Curva S não tem semana pra desenhá-las.'):'')))return;
@@ -7510,7 +7553,8 @@
     return {peso:peso,tot:tot,porVolume:temVol,espac:espac};
   }
   function estRealizadoPrevia(loteIds){
-    var out={linhas:[],semQtd:0,lotes:0,antesDoPlano:0,depoisDoPlano:0,ini:null,fim:null};
+    var out={linhas:[],semQtd:0,lotes:0,antesDoPlano:0,depoisDoPlano:0,ini:null,fim:null,
+             emAndamento:0,emAndamentoSemPct:0};
     var tw=0; buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); });
     try{
       out.ini=mondayOf(1).toISOString().slice(0,10);
@@ -7524,8 +7568,21 @@
       out.lotes++;
       var qtyM=ESTACA_QTY[loteId]||{}, volM=ESTACA_VOL[loteId]||{};
       Object.keys(av).forEach(function(k){
-        var a=av[k]; if(!a||!a.fim)return;
-        if(out.ini&&a.fim<out.ini){ out.antesDoPlano++; return; }
+        var a=av[k]; if(!a)return;
+        /* Estaca começada e não terminada: a planilha não diz em que dia o avanço aconteceu,
+         * diz quanto já foi feito até a revisão. Então vale o percentual — volume executado
+         * sobre volume de projeto, a mesma conta da coluna "porcentagem de avanço" do informe,
+         * conferida linha a linha — lançado na semana do informe.
+         * Sem volume dos dois lados não há percentual: a estaca é só sinalizada, não lançada. */
+        var parcial=false;
+        if(!a.fim){
+          if(!a.inicio||!EST_DATA_INFORME){ if(a.inicio)out.emAndamentoSemPct++; return; }
+          var vp=volM[k]||{};
+          if(!(vp.real>0&&vp.proj>0)){ out.emAndamentoSemPct++; return; }
+          parcial=true;
+        }
+        var quando=parcial?EST_DATA_INFORME:a.fim;
+        if(out.ini&&quando<out.ini){ out.antesDoPlano++; return; }
         var par=k.split('::'), servicoId=par[1];
         var ck=loteId+'::'+servicoId, qtd=0, fonte='';
         /* A escolha entre cadastro e rateio e por lote x SERVICO, nao por estaca: misturando,
@@ -7548,10 +7605,16 @@
           var peso=R.peso[k]||0;
           if(plan>0&&peso>0&&R.tot>0){ qtd=plan*peso/R.tot; fonte=R.porVolume?'rateio':'extensao'; }
         }
+        if(parcial){
+          var vv=volM[k]||{}, pct=Math.max(0,Math.min(1,vv.real/vv.proj));
+          qtd=qtd*pct;
+          fonte='parcial';
+          out.emAndamento++;
+        }
         if(!(qtd>0)){ out.semQtd++; return; }
-        if(out.fim&&a.fim>out.fim)out.depoisDoPlano++;
-        out.linhas.push({loteId:loteId,estacaId:par[0],servicoId:servicoId,data:a.fim,qtd:qtd,
-                         prodId:a.prodId||null,fonte:fonte});
+        if(out.fim&&quando>out.fim)out.depoisDoPlano++;
+        out.linhas.push({loteId:loteId,estacaId:par[0],servicoId:servicoId,data:quando,qtd:qtd,
+                         prodId:a.prodId||null,fonte:fonte,parcial:parcial});
       });
     });
     return out;
@@ -7561,12 +7624,14 @@
     // sem linhas pra gravar, mas os contadores vão completos: faltando um deles, a mensagem
     // mostrava "undefined" no lugar do número
     if(!prev.linhas.length)return {gravadas:0,semQtd:prev.semQtd,daCadastrada:0,doRateio:0,porExtensao:0,
+      emAndamento:0,emAndamentoSemPct:prev.emAndamentoSemPct,
       antesDoPlano:prev.antesDoPlano,depoisDoPlano:prev.depoisDoPlano};
     var ups=prev.linhas.map(function(L){
       var id=L.prodId||newUuid();
       L.novoId=id;
       return {id:id,obra_id:selectedObra.id,servico_id:L.servicoId,lote_id:L.loteId,
-              data:L.data,quantidade:L.qtd,observacao:'Estaca concluída (informe de produção)'};
+              data:L.data,quantidade:L.qtd,
+              observacao:L.parcial?'Estaca em andamento (informe de produção)':'Estaca concluída (informe de produção)'};
     });
     for(var i=0;i<ups.length;i+=400){
       var r=await SB.from('producao_diaria').upsert(ups.slice(i,i+400),{onConflict:'id'});
@@ -7591,7 +7656,8 @@
     var conta=function(f){ return prev.linhas.filter(function(L){ return L.fonte===f; }).length; };
     return {gravadas:prev.linhas.length,semQtd:prev.semQtd,
             antesDoPlano:prev.antesDoPlano,depoisDoPlano:prev.depoisDoPlano,
-            daCadastrada:conta('cadastrada'),doRateio:conta('rateio'),porExtensao:conta('extensao')};
+            daCadastrada:conta('cadastrada'),doRateio:conta('rateio'),porExtensao:conta('extensao'),
+            emAndamento:prev.emAndamento,emAndamentoSemPct:prev.emAndamentoSemPct};
   }
   /** Aplica a mesma data (início ou término) a várias estacas de uma vez, num único serviço —
    * em lotes de escrita (upsert em massa) em vez de uma chamada por estaca. */
