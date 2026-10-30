@@ -3375,14 +3375,18 @@
         '<td>'+sinp('teams',s.eq,'54px','number')+'</td>'+
         '<td>'+sinp('produtividade',pnum(s.p),'90px','number')+'</td>'+
         '<td>'+predChips(si)+'</td>'+
+        '<td>'+naoAntesChips(si)+'</td>'+
         '<td>'+sinp('lag_semanas',s.lag||0,'54px','number')+'</td>'+
         '<td><button class="iconbtn" data-del="'+si+'">✕</button></td></tr>';
-      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="9">'+svcDetail(s,si)+'</td></tr>';
+      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="10">'+svcDetail(s,si)+'</td></tr>';
       return main+det;
     }).join('');
     return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.'+(Object.keys(SVC_DIRTY).length?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>'+'<button class="btn primary" id="saveServicos"'+(Object.keys(SVC_DIRTY).length?'':' disabled')+'>💾 Salvar alterações</button>')+
-    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th></th><th>Cor</th><th>Nome</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    '<div class="note" style="margin-top:10px">Clique em <b>▸</b> para configurar por equipe: lote inicial, produtividade, aumentos e regras (paralelo, fila dinâmica, sem paralisação, semana-alvo). '+(SERV.length?'':'Nenhum serviço cadastrado ainda.')+'</div></div>';
+    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th></th><th>Cor</th><th>Nome</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th title="Trava dura: nem o ajuste manual coloca este serviço antes">Não pode antes de</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<div class="note" style="margin-top:10px"><b>Predecessores</b> montam a cadeia e definem quando o serviço pode começar no cálculo automático. '+
+    '<b>Não pode antes de</b> é uma trava dura: o serviço nunca começa, naquele lote, antes do outro terminar ali — e isso vale também pro <b>ajuste manual</b>, que a predecessora sozinha não segura. '+
+    'Use quando uma frente arrastada à mão puder passar na frente de algo que fisicamente não dá, como CBUQ antes da base.</div>'+
+    '<div class="note" style="margin-top:6px">Clique em <b>▸</b> para configurar por equipe: lote inicial, produtividade, aumentos e regras (paralelo, fila dinâmica, sem paralisação, semana-alvo). '+(SERV.length?'':'Nenhum serviço cadastrado ainda.')+'</div></div>';
   };
 
   function fmtMoney(v){return (Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
@@ -5107,6 +5111,28 @@
       var on=preds.indexOf(p.id)>=0;
       return '<span class="predchip'+(on?' on':'')+'" data-predsi="'+si+'" data-predid="'+p.id+'" title="Clique para marcar/desmarcar como predecessor" style="cursor:pointer">'+p.n.split(' — ')[0]+'</span>';
     }).join('')+'</div>';
+  }
+  /* Predecessora define a cadeia e aceita ser furada por um ajuste manual; esta trava não.
+   * Serve pro caso em que o cronograma automático está certo mas alguém arrastou uma frente
+   * pra antes do que fisicamente dá — CBUQ antes da base, por exemplo. */
+  function naoAntesChips(si){
+    var s=SERV[si], lista=(s.cfg&&s.cfg.naoAntesDe)||[];
+    return '<div class="predwrap">'+SERV.map(function(p,pi){
+      if(pi===si)return '';
+      var on=lista.indexOf(p.id)>=0;
+      return '<span class="predchip'+(on?' on':'')+'" data-naosi="'+si+'" data-naoid="'+p.id+'" title="Trava: este serviço nunca começa, no lote, antes de '+escAttr(p.n)+' terminar ali — nem com ajuste manual" style="cursor:pointer">'+p.n.split(' — ')[0]+'</span>';
+    }).join('')+'</div>';
+  }
+  function toggleNaoAntes(si,pid){
+    var s=SERV[si]; if(!s)return;
+    s.cfg=s.cfg||{};
+    var lista=(s.cfg.naoAntesDe||[]).slice();
+    var i=lista.indexOf(pid);
+    if(i>=0)lista.splice(i,1); else lista.push(pid);
+    if(lista.length)s.cfg=Object.assign({},s.cfg,{naoAntesDe:lista});
+    else { s.cfg=Object.assign({},s.cfg); delete s.cfg.naoAntesDe; }
+    SVC_DIRTY[si]=true;
+    go('cad-serv');
   }
   function saveTeamProd(si,team,val){
     var s=SERV[si]; if(!s)return;
@@ -8348,6 +8374,9 @@
       document.querySelectorAll('[data-predid]').forEach(function(chip){
         chip.addEventListener('click',function(){togglePredecessor(+chip.getAttribute('data-predsi'),chip.getAttribute('data-predid'));});
       });
+      document.querySelectorAll('[data-naoid]').forEach(function(chip){
+        chip.addEventListener('click',function(){toggleNaoAntes(+chip.getAttribute('data-naosi'),chip.getAttribute('data-naoid'));});
+      });
       document.querySelectorAll('[data-teamprod]').forEach(function(inp){
         var tr=inp.closest('tr.ed-detail');
         var si=tr?+tr.id.replace('det',''):null;
@@ -9647,7 +9676,8 @@
     function visit(si){
       if(visited[si]||temp[si])return;
       temp[si]=true;
-      var preds=(SERV[si].cfg&&SERV[si].cfg.predecessors)||[];
+      var cfg=SERV[si].cfg||{};
+      var preds=(cfg.predecessors||[]).concat(cfg.naoAntesDe||[]);
       preds.forEach(function(pid){var psi=idToSi[pid];if(psi!=null)visit(psi);});
       temp[si]=false; visited[si]=true; order.push(si);
     }
@@ -9777,6 +9807,22 @@
     var MANUAL=tcManual();
     var order=topoSortServices();
     var periods=calRainPeriods(), wfCache={};
+    /* "Não pode acontecer antes de": piso duro por lote. Diferente da predecessora, que define a
+     * cadeia e aceita ser furada por um ajuste manual, esta trava vale TAMBÉM sobre o pin — é
+     * pra isso que ela existe. Sem ela, arrastar o CBUQ pra uma semana anterior à da base
+     * passava sem reclamar, porque o caminho do pin nunca consultou precedência. */
+    function pisoNaoAntes(s,li){
+      var lista=(s.cfg&&s.cfg.naoAntesDe)||[];
+      if(!lista.length)return 1;
+      var piso=1;
+      lista.forEach(function(pid){
+        var psi=null; SERV.forEach(function(x,i){ if(x.id===pid)psi=i; });
+        if(psi==null)return;
+        var pe=endByKey[li+'::'+psi];
+        if(pe!=null)piso=Math.max(piso,pe+1);
+      });
+      return piso;
+    }
     function predReadyWeek(s,li){
       var earliest=1;
       var preds=(s.cfg&&s.cfg.predecessors)||[];
@@ -9807,7 +9853,7 @@
         var earliestPos=predReadyWeek(s,li)-1;
         var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
         var svcMin=(s.cfg&&s.cfg.minStartWeek>0)?s.cfg.minStartWeek-1:0;
-        return Math.max(earliestPos,pinPos,svcMin);
+        return Math.max(earliestPos,pinPos,svcMin,pisoNaoAntes(s,li)-1);
       }
       // Entre candidatos, escolhe o que termina mais cedo (considera a produtividade da
       // equipe); empate resolvido pela distância até o último lote que a equipe fez (logística
@@ -9882,7 +9928,8 @@
         });
         var tPos=0;
         list.forEach(function(p){
-          var startPos=Math.max(p.startWeek-1,tPos);
+          // o piso vale aqui também: é a diferença entre "predecessora" e "não pode acontecer antes de"
+          var startPos=Math.max(p.startWeek-1,tPos,pisoNaoAntes(s,p.li)-1);
           var packed=packSegment(startPos,p.qty/effProd,effProd,p.qty,periods,wfCache,undefined,s.id);
           segs.push({li:p.li,si:si,team:t2,teams:teams,start:packed.start,dur:packed.duration,qty:p.qty,wq:packed.wq,
             color:teamColor(hex,t2,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
