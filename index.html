@@ -2367,10 +2367,10 @@
    *  mas aqui a ordem é livre: quem colocou a semana 20 primeiro precisa poder voltar e
    *  preencher a 3. A duração é recalculada a cada tentativa porque ela depende de onde começa
    *  (semana de chuva rende menos). */
-  function ofiEncaixa(ocupados,pos,qty,prod,periods,cache){
+  function ofiEncaixa(ocupados,pos,qty,prod,periods,cache,svcId){
     var guard=0, pk;
     while(guard++<500){
-      pk=packSegment(pos,qty/prod,prod,qty,periods,cache);
+      pk=packSegment(pos,qty/prod,prod,qty,periods,cache,undefined,svcId);
       var bate=null;
       for(var i=0;i<ocupados.length;i++){
         if(pos<ocupados[i].b-1e-9&&pk.endPos>ocupados[i].a+1e-9){ bate=ocupados[i]; break; }
@@ -2406,7 +2406,7 @@
       var prod=ofiProd(s,it.team), qty=(rateios[k]||{})[it.team]||0;
       if(!(prod>0)||!(qty>0))return null;
       var ocup=posEquipe[ke]||(posEquipe[ke]=[]);
-      var r=ofiEncaixa(ocup,it.ini-1,qty,prod,periods,cache);
+      var r=ofiEncaixa(ocup,it.ini-1,qty,prod,periods,cache,s.id);
       ocup.push({a:r.pos,b:r.pk.endPos}); ocup.sort(function(x,y){ return x.a-y.a; });
       return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,pedida:it.ini,
               startPos:r.pos,start:r.pk.start,dur:r.pk.duration,endPos:r.pk.endPos,wq:r.pk.wq,
@@ -2442,7 +2442,7 @@
     segs.forEach(function(g){ if(g.si===si&&g.team===team)ocup.push({a:g.startPos,b:g.endPos}); });
     ocup.sort(function(x,y){ return x.a-y.a; });
     var pedida=Math.max(desejada,minW);
-    var enc=ofiEncaixa(ocup,pedida-1,qty,prod,periods,cache);
+    var enc=ofiEncaixa(ocup,pedida-1,qty,prod,periods,cache,(SERV[si]||{}).id);
     var w=Math.floor(enc.pos+1e-9)+1;
     return {semana:w,minPred:minW,predNomes:nomes,porEquipe:(w>pedida)};
   }
@@ -2498,7 +2498,7 @@
     Object.keys(porEqSem).forEach(function(k){
       var pr=k.split('::'), si=+pr[0], team=+pr[1], w=+pr[2], sv=SERV[si];
       if(!sv)return;
-      var teto=ofiProd(sv,team)*weekFactor(w,periods,cacheC);
+      var teto=ofiProd(sv,team)*weekFactor(w,periods,cacheC,sv.id);
       if(porEqSem[k]>teto+0.5)
         out.push({id:0,txt:teamLabel(sv.n,team)+' de '+sv.n+' produziria '+fmtBR(porEqSem[k])+' '+sv.u+
           ' na '+rotSem(mondayOf(w))+', acima dos '+fmtBR(teto)+' que a equipe faz numa semana.'});
@@ -2699,7 +2699,7 @@
       var r=ofiPrimeiraValida(li,si,team,semana,editId,qty);
       if(r.impossivel){ prev.innerHTML='<span style="color:var(--crit)">Sem quantidade neste lote ou sem produtividade cadastrada — não dá pra calcular a duração.</span>'; return r; }
       var sv=SERV[si], prod=ofiProd(sv,team);
-      var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{});
+      var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{},undefined,sv.id);
       var fim=pk.start+pk.duration-1;
       var txt='<b>'+rotSem(mondayOf(pk.start))+'</b> até <b>'+rotSem(mondayOf(fim))+'</b> — '+pk.duration+' semana(s), '+fmtBR(qty)+' '+escAttr(sv.u)+
         (nEq>1?(' <span style="color:var(--warn)">(de '+fmtBR((QTY[li]||[])[si]||0)+' — rateado entre '+nEq+' equipes pela produtividade de cada uma)</span>'):'')+'.';
@@ -3604,8 +3604,40 @@
     '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Serviço</th><th>Equipe</th><th class="r">Produtividade</th><th class="r">Lotes atribuídos</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div></div>';
   };
 
+  /* Praticabilidade por serviço dentro do período: chuva não trata todo serviço igual —
+   * terraplenagem para, pavimento rígido aguenta mais, drenagem às vezes rende. O número do
+   * período continua sendo o padrão; o serviço só aparece em porServico quando é personalizado,
+   * então período sem personalização nenhuma fica exatamente como era. */
+  var RAIN_OPEN={};   // idx do período -> painel por serviço aberto
+  function rainCapPct(prod,dias){
+    return Math.round((1-(Math.min(100,Math.max(0,+prod||0))/100))*(1-(Math.min(100,Math.max(0,+dias||0))/100))*100);
+  }
+  function rainDetalheHTML(r,idx){
+    var pers=r.porServico||{};
+    var linhas=SERV.map(function(sv){
+      var p=pers[sv.id], tem=!!(p&&typeof p==='object');
+      var vProd=tem?(+p.producao||0):(+r.producao||0);
+      var vDias=tem?(+p.dias||0):(+r.dias||0);
+      return '<tr'+(tem?' style="background:var(--warn-bg)"':'')+'>'+
+        '<td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</td>'+
+        '<td class="r"><input class="einp" type="number" min="0" max="100" data-rainsvc="'+idx+'" data-rsid="'+escAttr(sv.id)+'" data-rscampo="producao" value="'+vProd+'" style="width:70px;text-align:right"></td>'+
+        '<td class="r"><input class="einp" type="number" min="0" max="100" data-rainsvc="'+idx+'" data-rsid="'+escAttr(sv.id)+'" data-rscampo="dias" value="'+vDias+'" style="width:70px;text-align:right"></td>'+
+        '<td class="r mono" style="font-weight:700">'+rainCapPct(vProd,vDias)+'%</td>'+
+        '<td>'+(tem
+          ? '<button class="iconbtn" data-rainreset="'+idx+'" data-rsid="'+escAttr(sv.id)+'" title="Voltar a usar o número do período">↺</button>'
+          : '<span class="note">usa o do período</span>')+'</td></tr>';
+    }).join('');
+    return '<div class="tbl-wrap" style="margin-top:8px"><table class="edtbl" style="font-size:12px">'+
+      '<thead><tr><th>Serviço</th><th class="r">-% produção</th><th class="r">-% dias</th><th class="r">Capacidade</th><th></th></tr></thead>'+
+      '<tbody>'+linhas+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:6px">Editar um número aqui personaliza <b>só aquele serviço</b> neste período; o resto segue o número de cima. '+
+      'O ↺ devolve o serviço ao padrão do período.</div>';
+  }
   function rainRowHTML(r,idx){
-    var cap=Math.round((1-(Math.min(100,Math.max(0,+r.producao||0))/100))*(1-(Math.min(100,Math.max(0,+r.dias||0))/100))*100);
+    var cap=rainCapPct(r.producao,r.dias);
+    var nPers=r.porServico?Object.keys(r.porServico).length:0;
+    var aberto=!!RAIN_OPEN[idx];
+    var detalhe=aberto?rainDetalheHTML(r,idx):'';
     return '<div class="assign" style="margin-bottom:10px" data-rain="'+idx+'">'+
       '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr .8fr 1fr auto;gap:10px;align-items:end">'+
         '<div class="field" style="margin:0"><label>Descrição</label><input class="inp" data-rf="desc" value="'+escAttr(r.desc||'')+'"></div>'+
@@ -3615,7 +3647,11 @@
         '<div class="field" style="margin:0"><label>-% dias trabalhados</label><input class="inp" type="number" data-rf="dias" value="'+(r.dias||0)+'"></div>'+
         '<button class="iconbtn" data-delrain="'+idx+'" style="margin-bottom:2px">✕</button>'+
       '</div>'+
-      '<div class="note" style="margin-top:6px">Capacidade efetiva nas semanas do período: <b>'+cap+'%</b> da produtividade cadastrada.</div>'+
+      '<div class="note" style="margin-top:6px">Capacidade efetiva nas semanas do período: <b>'+cap+'%</b> da produtividade cadastrada'+
+        (nPers?(' — e <b>'+nPers+'</b> serviço(s) com número próprio.'):' para todos os serviços.')+'</div>'+
+      '<div style="margin-top:8px"><button class="btn" data-rainexp="'+idx+'" style="padding:4px 10px;font-size:11.5px">'+
+        (aberto?'▾':'▸')+' Praticabilidade por serviço'+(nPers?(' ('+nPers+')'):'')+'</button></div>'+
+      (aberto?detalhe:'')+
     '</div>';
   }
   VIEWS['cad-cal']=function(){
@@ -5020,6 +5056,34 @@
     var arr=calRainPeriods().map(function(r){return Object.assign({},r);});
     if(!arr[idx])return;
     arr[idx][field]=val;
+    window._OBRA=Object.assign({},window._OBRA,{feriados:{holidayWeeks:calHolidays(),rainPeriods:arr}});
+    CAL_DIRTY=true;
+    go('cad-cal');
+  }
+  /** Personaliza (ou devolve ao padrão) a praticabilidade de um serviço num período.
+   *  Só grava em porServico o que foi mexido; serviço que segue o período nem aparece lá. */
+  function saveRainServico(idx,svcId,campo,val){
+    if(!selectedObra||!window._OBRA)return;
+    var arr=calRainPeriods().map(function(r){ return Object.assign({},r,{porServico:Object.assign({},r.porServico||{})}); });
+    var r=arr[idx]; if(!r)return;
+    var atual=r.porServico[svcId];
+    var base={producao:+r.producao||0,dias:+r.dias||0};
+    var novo=Object.assign({},base,(atual&&typeof atual==='object')?atual:{});
+    novo[campo]=Math.min(100,Math.max(0,orcNum(val)||0));
+    // igual ao do período nos dois campos = não é personalização: tira da lista
+    if(novo.producao===base.producao&&novo.dias===base.dias)delete r.porServico[svcId];
+    else r.porServico[svcId]=novo;
+    if(!Object.keys(r.porServico).length)delete r.porServico;
+    window._OBRA=Object.assign({},window._OBRA,{feriados:{holidayWeeks:calHolidays(),rainPeriods:arr}});
+    CAL_DIRTY=true;
+    go('cad-cal');
+  }
+  function resetRainServico(idx,svcId){
+    if(!selectedObra||!window._OBRA)return;
+    var arr=calRainPeriods().map(function(r){ return Object.assign({},r,{porServico:Object.assign({},r.porServico||{})}); });
+    var r=arr[idx]; if(!r||!r.porServico)return;
+    delete r.porServico[svcId];
+    if(!Object.keys(r.porServico).length)delete r.porServico;
     window._OBRA=Object.assign({},window._OBRA,{feriados:{holidayWeeks:calHolidays(),rainPeriods:arr}});
     CAL_DIRTY=true;
     go('cad-cal');
@@ -8436,6 +8500,24 @@
       document.querySelectorAll('[data-delrain]').forEach(function(b){
         b.addEventListener('click',function(){deleteRain(+b.getAttribute('data-delrain'));});
       });
+      document.querySelectorAll('[data-rainexp]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var i=+b.getAttribute('data-rainexp');
+          RAIN_OPEN[i]=!RAIN_OPEN[i];
+          go('cad-cal');
+        });
+      });
+      document.querySelectorAll('[data-rainsvc]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          saveRainServico(+inp.getAttribute('data-rainsvc'),inp.getAttribute('data-rsid'),
+            inp.getAttribute('data-rscampo'),inp.value);
+        });
+      });
+      document.querySelectorAll('[data-rainreset]').forEach(function(b){
+        b.addEventListener('click',function(){
+          resetRainServico(+b.getAttribute('data-rainreset'),b.getAttribute('data-rsid'));
+        });
+      });
       var addR=document.getElementById('addRain');
       if(addR)addR.addEventListener('click',addRain);
       var saveC=document.getElementById('saveCal');
@@ -9580,41 +9662,55 @@
   }
   function calHolidays(){ return calData().holidayWeeks; }
   function calRainPeriods(){ return calData().rainPeriods; }
-  function climateFactorForDate(iso,periods){
+  /** Perda de produção e de dias que um período de chuva impõe a UM serviço.
+   *  Sem personalização vale o número geral do período; com ela, o do serviço — terraplenagem
+   *  para na chuva, pavimento rígido nem tanto, e drenagem às vezes rende mais. */
+  function climatePerdaDoServico(rp,svcId){
+    var pers=svcId&&rp.porServico?rp.porServico[svcId]:null;
+    if(pers&&typeof pers==='object'){
+      return {prod:Math.min(100,Math.max(0,+pers.producao||0)),
+              dias:Math.min(100,Math.max(0,+pers.dias||0))};
+    }
+    return {prod:Math.min(100,Math.max(0,+rp.producao||0)),
+            dias:Math.min(100,Math.max(0,+rp.dias||0))};
+  }
+  function climateFactorForDate(iso,periods,svcId){
     if(!periods||!periods.length)return 1;
     var factor=1;
     periods.forEach(function(rp){
       if(!rp.start||!rp.end)return;
       if(iso>=rp.start&&iso<=rp.end){
-        var prod=Math.min(100,Math.max(0,+rp.producao||0));
-        var dias=Math.min(100,Math.max(0,+rp.dias||0));
-        factor*=(1-prod/100)*(1-dias/100);
+        var pd=climatePerdaDoServico(rp,svcId);
+        factor*=(1-pd.prod/100)*(1-pd.dias/100);
       }
     });
     return Math.max(0,factor);
   }
-  function weekFactor(w,periods,cache){
+  /** svcId opcional: com ele, o fator sai da praticabilidade personalizada daquele serviço.
+   *  O cache é por serviço, senão o primeiro serviço calculado contaminaria os outros. */
+  function weekFactor(w,periods,cache,svcId){
     if(!periods||!periods.length)return 1;
-    if(cache&&cache[w]!=null)return cache[w];
+    var ck=svcId?(svcId+'::'+w):w;
+    if(cache&&cache[ck]!=null)return cache[ck];
     var monday=mondayOf(w), sum=0;
     for(var day=0;day<7;day++){
       var dt=new Date(monday); dt.setDate(dt.getDate()+day);
-      sum+=climateFactorForDate(dt.toISOString().slice(0,10),periods);
+      sum+=climateFactorForDate(dt.toISOString().slice(0,10),periods,svcId);
     }
-    var f=sum/7; if(cache)cache[w]=f; return f;
+    var f=sum/7; if(cache)cache[ck]=f; return f;
   }
   /** Aloca weeksNeeded semanas de capacidade a partir de startPos (posição fracionária em
    *  semanas). Semanas de chuva rendem menos (weekFactor<1), alongando a duração real —
    *  e se a equipe termina um lote no meio de uma semana, o próximo lote começa exatamente
    *  dali, consumindo o resto da capacidade daquela mesma semana. */
-  function packSegment(startPos,weeksNeeded,prod,qty,periods,cache,fixedDuration){
+  function packSegment(startPos,weeksNeeded,prod,qty,periods,cache,fixedDuration,svcId){
     if(fixedDuration>0){
       var endPos0=startPos+fixedDuration;
       var start0=Math.floor(startPos+1e-9)+1, end0=Math.max(start0,Math.ceil(endPos0-1e-9));
       var weights=[];
       for(var w0=start0;w0<=end0;w0++){
         var a=Math.max(startPos,w0-1), b=Math.min(endPos0,w0);
-        weights.push(Math.max(0,(b-a)*weekFactor(w0,periods,cache)));
+        weights.push(Math.max(0,(b-a)*weekFactor(w0,periods,cache,svcId)));
       }
       var sum0=weights.reduce(function(x,y){return x+y;},0);
       var wq0=sum0>0?weights.map(function(x){return qty*x/sum0;}):weights.map(function(){return 0;});
@@ -9622,7 +9718,7 @@
     }
     var pos=startPos, remaining=weeksNeeded, perWeek={}, guard=0;
     while(remaining>1e-9&&guard++<20000){
-      var wk=Math.floor(pos+1e-9)+1, avail=wk-pos, f=weekFactor(wk,periods,cache);
+      var wk=Math.floor(pos+1e-9)+1, avail=wk-pos, f=weekFactor(wk,periods,cache,svcId);
       if(f<=0){ pos=wk; continue; }
       var capacity=avail*f;
       if(capacity>=remaining-1e-9){
@@ -9725,7 +9821,7 @@
           var startPos=Math.max(c.ready,teamPos);
           var fixedDur=(o&&o.duration>0)?o.duration:undefined;
           var qty=c.qtyOverride!=null?c.qtyOverride:QTY[c.li][si];
-          var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
+          var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur,s.id);
           var dist=lastLi==null?0:Math.abs(c.li-lastLi);
           if(!best||packed.endPos<best.endPos-1e-9||(Math.abs(packed.endPos-best.endPos)<1e-9&&(dist<best.dist-1e-9||(Math.abs(dist-best.dist)<1e-9&&c.seq<best.seq)))){
             best={idx:i,packed:packed,dist:dist,li:c.li,qty:qty,endPos:packed.endPos};
@@ -9787,7 +9883,7 @@
         var tPos=0;
         list.forEach(function(p){
           var startPos=Math.max(p.startWeek-1,tPos);
-          var packed=packSegment(startPos,p.qty/effProd,effProd,p.qty,periods,wfCache);
+          var packed=packSegment(startPos,p.qty/effProd,effProd,p.qty,periods,wfCache,undefined,s.id);
           segs.push({li:p.li,si:si,team:t2,teams:teams,start:packed.start,dur:packed.duration,qty:p.qty,wq:packed.wq,
             color:teamColor(hex,t2,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
           if(!loteRange[p.li])loteRange[p.li]={min:Infinity,max:-Infinity};
@@ -9892,7 +9988,7 @@
               var effProd=(o&&o.productivity>0)?o.productivity:teamProd;
               var startPos=Math.max(item.ready,tPos);
               var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-              var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur);
+              var packed=packSegment(startPos,qty/effProd,effProd,qty,periods,wfCache,fixedDur,s.id);
               segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:qty,wq:packed.wq,
                 color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(li,si)&&ADJ_PENDING[ovrKey(li,si)])});
               tPos=packed.endPos;
@@ -10081,7 +10177,7 @@
           }
         }
         var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-        var packed=remaining>0?packSegment(startPos,remaining/effProd,effProd,remaining,periods,wfCache,fixedDur):null;
+        var packed=remaining>0?packSegment(startPos,remaining/effProd,effProd,remaining,periods,wfCache,fixedDur,s.id):null;
         if(packed)teamPos[team]=packed.endPos;
         if(packed)segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:remaining,wq:packed.wq,
           color:teamColor(hex,team,Math.max(1,teams)),name:s.n,real:real,total:QTY[li][si]});
@@ -15488,7 +15584,8 @@
       }
       var w=entry.working, tds='';
       var f=weekFactor(w,periods,wfCache2);
-      var rainBadge=f<0.999?' <span class="tcm-rain" title="Capacidade reduzida por período de baixa praticabilidade">🌧 '+Math.round(f*100)+'%</span>':'';
+      var temPers=(periods||[]).some(function(rp){ return rp.porServico&&Object.keys(rp.porServico).length; });
+      var rainBadge=f<0.999?' <span class="tcm-rain" title="Capacidade reduzida por período de baixa praticabilidade'+(temPers?' — este % é o geral do período; há serviço com praticabilidade própria':'')+'">🌧 '+Math.round(f*100)+'%'+(temPers?'*':'')+'</span>':'';
       for(var lx=0;lx<lotIdxs.length;lx++){
         var li=lotIdxs[lx];
         var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0&&!TC_HIDDEN_SVC[sc.sg.si];});
