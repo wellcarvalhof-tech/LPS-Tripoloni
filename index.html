@@ -15615,14 +15615,22 @@
     /* Onde há estudo de linha de balanço, a célula mostra a ETAPA da semana em vez da
      * quantidade. Montado uma vez aqui: por célula seria recalcular o estudo inteiro. */
     var lbSem=null;
-    try{ lbSem=lbEtapasPorSemana(); }catch(e){ lbSem=null; }
+    try{ lbSem=lbEtapasRelativas(); }catch(e){ lbSem=null; }
     var temLB=lbSem&&Object.keys(lbSem).length>0;
+    // primeira semana de cada lote × serviço NO CRONOGRAMA: é a âncora do alinhamento
+    var lbIni={};
+    if(temLB)segs.forEach(function(sg){
+      var k=sg.li+'::'+sg.si;
+      if(lbIni[k]==null||sg.start<lbIni[k])lbIni[k]=sg.start;
+    });
     function lbTexto(sg,w){
       if(!temLB)return null;
       var lid=(window._LOTIDS||[])[sg.li], sid=SERV[sg.si]&&SERV[sg.si].id;
       if(!lid||!sid)return null;
-      var arr=lbSem[lid+'::'+sid+'::'+w];
-      return (arr&&arr.length)?arr.join(' '):null;
+      var arr=lbSem[lid+'::'+sid]; if(!arr)return null;
+      var p=lbIni[sg.li+'::'+sg.si]; if(p==null)return null;
+      var v=arr[w-p];
+      return (v&&v.length)?v.join(' '):null;
     }
     var body='';
     for(var idx=calRows.length-1;idx>=0;idx--){
@@ -15656,10 +15664,22 @@
           continue;
         }
         if(opts.apontar){
+          /* Um serviço pode ter MAIS DE UM segmento na mesma célula (duas equipes, ou um
+           * trecho que foi retomado). No planejado isso é certo — cada segmento mostra a
+           * sua própria parcela. Aqui não: o número da célula é o APONTADO da semana
+           * inteira (realizadoPorSemana soma por semana::lote::serviço), então repetir o
+           * segmento repetia o mesmo total lado a lado e dava a impressão de dobro.
+           * Junta por serviço: um retângulo por serviço, com o previsto somado. */
+          var porSvc=[], ondeSvc={};
+          subs.forEach(function(sc){
+            var j=ondeSvc[sc.sg.si];
+            if(j==null){ ondeSvc[sc.sg.si]=porSvc.length; porSvc.push({sg:sc.sg,qty:sc.qty,w:sc.w,extra:sc.extra}); }
+            else { porSvc[j].qty+=sc.qty; if(!sc.extra)porSvc[j].extra=false; }
+          });
           // Mesma pintura do planejado, mas o número é o que foi APONTADO, não o previsto —
           // a matriz aqui é folha de lançamento, e previsto impresso na célula vira o número
           // que a pessoa repete sem conferir.
-          tds+='<td class="cell">'+'<div class="tcm-row">'+subs.map(function(sc,i){
+          tds+='<td class="cell">'+'<div class="tcm-row">'+porSvc.map(function(sc,i){
             var k=sc.w+'::'+sc.sg.li+'::'+sc.sg.si, feito=(opts.real||{})[k]||0;
             var cor=sc.sg.color;
             return '<div class="tcm-seg apont'+(feito>0?' temreal':'')+(sc.extra?' forapl':'')+'" data-apont="'+k+'" '+
@@ -15905,16 +15925,18 @@
     }
     return root.servicos[id];
   }
-  /** Etapas da linha de balanço que acontecem em cada semana, por lote e serviço.
+  /** Etapas da linha de balanço por lote, em semanas RELATIVAS ao começo daquele lote no
+   *  estudo: [{lote::servico: [["INF"],["INF"],["MES"],...]}].
    *
-   *  Serve pra matriz do Tempo-Caminho: numa OAE a quantidade não diz nada — "1" de ponte não é
-   *  informação —, mas saber que a semana é de armação do pilar é. Onde existe estudo, a célula
-   *  mostra a sigla das etapas da semana no lugar do número.
+   *  Relativo, e não a semana absoluta do projeto, de propósito. O estudo tem a semana de
+   *  início dele; o cronograma coloca o serviço onde a fila de equipe, a predecessora e os
+   *  ajustes mandam. Quando as duas não coincidem — que é o normal, a não ser logo depois de
+   *  "Levar para o Tempo-Caminho" — casar por semana absoluta não acha nada, e a célula caía
+   *  de volta na quantidade sem dizer por quê.
    *
-   *  Devolve {"loteId::servicoId::semana": ["INF","MES"]}. Monta de uma vez pra todos os
-   *  serviços com estudo, porque a matriz desenha lote × semana e consultaria isso célula a
-   *  célula. */
-  function lbEtapasPorSemana(){
+   *  Alinhando pelo começo, a 3ª semana de OAE no lote mostra a etapa que o estudo tem na 3ª
+   *  semana daquele lote, esteja o serviço onde estiver no calendário. */
+  function lbEtapasRelativas(){
     var root=lbRoot(), out={}, salvo=root.servicoSel;
     Object.keys(root.servicos||{}).forEach(function(sid){
       if(lbSvcIdx(sid)<0)return;
@@ -15922,16 +15944,22 @@
       var calc=null;
       try{ calc=lbCalc(); }catch(e){ calc=null; }
       if(!calc||!calc.itens.length)return;
-      var ini=(calc.c&&calc.c.inicio)||1, porId={};
+      var porId={};
       (calc.c.etapas||[]).forEach(function(e){ porId[e.id]=e; });
+      // começo de cada lote no estudo, pra contar as semanas a partir dele
+      var d0={};
       calc.itens.forEach(function(it){
-        var w0=lbDiaParaSemana(it.ini,ini);
-        var w1=lbDiaParaSemana(Math.max(it.ini,it.fim-0.001),ini);
+        if(d0[it.lote]==null||it.ini<d0[it.lote])d0[it.lote]=it.ini;
+      });
+      calc.itens.forEach(function(it){
+        var base=d0[it.lote]||0;
+        var w0=Math.floor((it.ini-base)/DIAS_SEM);
+        var w1=Math.floor((Math.max(it.ini,it.fim-0.001)-base)/DIAS_SEM);
+        var k=it.lote+'::'+sid, arr=out[k]||(out[k]=[]);
         var sig=lbSigla(porId[it.eid]);
         for(var w=w0;w<=w1;w++){
-          var k=it.lote+'::'+sid+'::'+w;
-          if(!out[k])out[k]=[];
-          if(out[k].indexOf(sig)<0)out[k].push(sig);
+          if(!arr[w])arr[w]=[];
+          if(arr[w].indexOf(sig)<0)arr[w].push(sig);
         }
       });
     });
