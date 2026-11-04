@@ -8303,6 +8303,324 @@
     });
   }
 
+  /* ================= PRODUÇÃO A PARTIR DOS BANCOS DA PLANILHA DE ACOMPANHAMENTO =========
+   *
+   * A planilha da obra guarda a produção crua em bancos com data, um por frente:
+   *   BD_CARGAS         — cada linha é um transporte: N cargas saíram de um km e foram pra
+   *                       outro. O km de ONDE SAIU é corte; o de ONDE CHEGOU é o destino, e a
+   *                       coluna SERVIÇO diz qual (aterro, bota-fora, …). Conferido contra o
+   *                       fechamento da própria obra na semana S45: 261→139, 254→231 e 263→55
+   *                       de corte pelo lado da carga; 249→131 de aterro pelo lado da descarga.
+   *   BD_RACHÃO         — cargas e toneladas de rachão/CFT por km e camada.
+   *   B.D_BASE - SUB.B  — macadame, BGTC, BGS e imprimação por km, com comprimento, tonelada e
+   *                       volume.
+   *
+   * Nada aqui é adivinhado: o que cada SERVIÇO/MATERIAL vira, e de qual coluna sai a
+   * quantidade, você diz na tela. O que não casar com um lote é listado e NÃO é gravado.
+   */
+  var BDP_ABAS=[
+    {chave:'BD_CARGAS',  rotulo:'Cargas',            temCarga:true },
+    {chave:'BD_RACH',    rotulo:'Rachão / CFT',      temCarga:false},
+    {chave:'BASE',       rotulo:'Base e sub-base',   temCarga:false}
+  ];
+  /** Acha a linha de cabeçalho da aba e as colunas que interessam, pelo texto — índice fixo
+   *  quebra na próxima revisão da planilha. */
+  function bdpCabecalho(rows){
+    for(var i=0;i<Math.min(rows.length,10);i++){
+      var r=rows[i]||[], ix={km:[],data:-1,cargas:-1,serv:-1,ton:-1,vol:-1,compr:-1,
+                            ramoCarga:-1,ramoDesc:-1,camada:-1,linha:i};
+      for(var j=0;j<r.length;j++){
+        var k=estNorm(r[j]); if(!k)continue;
+        if(ix.data<0&&(k==='DIA'||k==='DATA'))ix.data=j;
+        if(ix.cargas<0&&k==='CARGAS')ix.cargas=j;
+        if(ix.serv<0&&(k==='SERVICO'||k==='MATERIAL'))ix.serv=j;
+        if(ix.ton<0&&k==='TON')ix.ton=j;
+        if(ix.vol<0&&k.indexOf('VOLUME')===0)ix.vol=j;
+        if(ix.compr<0&&k.indexOf('COMPRIMENTO')===0)ix.compr=j;
+        if(ix.camada<0&&k==='CAMADA')ix.camada=j;
+        if(k.indexOf('KM INICIAL')===0)ix.km.push(j);
+        if(ix.ramoCarga<0&&k==='CARGA')ix.ramoCarga=j;
+        if(ix.ramoDesc<0&&k==='DESCARGA')ix.ramoDesc=j;
+      }
+      if(ix.data>=0&&ix.serv>=0&&ix.km.length)return ix;
+    }
+    return null;
+  }
+  function bdpNum(v){
+    if(v==null||v==='')return 0;
+    if(typeof v==='number')return isFinite(v)?v:0;
+    var t=String(v).trim().replace(/\s/g,'');
+    if(t.indexOf(',')>=0)t=t.replace(/\./g,'').replace(',','.');
+    var f=parseFloat(t);
+    return isFinite(f)?f:0;
+  }
+  /** Texto do lote: o RAMO quando preenchido (é ele que diz "261 - R100"), senão o número do km. */
+  function bdpLoteTexto(r,colRamo,colKm){
+    var ramo=colRamo>=0?String(r[colRamo]==null?'':r[colRamo]).trim():'';
+    if(ramo&&!/^(DUP|RT|-)$/i.test(ramo)&&/\d/.test(ramo))return ramo;
+    var km=colKm>=0?r[colKm]:null;
+    return (km==null||km==='')?'':String(km).trim();
+  }
+  /** Lê as abas de banco que existirem no arquivo e devolve as linhas já normalizadas. */
+  function bdpLer(wb,leitor){
+    var rowsDe=leitor||sheetRows;
+    var achadas=[];
+    BDP_ABAS.forEach(function(def){
+      var nome=null;
+      (wb.SheetNames||[]).forEach(function(x){
+        if(!nome&&estNorm(x).replace(/[^A-Z0-9]/g,'').indexOf(def.chave.replace(/[^A-Z0-9]/g,''))>=0)nome=x;
+      });
+      if(!nome)return;
+      var rows=rowsDe(wb.Sheets[nome]);
+      var ix=bdpCabecalho(rows);
+      if(!ix)return;
+      var itens=[], tipos={}, ini='', fim='';
+      var kmCarga=(def.temCarga&&ix.km.length>1)?ix.km[0]:-1;
+      var kmDesc=ix.km.length>1?ix.km[1]:(ix.km[0]!=null?ix.km[0]:-1);
+      for(var i=ix.linha+1;i<rows.length;i++){
+        var r=rows[i]||[];
+        var iso=excelDateToIso(r[ix.data]);
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(iso))continue;
+        var tipo=String(r[ix.serv]==null?'':r[ix.serv]).trim();
+        if(!tipo)continue;
+        var med={cargas:ix.cargas>=0?bdpNum(r[ix.cargas]):0,
+                 ton:ix.ton>=0?bdpNum(r[ix.ton]):0,
+                 vol:ix.vol>=0?bdpNum(r[ix.vol]):0,
+                 compr:ix.compr>=0?bdpNum(r[ix.compr]):0};
+        if(!(med.cargas>0||med.ton>0||med.vol>0||med.compr>0))continue;
+        if(!ini||iso<ini)ini=iso;
+        if(!fim||iso>fim)fim=iso;
+        var tn=estNorm(tipo);
+        tipos[tn]=tipos[tn]||{nome:tipo,linhas:0,cargas:0,ton:0,vol:0,compr:0};
+        var t=tipos[tn];
+        t.linhas++; t.cargas+=med.cargas; t.ton+=med.ton; t.vol+=med.vol; t.compr+=med.compr;
+        itens.push({iso:iso,tipo:tn,med:med,
+                    loteDesc:bdpLoteTexto(r,ix.ramoDesc,kmDesc),
+                    loteCarga:kmCarga>=0?bdpLoteTexto(r,ix.ramoCarga,kmCarga):''});
+      }
+      if(!itens.length)return;
+      /* O lado da CARGA não tem coluna de serviço — ele é sempre corte, e isso é o que faz o
+       * fechamento da obra bater. Entra como uma linha própria no de-para, pra você dizer qual
+       * serviço do plano é o corte em vez de eu escolher. */
+      if(kmCarga>=0){
+        var tot=0; itens.forEach(function(it){ tot+=it.med.cargas; });
+        tipos['::CARGA']={nome:'(lado da carga — material escavado)',linhas:itens.length,
+                          cargas:tot,ton:0,vol:0,compr:0,ehCarga:true};
+      }
+      achadas.push({aba:nome,rotulo:def.rotulo,itens:itens,tipos:tipos,ini:ini,fim:fim,
+                    temCarga:kmCarga>=0,
+                    tem:{cargas:ix.cargas>=0,ton:ix.ton>=0,vol:ix.vol>=0,compr:ix.compr>=0}});
+    });
+    return achadas;
+  }
+  var BDP_MEDIDAS=[['cargas','Cargas × m³ por carga'],['ton','Toneladas'],
+                   ['vol','Volume (m³)'],['compr','Comprimento (m)']];
+  function importarBancosArquivo(){
+    if(!selectedObra){ alert('Abra uma obra primeiro.'); return; }
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(!SERV.length){ alert('Cadastre os serviços antes de importar a produção.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var abas=bdpLer(wb);
+        if(!abas.length)throw new Error('Não achei nenhum banco de produção neste arquivo. Procuro abas chamadas BD_CARGAS, BD_RACHÃO e B.D_BASE - SUB.B, com colunas de data, km e serviço.');
+        bdpDialogo(abas,file.name);
+      }).catch(function(e){ alert('Falha ao ler o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function bdpDialogo(abas,nomeArq){
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    var achaLote=cargasMapaLotes();
+    // escolha inicial: medida mais "cheia" de cada aba, e serviço pelo nome
+    abas.forEach(function(A){
+      /* A medida inicial e a que tem NUMERO, nao a que tem coluna: na base, VOLUME e TON
+       * existem como coluna mas vem vazias, e so COMPRIMENTO esta preenchido. */
+      var soma={cargas:0,ton:0,vol:0,compr:0};
+      A.itens.forEach(function(it){ ['cargas','ton','vol','compr'].forEach(function(m){ soma[m]+=it.med[m]||0; }); });
+      A.medida='cargas';
+      ['cargas','vol','ton','compr'].forEach(function(m){ if(soma[m]>soma[A.medida])A.medida=m; });
+      if(!(soma[A.medida]>0))A.medida=A.tem.cargas?'cargas':'compr';
+      A.m3=CARGAS_M3_PADRAO;
+      A.sel={};
+      Object.keys(A.tipos).forEach(function(tn){
+        var t=A.tipos[tn];
+        A.sel[tn]=t.ehCarga?cargasAchaServico('CORTE'):histCasaServico(t.nome);
+      });
+    });
+    var opts=function(k){
+      return '<option value="-1"'+(k<0?' selected':'')+'>— não importar —</option>'+
+        SERV.map(function(s,i){ return '<option value="'+i+'"'+(i===k?' selected':'')+'>'+escAttr(s.n)+'</option>'; }).join('');
+    };
+    var blocos=abas.map(function(A,ai){
+      var medOpts=BDP_MEDIDAS.filter(function(m){ return A.tem[m[0]]; })
+        .map(function(m){ return '<option value="'+m[0]+'"'+(A.medida===m[0]?' selected':'')+'>'+m[1]+'</option>'; }).join('');
+      var linhas=Object.keys(A.tipos).sort(function(a,b){
+        return (A.tipos[b].cargas+A.tipos[b].ton+A.tipos[b].vol)-(A.tipos[a].cargas+A.tipos[a].ton+A.tipos[a].vol);
+      }).map(function(tn){
+        var t=A.tipos[tn];
+        return '<tr data-bdprow="'+ai+'::'+escAttr(tn)+'">'+
+          '<td>'+escAttr(t.nome)+'</td>'+
+          '<td><select class="einp" data-bdpsel="'+ai+'::'+escAttr(tn)+'" style="width:150px">'+opts(A.sel[tn])+'</select></td>'+
+          '<td class="r mono">'+t.linhas+'</td>'+
+          '<td class="r mono bdp-qtd">—</td></tr>';
+      }).join('');
+      return '<div style="margin-top:14px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">'+
+          '<div><b>'+escAttr(A.aba)+'</b> <span class="note" style="margin:0">'+A.rotulo+' · '+brDate(A.ini)+' a '+brDate(A.fim)+' · '+A.itens.length+' lançamentos</span></div>'+
+          '<div style="display:flex;gap:7px;align-items:center;font-size:12px">Quantidade: '+
+            '<select class="einp" data-bdpmed="'+ai+'" style="width:190px">'+medOpts+'</select>'+
+            '<span data-bdpm3box="'+ai+'" style="display:'+(A.medida==='cargas'?'':'none')+'"><input class="einp" type="number" min="0.1" step="0.1" data-bdpm3="'+ai+'" value="'+A.m3+'" style="width:64px"> m³</span>'+
+          '</div></div>'+
+        '<div class="tbl-wrap" style="margin-top:6px"><table class="edtbl" style="font-size:12px">'+
+          '<thead><tr><th>Na planilha</th><th>Serviço</th><th class="r">Linhas</th><th class="r">Quantidade</th></tr></thead>'+
+          '<tbody>'+linhas+'</tbody></table></div></div>';
+    }).join('');
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:860px;max-height:90vh;overflow:auto">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar produção dos bancos da planilha</div>'+
+      '<div class="note" style="margin-bottom:4px">'+escAttr(nomeArq)+'</div>'+
+      blocos+
+      '<div id="bdpResumo" style="margin-top:14px"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="bdpCancel">Cancelar</button>'+
+        '<button class="btn primary" id="bdpOk">Substituir e gravar</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#bdpCancel').addEventListener('click',fecha);
+
+    /** Monta o que seria gravado, com a escolha atual da tela. */
+    function calcula(){
+      var ups=[], semLote={}, semServ=0, porServ={};
+      abas.forEach(function(A){
+        var fator=(A.medida==='cargas')?A.m3:1;
+        A.itens.forEach(function(it){
+          var pares=[];
+          if(A.temCarga&&A.sel['::CARGA']>=0&&it.med.cargas>0)
+            pares.push({si:A.sel['::CARGA'],lote:it.loteCarga,q:it.med.cargas*A.m3});
+          var si=A.sel[it.tipo];
+          if(si>=0){
+            var bruto=it.med[A.medida]||0;
+            if(bruto>0)pares.push({si:si,lote:it.loteDesc,q:bruto*fator});
+          } else if(!A.tipos[it.tipo].ehCarga)semServ++;
+          pares.forEach(function(p){
+            if(!(p.q>0))return;
+            var li=achaLote(p.lote);
+            if(li<0){ var k=p.lote||'(em branco)'; semLote[k]=(semLote[k]||0)+p.q; return; }
+            ups.push({iso:it.iso,si:p.si,li:li,q:p.q});
+            porServ[p.si]=(porServ[p.si]||0)+p.q;
+          });
+        });
+      });
+      return {ups:ups,semLote:semLote,semServ:semServ,porServ:porServ};
+    }
+    function pinta(){
+      var R=calcula();
+      // quantidade por linha do de-para
+      abas.forEach(function(A,ai){
+        Object.keys(A.tipos).forEach(function(tn){
+          var tr=back.querySelector('[data-bdprow="'+CSS.escape(ai+'::'+tn)+'"]');
+          if(!tr)return;
+          var t=A.tipos[tn];
+          var bruto=t.ehCarga?t.cargas:(t[A.medida]||0);
+          var fator=(t.ehCarga||A.medida==='cargas')?A.m3:1;
+          tr.querySelector('.bdp-qtd').textContent=fmtBR(bruto*fator);
+        });
+      });
+      var ids={};
+      Object.keys(R.porServ).forEach(function(si){ if(SERV[si])ids[SERV[si].id]=1; });
+      var apagar=(window.PROD_LIST||[]).filter(function(r){ return ids[r.servId]; }).length;
+      var nao=Object.keys(R.semLote).sort(function(a,b){ return R.semLote[b]-R.semLote[a]; });
+      var listaServ=Object.keys(R.porServ).map(function(si){
+        return '<div style="display:flex;justify-content:space-between;gap:14px;padding:5px 0;border-bottom:1px solid var(--line-2)">'+
+          '<span>'+escAttr(SERV[si].n)+'</span><span class="mono"><b>'+fmtBR(R.porServ[si])+'</b> '+escAttr(SERV[si].u)+'</span></div>';
+      }).join('');
+      back.querySelector('#bdpResumo').innerHTML=
+        (listaServ||'<div class="note">Nenhum serviço ligado ainda.</div>')+
+        '<div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0"><span>Lançamentos a gravar</span><span class="mono"><b>'+R.ups.length+'</b></span></div>'+
+        (nao.length?('<div class="banner" style="color:var(--warn)"><div>Sem lote correspondente — <b>não</b> será gravado: '+
+          nao.slice(0,14).map(function(k){ return escAttr(k)+' ('+fmtBR(R.semLote[k])+')'; }).join(' · ')+
+          (nao.length>14?(' … e mais '+(nao.length-14)):'')+
+          '. Se algum desses é um ramo que existe como lote com outro nome, me diga o de-para e eu trato.</div></div>'):'')+
+        '<div class="banner" style="color:var(--crit)"><div>Isto <b>apaga</b> os '+apagar+' lançamento(s) de produção que existem hoje dos serviços acima e grava os '+R.ups.length+' no lugar. '+
+          'Os outros serviços não são tocados.</div></div>';
+      back.querySelector('#bdpOk').disabled=!R.ups.length;
+      return R;
+    }
+    back.querySelectorAll('[data-bdpsel]').forEach(function(el){
+      el.addEventListener('change',function(){
+        var pr=el.getAttribute('data-bdpsel').split('::');
+        var ai=+pr[0], tn=pr.slice(1).join('::');
+        abas[ai].sel[tn]=+el.value; pinta();
+      });
+    });
+    back.querySelectorAll('[data-bdpmed]').forEach(function(el){
+      el.addEventListener('change',function(){
+        var ai=+el.getAttribute('data-bdpmed');
+        abas[ai].medida=el.value;
+        var cx=back.querySelector('[data-bdpm3box="'+ai+'"]');
+        if(cx)cx.style.display=(el.value==='cargas')?'':'none';
+        pinta();
+      });
+    });
+    back.querySelectorAll('[data-bdpm3]').forEach(function(el){
+      el.addEventListener('change',function(){
+        abas[+el.getAttribute('data-bdpm3')].m3=+el.value||CARGAS_M3_PADRAO; pinta();
+      });
+    });
+    back.querySelector('#bdpOk').addEventListener('click',async function(){
+      var R=calcula(); if(!R.ups.length)return;
+      var btn=back.querySelector('#bdpOk');
+      btn.disabled=true; btn.textContent='Gravando…';
+      try{
+        var n=await bdpGravar(R);
+        fecha(); window._prodMode='realizado'; go('ac-prod');
+        toast(n+' lançamento(s) gravado(s).');
+      }catch(e){
+        alert('Falha ao gravar: '+((e&&e.message)||e));
+        btn.disabled=false; btn.textContent='Substituir e gravar';
+      }
+    });
+    pinta();
+  }
+  async function bdpGravar(R){
+    var ids=[];
+    Object.keys(R.porServ).forEach(function(si){ if(SERV[si])ids.push(SERV[si].id); });
+    if(!ids.length)throw new Error('Nenhum serviço ligado.');
+    /* Uma linha de produção por dia × lote × serviço: o banco tem uma linha por viagem, e
+     * gravar cada viagem encheria a produção de milhares de registros que dizem a mesma coisa. */
+    var acc={};
+    R.ups.forEach(function(u){
+      var k=u.iso+'::'+u.li+'::'+u.si;
+      acc[k]=(acc[k]||0)+u.q;
+    });
+    var ups=Object.keys(acc).map(function(k){
+      var pr=k.split('::');
+      return {id:newUuid(),obra_id:selectedObra.id,servico_id:SERV[+pr[2]].id,
+              lote_id:(window._LOTIDS||[])[+pr[1]],data:pr[0],quantidade:acc[k],
+              observacao:'Bancos da planilha de acompanhamento'};
+    }).filter(function(u){ return u.lote_id; });
+    var del=await SB.from('producao_diaria').delete().eq('obra_id',selectedObra.id).in('servico_id',ids);
+    if(del.error)throw del.error;
+    for(var i=0;i<ups.length;i+=400){
+      var r=await SB.from('producao_diaria').upsert(ups.slice(i,i+400),{onConflict:'id'});
+      if(r.error)throw r.error;
+    }
+    // vínculo da estaca com a linha apagada: o banco zera sozinho (FK on delete set null);
+    // o espelho em memória precisa zerar junto, senão o gerador das estacas recriaria a linha
+    Object.keys(ESTACA_AVANCO||{}).forEach(function(loteId){
+      var m=ESTACA_AVANCO[loteId]||{};
+      Object.keys(m).forEach(function(k){
+        if(m[k]&&ids.indexOf(k.split('::')[1])>=0)m[k].prodId=null;
+      });
+    });
+    window.PROD_LIST=(window.PROD_LIST||[])
+      .filter(function(r){ return ids.indexOf(r.servId)<0; })
+      .concat(ups.map(function(u){
+        return {id:u.id,data:u.data,servId:u.servico_id,loteId:u.lote_id,qtd:u.quantidade};
+      }));
+    return ups.length;
+  }
+
   /* ---------------- Quadro do realizado: semana × lote, pintado pelo que ACONTECEU ----------
    * A matriz de apontamento é desenhada pelo PLANO — a barra está onde o cronograma previu, e o
    * realizado só preenche o número dentro dela. Aqui é o contrário: a célula existe porque houve
@@ -8589,6 +8907,7 @@
     var tabs='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">'+
       '<div class="subtabs" style="margin:0">'+[['lista','Lista'],['tc','Tempo-Caminho'],['realizado','Realizado'],['matriz','Matriz de estacas']].map(function(t){return '<button class="subtab'+(window._prodMode===t[0]?' active':'')+'" data-pmode="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>'+
       '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn" id="estBancosBtn" title="Planilha de acompanhamento da obra: lê os bancos BD_CARGAS, BD_RACHÃO e B.D_BASE e grava a produção com data, lote e serviço">↥ Importar produção da planilha</button>'+
         '<button class="btn" id="estCargasBtn" title="Planilha semanal de cargas por km (corte, aterro, bota-fora): vira o realizado de corte e aterro, cargas vezes os m3 do caminhão">↥ Importar cargas</button>'+
         '<button class="btn" id="estRealBtnTop" title="Preenche o realizado das estacas que já têm data de término — é o que traz o retroativo do informe de produção pra cá">↻ Puxar realizado das estacas</button>'+
       '</div>'+
@@ -8645,6 +8964,8 @@
     if(rbTop)rbTop.addEventListener('click',atualizarRealizadoDasEstacas);
     var cgTop=document.getElementById('estCargasBtn');
     if(cgTop)cgTop.addEventListener('click',importarCargasArquivo);
+    var bdTop=document.getElementById('estBancosBtn');
+    if(bdTop)bdTop.addEventListener('click',importarBancosArquivo);
     var add=document.getElementById('pdAdd');
     if(add)add.addEventListener('click',async function(){
       if(!selectedObra)return;
