@@ -15890,6 +15890,95 @@
     return root.servicos[id];
   }
   function lbMarkDirty(){ LB_DIRTY=true; undoMarca('lb'); refreshTopSaveBtn(); }
+  /** Leva o estudo pro Tempo-Caminho: cada lote vira um ajuste manual do serviço, com a semana
+   *  de início e a duração que a linha de balanço calculou.
+   *
+   *  Usa {startWeek,duration} SEM equipe de propósito. Com equipe o lote entraria pelo caminho
+   *  dos "pins", que fixa só o começo e recalcula a duração por quantidade ÷ produtividade —
+   *  e aí a janela do estudo se perderia. Sem equipe, o motor respeita as duas coisas.
+   *
+   *  A semana pode acabar mais pra frente do que o estudo diz se houver predecessora ou trava
+   *  "não pode antes de": o motor nunca puxa um serviço pra antes do que é possível, e isso é
+   *  proposital. O diálogo avisa quando é o caso. */
+  async function lbLevarParaTC(){
+    var root=lbRoot(), si=lbSvcIdx(root.servicoSel), sv=SERV[si];
+    if(!sv){ alert('Escolha um serviço primeiro.'); return; }
+    if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
+    var linhas=lbResumoPorLote();
+    if(!linhas.length){ alert('A linha de balanço deste serviço não tem etapas em lote nenhum.'); return; }
+    var ids=lbLoteIds();
+    var jaTinha=linhas.filter(function(L){
+      var li=ids.indexOf(L.loteId);
+      var o=li>=0?ovrGet(li,si):null;
+      return !!(o&&(o.startWeek>0||o.duration>0||(o.pins&&o.pins.length)));
+    }).length;
+    /* Duas condições decidem se a janela do estudo vai ser respeitada no Tempo-Caminho, e as
+     * duas são invisíveis até a barra sair no lugar errado:
+     *   1) o serviço precisa ter QUANTIDADE no lote — sem ela não existe barra pra desenhar;
+     *   2) o serviço precisa de uma EQUIPE por lote simultâneo — a mesma equipe não fica em dois
+     *      lotes ao mesmo tempo, e a fila empurra os lotes pra frente. */
+    var semQtd=[];
+    linhas.forEach(function(L){
+      var li=ids.indexOf(L.loteId);
+      if(li<0||!((QTY[li]||[])[si]>0))semQtd.push(L.nome);
+    });
+    var pico=0;
+    linhas.forEach(function(A){
+      var n=linhas.filter(function(B){ return B.ini<=A.fim&&B.fim>=A.ini; }).length;
+      pico=Math.max(pico,n);
+    });
+    var faltaEquipe=pico>(sv.eq||1);
+    var corpo=linhas.map(function(L){
+      var li=ids.indexOf(L.loteId), temQtd=li>=0&&((QTY[li]||[])[si]>0);
+      return '<tr'+(temQtd?'':' style="opacity:.55"')+'><td>'+escAttr(L.nome)+
+        (temQtd?'':' <span class="pill mut" title="O serviço não tem quantidade cadastrada neste lote — não há barra pra desenhar">sem quantidade</span>')+'</td>'+
+        '<td class="r mono">'+L.etapas+'</td>'+
+        '<td class="r mono">'+rotSem(mondayOf(L.ini))+'</td>'+
+        '<td class="r mono">'+rotSem(mondayOf(L.fim))+'</td>'+
+        '<td class="r mono" style="font-weight:700">'+L.dur+'</td></tr>';
+    }).join('');
+    var ok=await new Promise(function(resolve){
+      var back=document.createElement('div'); back.className='segmenu-backdrop';
+      back.innerHTML='<div class="segmenu-panel card" style="max-width:620px;max-height:86vh;overflow:auto">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Levar para o Tempo-Caminho</div>'+
+        '<div class="note" style="margin-bottom:10px">As etapas de <b>'+escAttr(sv.n)+'</b> viram uma barra por lote, '+
+        'do começo da primeira etapa ao fim da última. No Tempo-Caminho a célula é o serviço inteiro — o detalhe por etapa continua aqui.</div>'+
+        '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead><tr>'+
+        '<th>Lote</th><th class="r">Etapas</th><th class="r">Início</th><th class="r">Fim</th><th class="r">Semanas</th>'+
+        '</tr></thead><tbody>'+corpo+'</tbody></table></div>'+
+        (jaTinha?('<div class="banner" style="margin-top:12px">'+jaTinha+' lote(s) já têm ajuste manual neste serviço. '+
+          'Eles serão <b>substituídos</b> pelo que está na tabela.</div>'):'')+
+        (semQtd.length?('<div class="banner" style="margin-top:12px;border-color:var(--warn)">'+
+          '<b>'+semQtd.length+' lote(s) sem quantidade</b> em '+escAttr(sv.n)+': '+escAttr(semQtd.join(', '))+'. '+
+          'Sem quantidade não existe barra no Tempo-Caminho, e o ajuste desses lotes não vai aparecer. '+
+          'Cadastre a quantidade em Lotes &amp; Quantidades antes.</div>'):'')+
+        (faltaEquipe?('<div class="banner" style="margin-top:12px;border-color:var(--warn)">'+
+          'No estudo, até <b>'+pico+' lote(s)</b> acontecem ao mesmo tempo, e '+escAttr(sv.n)+' tem <b>'+(sv.eq||1)+' equipe(s)</b>. '+
+          'A mesma equipe não fica em dois lotes de uma vez: o motor vai empurrar os lotes pra frente e as datas não vão bater com o estudo. '+
+          'Suba o nº de equipes do serviço pra '+pico+' em Tempo Caminho &rarr; Serviços.</div>'):'')+
+        '<div class="note" style="margin-top:10px">Se o serviço tiver predecessora ou trava "não pode antes de", o motor pode empurrar o início pra frente — ele nunca coloca um serviço antes do que é possível. '+
+        'Nada é gravado no banco até você salvar os ajustes.</div>'+
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">'+
+          '<button class="btn" id="lbTcCancel">Cancelar</button>'+
+          '<button class="btn primary" id="lbTcOk">Levar '+linhas.length+' lote(s)</button></div></div>';
+      document.body.appendChild(back);
+      function fim(v){ back.remove(); resolve(v); }
+      back.addEventListener('pointerdown',function(e){ if(e.target===back)fim(false); });
+      back.querySelector('#lbTcCancel').addEventListener('click',function(){ fim(false); });
+      back.querySelector('#lbTcOk').addEventListener('click',function(){ fim(true); });
+    });
+    if(!ok)return;
+    var n=0;
+    linhas.forEach(function(L){
+      var li=ids.indexOf(L.loteId); if(li<0)return;
+      var k=ovrKey(li,si); if(!k)return;
+      OVR[k]={startWeek:L.ini,duration:L.dur};
+      n++;
+    });
+    adjDirty();
+    toast(n+' lote(s) levados pro Tempo-Caminho. Salve os ajustes pra gravar.');
+    go('cr-matriz');
+  }
   async function lbSalvar(){
     if(!selectedObra||!LB)return;
     try{
@@ -15970,6 +16059,25 @@
     return {lotes:lotes,itens:itens,maxDia:maxDia,c:c};
   }
   function lbDiaParaSemana(dia,inicioSem){ return (inicioSem||1)+Math.floor(dia/DIAS_SEM); }
+  /** Agrupa as etapas da linha de balanço POR LOTE: a janela que o serviço ocupa em cada lote,
+   *  do início da primeira etapa ao fim da última. É o que vira a barra do serviço no
+   *  Tempo-Caminho — lá a célula é o serviço inteiro, não a etapa.
+   *  Devolve [{loteId, nome, ini, fim, dur, etapas}] em SEMANAS do projeto. */
+  function lbResumoPorLote(){
+    var calc=lbCalc(); if(!calc||!calc.itens.length)return [];
+    var ini=(calc.c&&calc.c.inicio)||1, porLote={};
+    calc.itens.forEach(function(it){
+      var g=porLote[it.lote]||(porLote[it.lote]={d0:Infinity,d1:-Infinity,n:0});
+      g.d0=Math.min(g.d0,it.ini); g.d1=Math.max(g.d1,it.fim); g.n++;
+    });
+    return calc.lotes.filter(function(id){ return porLote[id]; }).map(function(id){
+      var g=porLote[id];
+      var w0=lbDiaParaSemana(g.d0,ini);
+      // o fim é exclusivo em dias: a etapa que acaba no fim do dia 10 ainda ocupa a semana dele
+      var w1=lbDiaParaSemana(Math.max(g.d0,g.d1-0.001),ini);
+      return {loteId:id,nome:lbNomeLote(id),ini:w0,fim:w1,dur:Math.max(1,w1-w0+1),etapas:g.n};
+    });
+  }
   /** Dia do estudo (0 = início do serviço) -> data real. Conta só dias úteis (seg–sex) e usa as
    *  semanas do projeto, então pula as semanas paradas do calendário da obra. */
   function lbDiaParaData(dia,inicioSem){
@@ -17026,6 +17134,7 @@
     }
     return head('Linha de Balanço','Detalhamento do Tempo-Caminho por serviço.',
         '<button class="btn" id="lbImportar">↥ Importar cronograma</button>'+
+        '<button class="btn" id="lbParaTC" title="Agrupa as etapas por lote e desenha o serviço no Tempo-Caminho, na janela que o estudo calculou">↗ Levar para o Tempo-Caminho</button>'+
         undoBotoesHTML()+'<button class="btn primary" id="lbSave"'+(LB_DIRTY?'':' disabled')+'>💾 Salvar linha de balanço</button>')+
       '<div class="subtabs" id="lbTabs" style="margin-bottom:14px">'+abas+'</div>'+
       cabec+corpo;
@@ -17080,6 +17189,8 @@
     });
     var imp=document.getElementById('lbImportar');
     if(imp)imp.addEventListener('click',importarCronogramaArquivo);
+    var ptc=document.getElementById('lbParaTC');
+    if(ptc)ptc.addEventListener('click',lbLevarParaTC);
     var save=document.getElementById('lbSave');
     if(save)save.addEventListener('click',lbSalvar);
     undoLigaTeclas(); undoLigaBotoes();
