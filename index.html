@@ -320,6 +320,23 @@
   .seqnum{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:700}
   .seqname{flex:1;font-size:12.5px}
   .seqbtns{display:flex;gap:4px}
+  /* Quadro do realizado (semana x lote, pintado pelo que aconteceu). Mesma ideia da matriz:
+     a coluna da semana fica fixa ao rolar na horizontal. */
+  table.rq{border-collapse:collapse;font-size:11px;min-width:700px;width:100%}
+  table.rq th,table.rq td{border:1px solid var(--line-2);padding:0}
+  table.rq thead th{position:sticky;top:0;background:var(--surface);z-index:3;padding:7px 8px;color:var(--ink-2);font-size:10.5px;text-align:center;white-space:nowrap}
+  table.rq thead th.lot{font-weight:700;color:var(--ink)}
+  table.rq td.wk,table.rq th:nth-child(1){position:sticky;left:0;width:118px;min-width:118px;max-width:118px;z-index:2;background:var(--surface)}
+  table.rq thead th:nth-child(1),table.rq thead th:nth-child(2){z-index:4}
+  table.rq td.wk{padding:4px 8px;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-size:11px;line-height:1.3}
+  table.rq td.wk .rq-sem{display:block;color:var(--muted);font-size:10px}
+  table.rq td.rq-tot,table.rq th.rq-tot{background:var(--elev);font-weight:700}
+  table.rq tr.rq-topo td{background:var(--bg);font-weight:700}
+  table.rq tr.rq-hoje td{box-shadow:inset 0 2px 0 var(--acc),inset 0 -2px 0 var(--acc)}
+  .rq-faixa{display:block;margin:2px;border-radius:4px;padding:2px 6px;text-align:center;font-weight:700;font-family:"IBM Plex Mono",monospace;font-size:11px;white-space:nowrap}
+  .rq-leg{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:12px}
+  .rq-legit{display:inline-flex;align-items:center;gap:6px}
+  .rq-legit i{width:10px;height:10px;border-radius:50%;display:inline-block}
   table.tcm{border-collapse:collapse;font-size:11px;min-width:700px;width:100%}
   table.tcm th,table.tcm td{border:1px solid var(--line-2)}
   table.tcm thead th{position:sticky;top:0;background:var(--surface);z-index:3;padding:7px 8px;color:var(--ink-2);font-size:10.5px;text-align:center;white-space:nowrap}
@@ -7827,6 +7844,374 @@
     if(r3.error)throw r3.error;
     return estacaIds.length;
   }
+  /* ================= CARGAS DE CAMINHÃO → REALIZADO DE CORTE E ATERRO =================
+   *
+   * A obra fecha corte e aterro por CARGA de caminhão, não por volume medido: a planilha semanal
+   * traz, por semana e por km, quantas cargas foram pra aterro, pra bota-fora em espera, de corte
+   * e pra outros destinos. O volume é a carga vezes a capacidade do caminhão (12 m³ na 429-Irati,
+   * editável na importação).
+   *
+   * Só CORTE e ATERRO viram produção. Bota-fora em espera e outros destinos ficam de fora — é
+   * assim que o quadro da obra fecha: conferido semana a semana contra a planilha (S45: corte
+   * 425 cargas = 5.100 m³, aterro 263 = 3.156 m³; com bota-fora daria 7.044).
+   *
+   * O km da planilha é o LOTE: "249", "249 R1000", "261 R100" são nomes de lote no sistema.
+   */
+  var CARGAS_M3_PADRAO=12;
+
+  /** Divide o CSV em linhas de células. Detecta o separador (; , ou tab) pelo cabeçalho e
+   *  respeita aspas — campo com o separador dentro não pode partir a linha ao meio. */
+  function csvLinhas(txt){
+    txt=String(txt==null?'':txt).replace(/\r\n?/g,'\n');
+    if(txt.charCodeAt(0)===0xFEFF)txt=txt.slice(1);
+    var brutas=txt.split('\n').filter(function(l){ return l.trim()!==''; });
+    if(!brutas.length)return [];
+    var cab=brutas[0], sep=';', melhor=cab.split(';').length-1;
+    [['\t',cab.split('\t').length-1],[',',cab.split(',').length-1]].forEach(function(p){
+      if(p[1]>melhor){ melhor=p[1]; sep=p[0]; }
+    });
+    return brutas.map(function(l){
+      var out=[], cur='', q=false;
+      for(var i=0;i<l.length;i++){
+        var c=l.charAt(i);
+        if(q){
+          if(c==='"'){ if(l.charAt(i+1)==='"'){ cur+='"'; i++; } else q=false; }
+          else cur+=c;
+        }
+        else if(c==='"')q=true;
+        else if(c===sep){ out.push(cur); cur=''; }
+        else cur+=c;
+      }
+      out.push(cur);
+      return out.map(function(x){ return x.trim(); });
+    });
+  }
+  /** Número com vírgula decimal ("131,0" → 131). Havendo vírgula, o ponto é milhar. */
+  function cargasNum(v){
+    if(v==null||v==='')return 0;
+    if(typeof v==='number')return isFinite(v)?v:0;
+    var s=String(v).trim().replace(/\s/g,'');
+    if(s.indexOf(',')>=0)s=s.replace(/\./g,'').replace(',','.');
+    var n=parseFloat(s);
+    return isFinite(n)?n:0;
+  }
+  function cargasColunas(cab){
+    var ix={data:-1,semana:-1,col:-1,aterro:-1,corte:-1,bf:-1,outros:-1};
+    (cab||[]).forEach(function(h,i){
+      var k=estNorm(h);
+      if(ix.data<0&&(k.indexOf('SEGUNDA')>=0||k==='DATA'))ix.data=i;
+      if(ix.semana<0&&k==='SEMANA')ix.semana=i;
+      if(ix.col<0&&(k==='COLUNA'||k==='KM'||k==='LOTE'||k.indexOf('TRECHO')>=0))ix.col=i;
+      if(ix.bf<0&&k.indexOf('BOTA')>=0)ix.bf=i;
+      if(ix.outros<0&&k.indexOf('OUTRO')>=0)ix.outros=i;
+      if(ix.aterro<0&&k.indexOf('ATERRO')>=0&&i!==ix.bf&&i!==ix.outros)ix.aterro=i;
+      if(ix.corte<0&&k.indexOf('CORTE')>=0&&i!==ix.bf&&i!==ix.outros)ix.corte=i;
+    });
+    return ix;
+  }
+  /** km da planilha → índice do lote. Nome exato primeiro; depois a forma compacta (só letras e
+   *  dígitos), que aceita "249-R1000" pra "249 R1000". Nunca cai só no número: "249" e
+   *  "OAE 249" dividem o número, e adivinhar jogaria carga de pista na ponte. */
+  function cargasMapaLotes(){
+    var exato={}, compacto={};
+    LOTS.forEach(function(nm,i){
+      var k=estNorm(nm);
+      if(exato[k]==null)exato[k]=i;
+      var c=k.replace(/[^A-Z0-9]/g,'');
+      if(c&&compacto[c]==null)compacto[c]=i;
+    });
+    return function(txt){
+      var k=estNorm(txt); if(!k)return -1;
+      if(exato[k]!=null)return exato[k];
+      var c=k.replace(/[^A-Z0-9]/g,'');
+      return (c&&compacto[c]!=null)?compacto[c]:-1;
+    };
+  }
+  function cargasAchaServico(palavra){
+    var alvo=estNorm(palavra), achou=-1;
+    SERV.forEach(function(s,i){ if(achou<0&&estNorm(s.n).indexOf(alvo)>=0)achou=i; });
+    return achou;
+  }
+  /** Lê as linhas e devolve o que seria gravado, sem gravar nada. */
+  function cargasPrevia(linhas,m3){
+    var out={erro:'',itens:[],semLote:{},semData:0,semanas:0,ini:'',fim:'',
+             cargas:{corte:0,aterro:0,bf:0,outros:0}};
+    if(!linhas||linhas.length<2){ out.erro='Arquivo vazio ou só com o cabeçalho.'; return out; }
+    var ix=cargasColunas(linhas[0]);
+    if(ix.corte<0&&ix.aterro<0){
+      out.erro='Não achei as colunas de corte e aterro. O cabeçalho precisa ter, no mínimo: uma coluna de data (segunda), uma de km/lote (coluna) e as colunas corte e aterro.';
+      return out;
+    }
+    if(ix.data<0&&ix.semana>=0&&/^\d{4}-\d{2}-\d{2}$/.test(excelDateToIso(linhas[1][ix.semana])))ix.data=ix.semana;
+    if(ix.data<0){ out.erro='Não achei a coluna com a data da semana (segunda-feira).'; return out; }
+    if(ix.col<0){ out.erro='Não achei a coluna com o km/lote.'; return out; }
+    var acha=cargasMapaLotes(), acc={}, sem={};
+    for(var i=1;i<linhas.length;i++){
+      var L=linhas[i]; if(!L||!L.length)continue;
+      var iso=excelDateToIso(L[ix.data]);
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)){ out.semData++; continue; }
+      var seg=mondayOfIso(iso);
+      var cCorte=ix.corte>=0?cargasNum(L[ix.corte]):0;
+      var cAterro=ix.aterro>=0?cargasNum(L[ix.aterro]):0;
+      out.cargas.corte+=cCorte; out.cargas.aterro+=cAterro;
+      if(ix.bf>=0)out.cargas.bf+=cargasNum(L[ix.bf]);
+      if(ix.outros>=0)out.cargas.outros+=cargasNum(L[ix.outros]);
+      if(!(cCorte>0||cAterro>0))continue;
+      var nome=String(L[ix.col]==null?'':L[ix.col]).trim();
+      var li=acha(nome);
+      if(li<0){ var kk=nome||'(em branco)'; out.semLote[kk]=(out.semLote[kk]||0)+cCorte+cAterro; continue; }
+      sem[seg]=1;
+      if(!out.ini||seg<out.ini)out.ini=seg;
+      if(!out.fim||seg>out.fim)out.fim=seg;
+      if(cCorte>0){ var k1=seg+'::'+li+'::corte'; acc[k1]=(acc[k1]||0)+cCorte; }
+      if(cAterro>0){ var k2=seg+'::'+li+'::aterro'; acc[k2]=(acc[k2]||0)+cAterro; }
+    }
+    out.semanas=Object.keys(sem).length;
+    Object.keys(acc).forEach(function(k){
+      var p=k.split('::');
+      out.itens.push({data:p[0],li:+p[1],tipo:p[2],cargas:acc[k],qtd:acc[k]*m3});
+    });
+    return out;
+  }
+  function importarCargasArquivo(){
+    if(!selectedObra){ alert('Abra uma obra primeiro.'); return; }
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    var inp=document.getElementById('cargasFileInput');
+    if(!inp){
+      inp=document.createElement('input'); inp.type='file';
+      inp.accept='.csv,.txt,.xlsx,.xls,.xlsm'; inp.id='cargasFileInput';
+      inp.style.display='none'; document.body.appendChild(inp);
+    }
+    inp.value='';
+    inp.onchange=function(){
+      var f=inp.files&&inp.files[0]; if(!f)return;
+      var p=/\.(csv|txt)$/i.test(f.name)
+        ? f.text().then(csvLinhas)
+        : readWorkbookFile(f).then(function(wb){ return sheetRows(wb.Sheets[wb.SheetNames[0]]); });
+      p.then(function(linhas){ cargasDialogo(linhas,f.name); })
+       .catch(function(e){ alert('Falha ao ler o arquivo: '+((e&&e.message)||e)); });
+    };
+    inp.click();
+  }
+  function cargasDialogo(linhas,nomeArq){
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    var svcOpts=function(sel){
+      return SERV.map(function(s,i){
+        return '<option value="'+i+'"'+(i===sel?' selected':'')+'>'+escAttr(s.n)+' ('+escAttr(s.u)+')</option>';
+      }).join('');
+    };
+    var siCorte=cargasAchaServico('CORTE'), siAterro=cargasAchaServico('ATERRO');
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:640px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar cargas</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(nomeArq||'')+'</div>'+
+      '<div class="mpgrid">'+
+        '<label style="font-size:12.5px">m³ por carga<br><input class="einp" type="number" id="cgM3" min="0.1" step="0.1" value="'+CARGAS_M3_PADRAO+'" style="width:100%"></label>'+
+        '<label style="font-size:12.5px">Serviço de corte<br><select class="einp" id="cgCorte" style="width:100%">'+svcOpts(siCorte<0?0:siCorte)+'</select></label>'+
+        '<label style="font-size:12.5px">Serviço de aterro<br><select class="einp" id="cgAterro" style="width:100%">'+svcOpts(siAterro<0?0:siAterro)+'</select></label>'+
+      '</div>'+
+      '<div id="cgPrev" style="margin-top:12px"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="cgCancel">Cancelar</button>'+
+        '<button class="btn primary" id="cgOk">Substituir e gravar</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#cgCancel').addEventListener('click',fecha);
+    var prev=null;
+    function pinta(){
+      var m3=+back.querySelector('#cgM3').value||CARGAS_M3_PADRAO;
+      prev=cargasPrevia(linhas,m3);
+      var ok=back.querySelector('#cgOk');
+      var alvo=back.querySelector('#cgPrev');
+      if(prev.erro){
+        alvo.innerHTML='<div class="banner" style="color:var(--crit)">'+escAttr(prev.erro)+'</div>';
+        ok.disabled=true; return;
+      }
+      var siC=+back.querySelector('#cgCorte').value, siA=+back.querySelector('#cgAterro').value;
+      var nomeC=SERV[siC]?SERV[siC].n:'—', nomeA=SERV[siA]?SERV[siA].n:'—';
+      var ids=[SERV[siC]&&SERV[siC].id,SERV[siA]&&SERV[siA].id].filter(Boolean);
+      var apagar=(window.PROD_LIST||[]).filter(function(r){ return ids.indexOf(r.servId)>=0; }).length;
+      var nao=Object.keys(prev.semLote).sort(function(a,b){ return prev.semLote[b]-prev.semLote[a]; });
+      /* As cargas mostradas aqui sao as que VIRAM volume. Somar o total do arquivo deixaria
+       * a conta sem fechar na tela: linha sem lote correspondente conta carga e nao gera m3. */
+      var vC=0,vA=0,cC=0,cA=0;
+      prev.itens.forEach(function(it){
+        if(it.tipo==='corte'){ cC+=it.cargas; vC+=it.qtd; } else { cA+=it.cargas; vA+=it.qtd; }
+      });
+      /* Linhas simples em vez de tabela: a tabela do sistema tem largura minima e, dentro do
+       * modal, empurrava a coluna de valores pra fora da vista. */
+      var lin=function(rot,val,cls){
+        return '<div style="display:flex;justify-content:space-between;gap:14px;align-items:baseline;'+
+          'padding:7px 0;border-bottom:1px solid var(--line-2)'+(cls==='nota'?';color:var(--muted)':'')+'">'+
+          '<span>'+rot+'</span><span class="mono" style="text-align:right;white-space:nowrap">'+val+'</span></div>';
+      };
+      alvo.innerHTML=
+        lin('Período',prev.semanas+' semana(s) · '+brDate(prev.ini)+' a '+brDate(prev.fim))+
+        lin(escAttr(nomeC),fmtBR(cC)+' cargas → <b>'+fmtBR(vC)+'</b> '+escAttr(SERV[siC]?SERV[siC].u:''))+
+        lin(escAttr(nomeA),fmtBR(cA)+' cargas → <b>'+fmtBR(vA)+'</b> '+escAttr(SERV[siA]?SERV[siA].u:''))+
+        lin('Bota-fora em espera e outros destinos (não entram)',fmtBR(prev.cargas.bf)+' + '+fmtBR(prev.cargas.outros)+' cargas','nota')+
+        lin('Lançamentos a gravar','<b>'+prev.itens.length+'</b>')+
+        (nao.length?('<div class="banner" style="margin-top:10px;color:var(--warn)"><div>Sem lote correspondente — estas linhas <b>não</b> serão gravadas: '+
+          nao.slice(0,12).map(function(k){ return escAttr(k)+' ('+fmtBR(prev.semLote[k])+' cargas)'; }).join(' · ')+
+          (nao.length>12?(' … e mais '+(nao.length-12)):'')+'</div></div>'):'')+
+        (prev.semData?('<div class="note" style="margin-top:8px">'+prev.semData+' linha(s) sem data válida foram ignoradas.</div>'):'')+
+        '<div class="banner" style="margin-top:10px;color:var(--crit)"><div>Isto <b>apaga</b> os '+apagar+' lançamento(s) de produção que existem hoje de <b>'+escAttr(nomeC)+'</b> e <b>'+escAttr(nomeA)+'</b> nesta obra — inclusive os que vieram do informe de produção — e grava os '+prev.itens.length+' acima no lugar. '+
+          'Depois disso, rodar "Atualizar realizado das estacas" traz o informe de volta por cima destes dois serviços.</div></div>';
+      ok.disabled=!prev.itens.length;
+    }
+    ['#cgM3','#cgCorte','#cgAterro'].forEach(function(s){
+      back.querySelector(s).addEventListener('change',pinta);
+    });
+    back.querySelector('#cgOk').addEventListener('click',async function(){
+      if(!prev||prev.erro||!prev.itens.length)return;
+      var m3=+back.querySelector('#cgM3').value||CARGAS_M3_PADRAO;
+      var siC=+back.querySelector('#cgCorte').value, siA=+back.querySelector('#cgAterro').value;
+      if(siC===siA){ alert('Corte e aterro precisam ser serviços diferentes.'); return; }
+      var ok=back.querySelector('#cgOk');
+      ok.disabled=true; ok.textContent='Gravando…';
+      try{
+        var n=await cargasGravar(prev,m3,siC,siA);
+        fecha(); window._prodMode='realizado'; renderProd();
+        toast(n+' lançamento(s) gravado(s).');
+      }catch(e){
+        alert('Falha ao gravar: '+((e&&e.message)||e));
+        ok.disabled=false; ok.textContent='Substituir e gravar';
+      }
+    });
+    pinta();
+  }
+  async function cargasGravar(prev,m3,siCorte,siAterro){
+    var idDe={corte:SERV[siCorte]&&SERV[siCorte].id, aterro:SERV[siAterro]&&SERV[siAterro].id};
+    var ids=[idDe.corte,idDe.aterro].filter(Boolean);
+    if(!ids.length)throw new Error('Serviço de corte ou aterro não encontrado.');
+    var ups=[];
+    prev.itens.forEach(function(it){
+      var sid=idDe[it.tipo]; if(!sid)return;
+      var loteId=(window._LOTIDS||[])[it.li]; if(!loteId)return;
+      ups.push({id:newUuid(),obra_id:selectedObra.id,servico_id:sid,lote_id:loteId,
+                data:it.data,quantidade:it.qtd,
+                observacao:fmtBR(it.cargas)+' cargas × '+m3+' m³ (importação de cargas)'});
+    });
+    var del=await SB.from('producao_diaria').delete().eq('obra_id',selectedObra.id).in('servico_id',ids);
+    if(del.error)throw del.error;
+    for(var i=0;i<ups.length;i+=400){
+      var r=await SB.from('producao_diaria').upsert(ups.slice(i,i+400),{onConflict:'id'});
+      if(r.error)throw r.error;
+    }
+    /* O apontamento da estaca aponta pra linha de produção que acabou de ser apagada (o banco
+     * zera o vínculo sozinho, FK "on delete set null"). O espelho em memória precisa zerar
+     * junto, senão "Atualizar realizado das estacas" tentaria atualizar um id que não existe
+     * mais e recriaria a linha sem ninguém pedir. */
+    Object.keys(ESTACA_AVANCO||{}).forEach(function(loteId){
+      var m=ESTACA_AVANCO[loteId]||{};
+      Object.keys(m).forEach(function(k){
+        if(m[k]&&ids.indexOf(k.split('::')[1])>=0)m[k].prodId=null;
+      });
+    });
+    window.PROD_LIST=(window.PROD_LIST||[])
+      .filter(function(r){ return ids.indexOf(r.servId)<0; })
+      .concat(ups.map(function(u){
+        return {id:u.id,data:u.data,servId:u.servico_id,loteId:u.lote_id,qtd:u.quantidade};
+      }));
+    return ups.length;
+  }
+
+  /* ---------------- Quadro do realizado: semana × lote, pintado pelo que ACONTECEU ----------
+   * A matriz de apontamento é desenhada pelo PLANO — a barra está onde o cronograma previu, e o
+   * realizado só preenche o número dentro dela. Aqui é o contrário: a célula existe porque houve
+   * produção, e a intensidade da cor carrega o volume da semana. É a leitura de obra: onde a
+   * frente andou, quanto, e em que semana. */
+  function corComAlfa(hex,a){
+    var h=String(hex||'#64748b').replace('#','');
+    if(h.length===3)h=h.charAt(0)+h.charAt(0)+h.charAt(1)+h.charAt(1)+h.charAt(2)+h.charAt(2);
+    var r=parseInt(h.slice(0,2),16)||0,g=parseInt(h.slice(2,4),16)||0,b=parseInt(h.slice(4,6),16)||0;
+    return 'rgba('+r+','+g+','+b+','+a+')';
+  }
+  /** {dados:{segunda::li::si → qtd}, semanas:[iso…] (recente→antiga), lotes:[li…],
+   *   servicos:[si…], maxPorServico:{si→qtd}, totalSemana:{segunda::si→qtd},
+   *   totalLote:{li::si→qtd}} */
+  function realizadoQuadro(){
+    var idxS={}; SERV.forEach(function(sv,i){ idxS[sv.id]=i; });
+    var lotIds=window._LOTIDS||[];
+    var dados={}, usaLote={}, usaSvc={}, maxS={}, totSem={}, totLote={}, ini='', fim='';
+    (window.PROD_LIST||[]).forEach(function(r){
+      var li=lotIds.indexOf(r.loteId); if(li<0)return;
+      var si=idxS[r.servId]; if(si==null||TC_HIDDEN_SVC[si])return;
+      var q=+r.qtd||0; if(!(q>0))return;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(r.data||''))return;
+      var seg=mondayOfIso(r.data);
+      var k=seg+'::'+li+'::'+si;
+      dados[k]=(dados[k]||0)+q;
+      usaLote[li]=1; usaSvc[si]=1;
+      totSem[seg+'::'+si]=(totSem[seg+'::'+si]||0)+q;
+      totLote[li+'::'+si]=(totLote[li+'::'+si]||0)+q;
+      if(!ini||seg<ini)ini=seg;
+      if(!fim||seg>fim)fim=seg;
+    });
+    Object.keys(dados).forEach(function(k){
+      var si=+k.split('::')[2];
+      if(!(maxS[si]>=dados[k]))maxS[si]=dados[k];
+    });
+    var semanas=[];
+    if(ini&&fim){
+      var d=new Date(fim+'T00:00:00'), lim=new Date(ini+'T00:00:00'), guard=0;
+      while(d>=lim&&guard++<800){ semanas.push(d.toISOString().slice(0,10)); d.setDate(d.getDate()-7); }
+    }
+    return {dados:dados,semanas:semanas,
+            lotes:Object.keys(usaLote).map(Number).sort(function(a,b){ return a-b; }),
+            servicos:Object.keys(usaSvc).map(Number).sort(function(a,b){ return a-b; }),
+            maxPorServico:maxS,totalSemana:totSem,totalLote:totLote};
+  }
+  function realizadoQuadroHTML(){
+    var Q=realizadoQuadro();
+    if(!Q.semanas.length){
+      return '<div class="card"><div class="note">Nenhuma produção lançada ainda. Use "↥ Importar cargas" ou lance pela aba Tempo-Caminho.</div></div>';
+    }
+    var hoje=todayISO();
+    function faixa(si,q,titulo){
+      var sv=SERV[si], mx=Q.maxPorServico[si]||1;
+      var a=0.25+0.75*Math.min(1,q/mx);
+      var cor=corComAlfa(svcColor(sv),a);
+      return '<div class="rq-faixa" style="background:'+cor+';color:'+(a>0.55?pickFont(svcColor(sv)):'var(--ink)')+'" title="'+escAttr(titulo)+'">'+fmtBR(q)+'</div>';
+    }
+    var th='<th>Semana</th><th class="rq-tot">Total</th>'+
+      Q.lotes.map(function(li){ return '<th class="lot">'+escAttr(LOTS[li])+'</th>'; }).join('');
+    // linha de topo: total do período, por serviço
+    var topo='<tr class="rq-topo"><td class="wk">Total do período</td>'+
+      '<td class="rq-tot">'+Q.servicos.map(function(si){
+        var t=0; Q.lotes.forEach(function(li){ t+=Q.totalLote[li+'::'+si]||0; });
+        return t>0?faixa(si,t,SERV[si].n+' — total do período'):'';
+      }).join('')+'</td>'+
+      Q.lotes.map(function(li){
+        return '<td>'+Q.servicos.map(function(si){
+          var t=Q.totalLote[li+'::'+si]||0;
+          return t>0?faixa(si,t,SERV[si].n+' · '+LOTS[li]+' — total do período'):'';
+        }).join('')+'</td>';
+      }).join('')+'</tr>';
+    var corpo=Q.semanas.map(function(seg){
+      var fimSem=new Date(seg+'T00:00:00'); fimSem.setDate(fimSem.getDate()+6);
+      var atual=(hoje>=seg&&hoje<=fimSem.toISOString().slice(0,10));
+      var rot=rotSem(new Date(seg+'T00:00:00'));
+      return '<tr'+(atual?' class="rq-hoje"':'')+'><td class="wk"><b>'+fmtDate(new Date(seg+'T00:00:00'))+'</b>'+
+        '<span class="rq-sem">'+rot+(atual?' · atual':'')+'</span></td>'+
+        '<td class="rq-tot">'+Q.servicos.map(function(si){
+          var t=Q.totalSemana[seg+'::'+si]||0;
+          return t>0?faixa(si,t,SERV[si].n+' — total da semana '+rot):'';
+        }).join('')+'</td>'+
+        Q.lotes.map(function(li){
+          return '<td>'+Q.servicos.map(function(si){
+            var q=Q.dados[seg+'::'+li+'::'+si]||0;
+            return q>0?faixa(si,q,SERV[si].n+' · '+LOTS[li]+' · '+rot+' — '+fmtBR(q)+' '+SERV[si].u):'';
+          }).join('')+'</td>';
+        }).join('')+'</tr>';
+    }).join('');
+    var legenda='<div class="rq-leg">'+Q.servicos.map(function(si){
+      return '<span class="rq-legit"><i style="background:'+svcColor(SERV[si])+'"></i>'+escAttr(SERV[si].n)+'</span>';
+    }).join('')+'<span class="note" style="margin:0">Quanto mais forte a cor, maior o volume na semana.</span></div>';
+    return legenda+'<div class="tc-wrap" style="max-height:72vh"><table class="rq"><thead><tr>'+th+'</tr></thead>'+
+      '<tbody>'+topo+corpo+'</tbody></table></div>';
+  }
   async function applyBulkAvanco(li){
     var loteId=(window._LOTIDS||[])[li]; if(!loteId)return;
     var fromInp=document.querySelector('[data-bulkfrom="'+li+'"]'), toInp=document.querySelector('[data-bulkto="'+li+'"]');
@@ -8016,8 +8401,11 @@
      * Tempo-Caminho que se olha pro que falta preencher. Agora ele fica ao lado das abas,
      * nas três. */
     var tabs='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">'+
-      '<div class="subtabs" style="margin:0">'+[['lista','Lista'],['tc','Tempo-Caminho'],['matriz','Matriz de estacas']].map(function(t){return '<button class="subtab'+(window._prodMode===t[0]?' active':'')+'" data-pmode="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>'+
-      '<button class="btn" id="estRealBtnTop" title="Preenche o realizado das estacas que já têm data de término — é o que traz o retroativo do informe de produção pra cá">↻ Puxar realizado das estacas</button>'+
+      '<div class="subtabs" style="margin:0">'+[['lista','Lista'],['tc','Tempo-Caminho'],['realizado','Realizado'],['matriz','Matriz de estacas']].map(function(t){return '<button class="subtab'+(window._prodMode===t[0]?' active':'')+'" data-pmode="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn" id="estCargasBtn" title="Planilha semanal de cargas por km (corte, aterro, bota-fora): vira o realizado de corte e aterro, cargas vezes os m3 do caminhão">↥ Importar cargas</button>'+
+        '<button class="btn" id="estRealBtnTop" title="Preenche o realizado das estacas que já têm data de término — é o que traz o retroativo do informe de produção pra cá">↻ Puxar realizado das estacas</button>'+
+      '</div>'+
       '</div>';
     var content='';
     if(window._prodMode==='lista'){
@@ -8041,6 +8429,10 @@
         'o número que aparece na célula é o que já foi <b>apontado</b>, não o previsto. Clique numa célula pra lançar — inclusive nas <b>vazias</b>, pra registrar produção que não estava planejada; '+
         'numa célula que já tem barra, o <b>+</b> na borda abre o lançamento de outro serviço.</div>'+
         matrixTableHTML(false,null,{apontar:true,real:realSem});
+    } else if(window._prodMode==='realizado'){
+      content='<div class="banner" style="margin-bottom:12px"><div>Quadro do <b>realizado</b>: linha é a semana, coluna é o lote, e a célula existe porque houve produção — '+
+        'não porque estava planejada. Cada faixa é um serviço; a cor fica mais forte quanto maior o volume da semana. '+
+        'Os serviços escondidos na matriz Tempo-Caminho também ficam de fora daqui.</div></div>'+realizadoQuadroHTML();
     } else { content=estacasHTML(); }
     root.innerHTML=tabs+content;
     if(window._prodMode==='tc'){
@@ -8065,6 +8457,8 @@
     root.querySelectorAll('[data-pmode]').forEach(function(b){b.addEventListener('click',function(){window._prodMode=b.getAttribute('data-pmode');renderProd();});});
     var rbTop=document.getElementById('estRealBtnTop');
     if(rbTop)rbTop.addEventListener('click',atualizarRealizadoDasEstacas);
+    var cgTop=document.getElementById('estCargasBtn');
+    if(cgTop)cgTop.addEventListener('click',importarCargasArquivo);
     var add=document.getElementById('pdAdd');
     if(add)add.addEventListener('click',async function(){
       if(!selectedObra)return;
