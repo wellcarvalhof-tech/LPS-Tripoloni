@@ -355,6 +355,10 @@
   .tcm-row{display:flex;min-height:28px;width:100%}
   .tcm-seg{flex:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:"IBM Plex Mono",monospace;position:relative;padding:2px 3px;cursor:grab;touch-action:none}
   .tcm-seg:active{cursor:grabbing}
+  /* Nome do servico dentro da barra: alinhado a esquerda e cortado com reticencias — nome
+     longo numa celula estreita nao pode alargar a coluna nem vazar por cima da vizinha. */
+  .tcm-seg.tcm-nome{justify-content:flex-start;padding-left:4px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;line-height:1.9}
+  .print-page .tcm-seg.tcm-nome{line-height:1.5}
   /* Célula de apontamento: esmaecida enquanto ninguém lançou, cheia quando já tem produção. */
   .tcm-seg.apont{cursor:cell;transition:opacity .12s}
   .tcm-seg.apont:hover{opacity:1!important;box-shadow:inset 0 0 0 2px #fff}
@@ -10324,6 +10328,25 @@
   function rgb2hsl(r,g,b){r/=255;g/=255;b/=255;var mx=Math.max(r,g,b),mn=Math.min(r,g,b),h=0,s=0,l=(mx+mn)/2;if(mx!==mn){var d=mx-mn;s=l>0.5?d/(2-mx-mn):d/(mx+mn);if(mx===r)h=(g-b)/d+(g<b?6:0);else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h/=6;}return [h,s,l];}
   function hsl2rgb(h,s,l){var r,g,b;if(s===0){r=g=b=l;}else{var q=l<0.5?l*(1+s):l+s-l*s,p=2*l-q,f=function(p,q,t){if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p;};r=f(p,q,h+1/3);g=f(p,q,h);b=f(p,q,h-1/3);}return [r*255,g*255,b*255];}
   function teamColor(base,team,total){if(total<=1)return base;var rgb=hx2rgb(base),hsl=rgb2hsl(rgb[0],rgb[1],rgb[2]);var range=0.36,t=(team-1)/(total-1),off=t*range-range/2;var nl=Math.max(0.12,Math.min(0.88,hsl[2]+off));var o=hsl2rgb(hsl[0],hsl[1],nl);return rgb2hx(o[0],o[1],o[2]);}
+  /** Siglas curtas dos servicos, pras celulas estreitas demais pro nome inteiro.
+   *  Iniciais das palavras de peso ("Terraplenagem - Corte 1a categoria" -> "TC"); numero e
+   *  palavra de ligacao ficam de fora, senao "1a" viraria inicial. Siglas iguais ganham um
+   *  numero no fim: "Corte 1a cat" e "Corte 3a cat" nao podem virar o mesmo rotulo. */
+  function svcSiglas(){
+    var ignora={DE:1,DA:1,DO:1,DAS:1,DOS:1,E:1,A:1,O:1,EM:1,COM:1,'P/':1};
+    var base=SERV.map(function(sv){
+      var pal=String(sv.n||'').replace(/\(.*?\)/g,' ')
+        .split(/[\s\-–—\/.,]+/)
+        .filter(function(w){ return w&&/^[A-Za-zÀ-ſ]/.test(w)&&!ignora[w.toUpperCase()]; });
+      var sig=pal.slice(0,2).map(function(w){ return w.charAt(0).toUpperCase(); }).join('');
+      return sig||String(sv.n||'?').slice(0,2).toUpperCase();
+    });
+    var vistos={};
+    return base.map(function(sig){
+      vistos[sig]=(vistos[sig]||0)+1;
+      return vistos[sig]>1?(sig+vistos[sig]):sig;
+    });
+  }
   function teamLabel(serviceName,team){
     var words=String(serviceName||'').replace(/\(.*?\)/g,' ').split(/[\s\-\/]+/).filter(Boolean).slice(0,2);
     var initials=words.map(function(w){return w.charAt(0).toUpperCase();}).join('');
@@ -11761,12 +11784,12 @@
    *  equipe — estilos de .print-page), num elemento fora da tela. Medir a matriz da tela daria
    *  uma altura maior que a real e a escala sairia menor do que podia.
    *  A medida NÃO depende do papel — por isso dá pra medir uma vez e testar vários tamanhos. */
-  function pdfMedeMatriz(allIdxs,segsAll){
+  function pdfMedeMatriz(allIdxs,segsAll,semQtd){
     allIdxs=allIdxs||viewLotIdxs(); segsAll=segsAll||buildSchedule();
     var probe=document.createElement('div');
     probe.className='print-page';
     probe.style.cssText='position:absolute;left:-100000px;top:0;visibility:hidden;width:max-content';
-    probe.innerHTML=matrixTableCore(true,allIdxs,segsAll,{compacto:true});
+    probe.innerHTML=matrixTableCore(true,allIdxs,segsAll,{compacto:true,semQtd:!!semQtd});
     document.body.appendChild(probe);
     var ptable=probe.querySelector('table');
     var naturalH=ptable.offsetHeight;
@@ -12082,7 +12105,7 @@
    *  "Sob medida" continua existindo: uma página só, do tamanho exato da matriz, pra plotter. */
   function exportPdfDialogo(){
     if(!LOTS.length||!SERV.length){ exportPdf('a4'); return; }
-    var P=pdfPapelAtual(), M=null;
+    var P=pdfPapelAtual(), M=null, Msem=null;
     function cm(mm){ return (mm/10).toFixed(1).replace('.',','); }
     var opts=PDF_PAPEIS.map(function(x){
       return '<option value="'+x.id+'"'+(P.id===x.id?' selected':'')+'>'+x.n+' — '+cm(x.w)+' × '+cm(x.h)+' cm</option>';
@@ -12112,9 +12135,14 @@
         '<label style="'+lab+'" id="pdfMargLab">Margem</label>'+
         '<div style="font-size:12.5px"><input class="inp" id="pdfMarg" type="number" min="0" max="40" step="1" value="'+(P.margem==null?10:P.margem)+'" style="width:96px"> mm</div>'+
         '<label style="'+lab+'" id="pdfResLab">Conteúdo</label>'+
-        '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer" id="pdfResBox">'+
-          '<input type="checkbox" id="pdfResumo"'+(P.resumo?' checked':'')+'>'+
-          'Incluir o quadro-resumo dos serviços (sai depois da matriz, em folha à parte)</label>'+
+        '<div id="pdfResBox" style="display:flex;flex-direction:column;gap:6px">'+
+          '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer">'+
+            '<input type="checkbox" id="pdfResumo"'+(P.resumo?' checked':'')+'>'+
+            '<span>Incluir o quadro-resumo dos serviços (sai depois da matriz, em folha à parte)</span></label>'+
+          '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer">'+
+            '<input type="checkbox" id="pdfSemQtd"'+(P.semQtd?' checked':'')+'>'+
+            '<span>Sem quantidades — a barra leva o <b>nome do serviço</b> no lugar do número</span></label>'+
+        '</div>'+
         '<label style="'+lab+'" id="pdfEscLab">Escala</label>'+
         '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">'+
           '<select class="inp" id="pdfEscM" style="width:180px">'+
@@ -12142,6 +12170,7 @@
       var id=q('pdfTam').value;
       var o={id:id,orient:ori,margem:Math.max(0,Math.min(40,+q('pdfMarg').value||0)),
         resumo:q('pdfResumo').checked,
+        semQtd:q('pdfSemQtd').checked,
         escala:(q('pdfEscM').value==='fixa')?Math.max(10,Math.min(200,+q('pdfEscV').value||100)):'auto'};
       if(id==='custom'){
         // Guardado sempre em retrato (menor x maior), igual aos papéis da tabela: quem decide
@@ -12154,7 +12183,8 @@
     }
     function atualiza(){
       var o=lePapel(), unica=(o.id==='unica'), cust=(o.id==='custom');
-      ['pdfOriLab','pdfOri','pdfMargLab','pdfEscLab','pdfEscM','pdfEscV','pdfResLab','pdfResBox'].forEach(function(k){
+      // "Sem quantidades" vale nos dois formatos, entao o bloco Conteudo nao esmaece.
+      ['pdfOriLab','pdfOri','pdfMargLab','pdfEscLab','pdfEscM','pdfEscV'].forEach(function(k){
         var e=q(k); if(e)e.style.opacity=unica?'.4':'1';
       });
       q('pdfMarg').disabled=false;
@@ -12170,7 +12200,10 @@
           'pro diálogo de impressão (ou pra plotter) — serve pra "ajustar à página".';
         return;
       }
-      if(!M)M=pdfMedeMatriz();
+      /* A medida depende de "sem quantidades": sem o rodape de quantidades a matriz fica
+       * mais baixa. Uma medida por opção, em vez de uma so reaproveitada nas duas. */
+      if(o.semQtd){ if(!Msem)Msem=pdfMedeMatriz(null,null,true); M=Msem; }
+      else { if(!M||M===Msem)M=pdfMedeMatriz(null,null,false); }
       var qb=pdfQuebras(M);
       var mm=(ori==='retrato')?{w:o.w,h:o.h}:{w:o.h,h:o.w};
       var pxPerMm=96/25.4;
@@ -12191,7 +12224,7 @@
     }
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
-    ['pdfTam','pdfMarg','pdfEscM','pdfEscV','pdfCW','pdfCH','pdfResumo'].forEach(function(k){
+    ['pdfTam','pdfMarg','pdfEscM','pdfEscV','pdfCW','pdfCH','pdfResumo','pdfSemQtd'].forEach(function(k){
       q(k).addEventListener('change',atualiza); q(k).addEventListener('input',atualiza);
     });
     q('pdfOri').addEventListener('click',function(e){
@@ -12200,7 +12233,7 @@
     });
     q('pdfCancel').addEventListener('click',fecha);
     q('pdfQbReset').addEventListener('click',function(){
-      var qb=pdfQuebras(M||(M=pdfMedeMatriz()));
+      var qb=pdfQuebras(M||(M=pdfMedeMatriz(null,null,lePapel().semQtd)));
       qb.lotes=[]; qb.semanas=[]; atualiza();
     });
     q('pdfOk').addEventListener('click',function(){
@@ -12306,7 +12339,7 @@
         if(foot)foot.innerHTML='';   // o resumo entra na mesma folha; não pode sair de novo
         mat.innerHTML='<div class="print-page" id="pgUnica">'+
           '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span id="pgUnicaInfo">Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+'</span></div>'+
-          matrixTableCore(true,allIdxs,segsAll,{compacto:true})+
+          matrixTableCore(true,allIdxs,segsAll,{compacto:true,semQtd:!!P.semQtd})+
           (resumoHTML?('<div style="margin-top:8px">'+resumoHTML+'</div>'):'')+
         '</div>';
         var antes=mat.style.cssText;
@@ -12344,7 +12377,7 @@
       estP.id='pdfPageSize';
       estP.textContent='@media print{@page{size:'+folha.w+'mm '+folha.h+'mm;margin:'+margemMM+'mm}}';
       document.head.appendChild(estP);
-      var M=pdfMedeMatriz(allIdxs,segsAll);
+      var M=pdfMedeMatriz(allIdxs,segsAll,!!P.semQtd);
       var plano=pdfPlanoFolhas(M,pageW,pageH,(P.escala==='auto'||!P.escala)?null:P.escala,pdfQuebras(M));
       var chunks=plano.chunks, faixas=plano.faixas, scale=plano.scale;
       var folhasHTML=[], total=chunks.length*faixas.length, n=0;
@@ -12359,7 +12392,7 @@
           folhasHTML.push('<div class="print-page'+(n<total?' brk':'')+'">'+
             '<div class="print-page-head"><b>'+nome+' — Rascunho</b><span>Gerado em '+gerado+' · '+tw+' semana'+(tw===1?'':'s')+faixa+'</span></div>'+
             '<div class="print-zoom" style="zoom:'+scale+'">'+
-              matrixTableCore(true,chunk,segsAll,{wIni:fx.de,wFim:fx.ate,semSumario:!fx.ultima,compacto:true})+'</div></div>');
+              matrixTableCore(true,chunk,segsAll,{wIni:fx.de,wFim:fx.ate,semSumario:!fx.ultima,compacto:true,semQtd:!!P.semQtd})+'</div></div>');
         });
       });
       mat.innerHTML=folhasHTML.join('');
@@ -16409,6 +16442,7 @@
     }
     /* Onde há estudo de linha de balanço, a célula mostra a ETAPA da semana em vez da
      * quantidade. Montado uma vez aqui: por célula seria recalcular o estudo inteiro. */
+    var siglas=opts.semQtd?svcSiglas():null;
     var lbSem=null;
     try{ lbSem=lbEtapasRelativas(); }catch(e){ lbSem=null; }
     var temLB=lbSem&&Object.keys(lbSem).length>0;
@@ -16494,9 +16528,20 @@
           var teamTag=sc.isStart?'<span class="tcm-team">'+teamLabel(sc.sg.name,sc.sg.team)+'</span>':'';
           var adj=sc.sg.adjusted?';outline:2px solid #fff;outline-offset:-2px':'';
           var etp=lbTexto(sc.sg,sc.w);
-          return '<div class="tcm-seg'+(etp?' tcm-etapa':'')+'" data-li="'+sc.sg.li+'" data-si="'+sc.sg.si+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
+          /* "Sem quantidades": a celula leva o NOME do servico no lugar do numero, e so na
+           * primeira semana do segmento — repetir o nome em cada semana de uma barra de 15
+           * semanas enche a folha de ruido e nao acrescenta nada. A cor mais a legenda
+           * seguram a leitura no meio da barra, que e como um Gantt se le. */
+          var nome=opts.semQtd&&!etp&&sc.isStart;
+          /* Dois servicos na mesma semana dividem a largura da celula, e ai o nome inteiro sai
+           * cortado em "Terrapl..." — que nao diz nada. Sozinho na celula vai o nome; dividindo,
+           * vai a sigla, que cabe. A cor e a legenda fecham a leitura nos dois casos. */
+          var rotulo=etp||(opts.semQtd
+            ? (sc.isStart?escAttr(subs.length>1?(siglas[sc.sg.si]||''):sc.sg.name):'')
+            : fmtBR(sc.qty));
+          return '<div class="tcm-seg'+(etp?' tcm-etapa':'')+(nome?' tcm-nome':'')+'" data-li="'+sc.sg.li+'" data-si="'+sc.sg.si+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
             (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+adj+'" title="'+sc.sg.name+(etp?(' — '+etp+' (linha de balanço)'):'')+' — Equipe '+sc.sg.team+(sc.isEnd?' (saldo)':'')+(sc.sg.adjusted?' (ajustado)':'')+(sc.sg.overTarget?' — previsão de término depois da semana alvo':'')+'">'+
-            grip+(etp||fmtBR(sc.qty))+badge+overBadge+teamTag+'</div>';
+            grip+rotulo+badge+overBadge+teamTag+'</div>';
         }).join('');
         tds+='<td class="cell" data-lot="'+li+'"><div class="tcm-row">'+inner+'</div></td>';
       }
@@ -16504,7 +16549,8 @@
       var cls=[(f<0.999?'tcm-rainrow':''),(ehHoje?'tcm-hoje':'')].filter(Boolean).join(' ');
       body+='<tr'+(cls?' class="'+cls+'"':'')+' data-week="'+w+'"><td class="dt">'+fmtDate(d)+'</td><td class="wk">'+rotSem(d)+(ehHoje?'<span class="tcm-hojetag">hoje</span>':'')+rainBadge+'</td>'+tds+'</tr>';
     }
-    if(withSummary&&!opts.semSumario){
+    // O quadro de quantidades por lote no rodape tambem e quantidade: sai junto.
+    if(withSummary&&!opts.semSumario&&!opts.semQtd){
       body+=SERV.map(function(s,si){
         if(TC_HIDDEN_SVC[si])return '';
         var hex=svcColor(s);
