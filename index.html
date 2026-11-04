@@ -10335,6 +10335,9 @@
   function svcSiglas(){
     var ignora={DE:1,DA:1,DO:1,DAS:1,DOS:1,E:1,A:1,O:1,EM:1,COM:1,'P/':1};
     var base=SERV.map(function(sv){
+      /* O codigo de controle do servico (CBUQ, BGT, PAV...) e a sigla que a obra ja usa.
+       * Ele vem primeiro; as iniciais do nome so entram quando nao ha codigo cadastrado. */
+      if(sv.codigo&&String(sv.codigo).trim())return String(sv.codigo).trim().toUpperCase().slice(0,6);
       var pal=String(sv.n||'').replace(/\(.*?\)/g,' ')
         .split(/[\s\-–—\/.,]+/)
         .filter(function(w){ return w&&/^[A-Za-zÀ-ſ]/.test(w)&&!ignora[w.toUpperCase()]; });
@@ -11547,6 +11550,116 @@
 
   /** Linhas da matriz visual (semana × lote), na mesma ordem/formato mostrado na tela e no PDF. */
   function argb(hex){return 'FF'+String(hex||'#666666').replace('#','').toUpperCase();}
+  /** Aba "Serviços por semana": a matriz sem quantidade nenhuma — a célula leva a SIGLA do
+   *  serviço (o código de controle cadastrado: CBUQ, BGT, PAV…), e dois serviços na mesma
+   *  semana viram "CT+AT". É o quadro que se imprime e se pendura na parede: o que acontece
+   *  em cada lote, em cada semana, sem número no meio.
+   *
+   *  Diferenças de propósito para a aba "Matriz Tempo-Caminho", que fica como está:
+   *  lá o número é o assunto; aqui o assunto é a sequência. */
+  function abaServicosPorSemana(wb,nome,segs,calRows,gerado){
+    var siglas=svcSiglas();
+    var cell={};
+    segs.forEach(function(sg){
+      for(var i=0;i<sg.dur;i++){
+        var w=sg.start+i, k=w+'::'+sg.li;
+        if(!(sg.wq[i]>0))continue;
+        (cell[k]||(cell[k]=[])).push(sg);
+      }
+    });
+    var ws=wb.addWorksheet('Serviços por semana',{views:[{state:'frozen',xSplit:1,ySplit:1}]});
+    var periods=calRainPeriods(), wfCache={};
+
+    var cabeca=ws.addRow(['Semana ↓ / Lote →'].concat(LOTS));
+    cabeca.height=20;
+    cabeca.eachCell(function(c){
+      c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+      c.alignment={horizontal:'center',vertical:'middle'};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F3864'}};
+      c.border={bottom:{style:'thin',color:{argb:'FF8899AA'}}};
+    });
+
+    var borda={top:{style:'thin',color:{argb:'FFD9D9D9'}},left:{style:'thin',color:{argb:'FFD9D9D9'}},
+               bottom:{style:'thin',color:{argb:'FFD9D9D9'}},right:{style:'thin',color:{argb:'FFD9D9D9'}}};
+    /* Da semana mais nova pra mais velha, como na tela: o que interessa olhar primeiro é o que
+     * está por vir, não o que já passou. */
+    for(var idx=calRows.length-1;idx>=0;idx--){
+      var entry=calRows[idx], d=entry.date;
+      var ehHoje=ehSemanaDeHoje(d);
+      var rot, parada=entry.isHoliday;
+      // dd/mm basta: o ano ja vem no rotulo da semana ("S45-26"), e a coluna fica estreita
+      var dm=fmtDate(d).slice(0,5);
+      if(parada)rot=rotSem(d)+' · '+dm+' ⏸';
+      else{
+        var f=weekFactor(entry.working,periods,wfCache);
+        rot=rotSem(d)+' · '+dm+(f<0.999?' ☁':'')+(ehHoje?' ◄':'');
+      }
+      var row=ws.addRow([rot].concat(LOTS.map(function(){ return ''; })));
+      row.height=17;
+      var cRot=row.getCell(1);
+      cRot.font={bold:true,size:9,color:{argb:ehHoje?'FF7F2033':'FF1F3864'}};
+      cRot.alignment={horizontal:'left',vertical:'middle',indent:1};
+      cRot.fill={type:'pattern',pattern:'solid',
+                 fgColor:{argb:ehHoje?'FFF8CBD4':(parada?'FFEDEDED':'FFDCE6F1')}};
+      cRot.border=borda;
+      for(var li=0;li<LOTS.length;li++){
+        var c=row.getCell(li+2);
+        c.border=borda;
+        if(parada)continue;
+        var subs=cell[entry.working+'::'+li];
+        if(!subs||!subs.length)continue;
+        /* Um serviço com duas equipes no mesmo lote e semana apareceria duas vezes ("AT+AT").
+         * A sigla é do serviço, não da equipe: uma vez só. */
+        var vistos={}, lista=[];
+        subs.forEach(function(sg){
+          var sig=siglas[sg.si]||'?';
+          if(vistos[sig])return;
+          vistos[sig]=1; lista.push(sig);
+        });
+        var hex=subs[0].color;
+        c.value=lista.join('+');
+        c.fill={type:'pattern',pattern:'solid',fgColor:{argb:argb(hex)}};
+        c.font={bold:true,size:9,color:{argb:argb(pickFont(hex))}};
+        c.alignment={horizontal:'center',vertical:'middle',shrinkToFit:true};
+      }
+    }
+
+    // Rodapé repetindo os lotes: numa matriz com 40 semanas, quem rola até embaixo perde o
+    // cabeçalho de vista mesmo com painel congelado na impressão.
+    ws.addRow([]);
+    var rodape=ws.addRow(['Lote →'].concat(LOTS));
+    rodape.height=18;
+    rodape.eachCell(function(c,i){
+      c.font={bold:true,size:9,color:{argb:i===1?'FF7A4E00':'FF1F3864'}};
+      c.alignment={horizontal:'center',vertical:'middle'};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:i===1?'FFF8D08A':'FFDCE6F1'}};
+      c.border=borda;
+    });
+
+    ws.addRow([]);
+    var legT=ws.addRow(['Legenda']); legT.font={bold:true,size:11};
+    SERV.forEach(function(sv,si){
+      var r=ws.addRow([siglas[si],sv.n+' ('+sv.u+')']);
+      var hex=svcColor(sv);
+      r.getCell(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:argb(hex)}};
+      r.getCell(1).font={bold:true,size:9,color:{argb:argb(pickFont(hex))}};
+      r.getCell(1).alignment={horizontal:'center'};
+      r.getCell(1).border=borda;
+      r.getCell(2).font={size:9};
+    });
+    ws.addRow([]);
+    [nome+' — gerado em '+gerado,
+     'A sigla é o código de controle do serviço; sem código cadastrado, são as iniciais do nome.',
+     '"CT+AT" = dois serviços na mesma semana e no mesmo lote. A cor é a do primeiro.',
+     '☁ = semana com praticabilidade reduzida · ⏸ = semana paralisada · ◄ = semana de hoje.'
+    ].forEach(function(t){
+      var r=ws.addRow([t]); r.font={italic:true,size:8.5,color:{argb:'FF555555'}};
+    });
+
+    ws.getColumn(1).width=15;
+    for(var ci=2;ci<=1+LOTS.length;ci++)ws.getColumn(ci).width=11;
+    return ws;
+  }
   /** Exporta só a matriz visual (Tempo-Caminho) com as mesmas cores/textos da tela e do PDF, mais a legenda. */
   async function exportExcel(){
     if(typeof ExcelJS==='undefined'){alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.');return;}
@@ -11629,6 +11742,10 @@
 
     ws.getColumn(1).width=13; ws.getColumn(2).width=16;
     for(var ci=3;ci<=2+LOTS.length;ci++)ws.getColumn(ci).width=11;
+
+    // Segunda aba: a mesma matriz sem quantidade nenhuma, so com a sigla do servico.
+    try{ abaServicosPorSemana(wb,nome,segs,calRows,gerado); }
+    catch(e){ console.warn('aba de servicos:',e); }
 
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
