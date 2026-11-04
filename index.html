@@ -8181,21 +8181,34 @@
         };
         var abas={c:achaAba('CONTRATUAL'),e:achaAba('EXECUTIV'),r:achaAba('REALIZAD')};
         if(!abas.c&&!abas.e&&!abas.r)
-          throw new Error('Não achei as abas das curvas. O arquivo precisa ter abas com "Contratual", "Executivo" e/ou "Realizado" no nome.');
+          throw new Error('Não achei as abas das curvas. Procuro abas com "Contratual", "Executivo" ou "Realizado" no nome.'+
+            '\n\nAbas deste arquivo: '+(wb.SheetNames||[]).join(', '));
         var serie={}, faixa={};
         ['c','e','r'].forEach(function(k){
           if(!abas[k])return;
           var r=histCurvaLeAba(sheetRows(wb.Sheets[abas[k]]));
           if(r){ serie[k]=r.pontos; faixa[k]=r; }
         });
-        if(!Object.keys(serie).length)
-          throw new Error('As abas foram encontradas, mas não achei a linha de resumo com a curva acumulada dentro delas.');
+        if(!Object.keys(serie).length){
+          /* Erro generico aqui custa caro: o arquivo esta na mao do usuario e eu nao. Diz o
+           * que achou em cada aba, pra dar pra ver onde parou sem ter que adivinhar. */
+          var det=['c','e','r'].map(function(k){
+            if(!abas[k])return null;
+            var rr=sheetRows(wb.Sheets[abas[k]]);
+            var pri=(rr[0]||[]).slice(0,4).map(function(x){ return x==null?'(vazio)':String(x).slice(0,14); }).join(' | ');
+            return abas[k]+': '+rr.length+' linha(s), 1a linha = ['+pri+']';
+          }).filter(Boolean);
+          throw new Error('As abas foram encontradas, mas não achei dentro delas a linha "Ano", a "Semana" e a de resumo com a curva acumulada.'+
+            '\n\n'+det.join('\n'));
+        }
         histCurvaDialogo(serie,faixa,abas,file.name);
       }).catch(function(e){ alert('Falha ao ler o arquivo: '+((e&&e.message)||e)); });
     });
   }
-  /** Lê uma aba de curva: linha 0 = ano por coluna, linha 1 = semana, e a primeira linha cujo
-   *  rótulo começa com "Resumo" é a curva acumulada do projeto inteiro. */
+  /** Lê uma aba de curva. A coluna dos rótulos NÃO é assumida: o SheetJS devolve as linhas a
+   *  partir da primeira célula usada da aba, então se a planilha começar em B1 tudo anda uma
+   *  coluna para a esquerda e um índice fixo erra por um. Aqui a coluna do rótulo é descoberta
+   *  procurando "Ano" e "Semana" nas primeiras colunas, e o resto é contado a partir dela. */
   function histCurvaLeAba(rows){
     if(!rows||rows.length<3)return null;
     var num=function(v){
@@ -8206,40 +8219,80 @@
       var f=parseFloat(t);
       return isFinite(f)?f:null;
     };
-    var anos=null, sems=null;
-    for(var i=0;i<Math.min(rows.length,8);i++){
-      var r=rows[i]||[];
-      var rot=estNorm(r[1]);
-      if(rot==='ANO'&&!anos)anos=r;
-      if(rot==='SEMANA'&&!sems)sems=r;
+    var col=-1, anos=null, sems=null;
+    for(var c=0;c<6&&col<0;c++){
+      var a=null,s2=null;
+      for(var i=0;i<Math.min(rows.length,10);i++){
+        var k=estNorm((rows[i]||[])[c]);
+        if(k==='ANO'&&!a)a=rows[i];
+        if(k==='SEMANA'&&!s2)s2=rows[i];
+      }
+      if(a&&s2){ col=c; anos=a; sems=s2; }
     }
-    if(!anos||!sems)return null;
+    if(col<0)return null;
     var idx=-1;
     for(var j=0;j<rows.length;j++){
       var rr=rows[j]||[];
-      if(rr[1]!=null&&estNorm(rr[1]).indexOf('RESUMO')===0){ idx=j; break; }
+      if(rr[col]!=null&&estNorm(rr[col]).indexOf('RESUMO')===0){ idx=j; break; }
     }
     if(idx<0)return null;
     var linha=rows[idx]||[], pontos=[], pri='', ult='', ultV=0, maxV=0;
-    for(var k=2;k<Math.max(anos.length,sems.length);k++){
-      var a=num(anos[k]), sm=num(sems[k]), v=num(linha[k]);
-      if(!a||!sm)continue;
-      var ano=Math.round(a);
+    for(var k2=col+1;k2<Math.max(anos.length,sems.length);k2++){
+      var ano0=num(anos[k2]), sm=num(sems[k2]), v=num(linha[k2]);
+      if(!ano0||!sm)continue;
+      var ano=Math.round(ano0);
       /* A linha de anos da planilha segue sendo arrastada muito depois do fim da obra — chega a
-       * 3031, com zeros embaixo. Ano fora do mundo real nao e dado. */
+       * 3031, com zeros embaixo. Ano fora do mundo real não é dado. */
       if(ano<2000||ano>2100)break;
-      /* Curva acumulada nao desce. Quando o valor cai depois de ja ter subido, acabou o dado de
-       * verdade e comecou o rabo de zeros: parar aqui evita desenhar um despencamento que nao
-       * existe (o contratual chega a 100% e depois vinha uma coluna de 0). */
+      /* Curva acumulada não desce. Quando o valor cai depois de já ter subido, acabou o dado de
+       * verdade e começou o rabo de zeros. */
       if(v!=null&&maxV>1e-9&&v+1e-9<maxV)break;
       if(v!=null&&v>maxV)maxV=v;
       var iso=mondayOfIsoWeek(ano,Math.round(sm));
       pontos.push({iso:iso,v:(v==null?null:v)});
       if(v!=null&&v>1e-9){ if(!pri)pri=iso; ult=iso; ultV=v; }
     }
-    // corta o rabo de pontos sem valor depois do ultimo ponto util
     while(pontos.length&&(pontos[pontos.length-1].v==null||pontos[pontos.length-1].v<=1e-9)&&pri)pontos.pop();
-    return pontos.length?{pontos:pontos,primeiro:pri,ultimo:ult,ultimoValor:ultV}:null;
+    if(!pontos.length)return null;
+    return {pontos:pontos,primeiro:pri,ultimo:ult,ultimoValor:ultV,colRotulo:col,linhaResumo:idx};
+  }
+  /** Pesos (custo) de cada pacote, do MESMO arquivo da curva.
+   *  As abas trazem dois blocos com a mesma lista de pacotes: um em percentual (valores 0..1) e
+   *  outro em dinheiro. Na coluna logo depois do rótulo, o bloco de dinheiro tem o custo total
+   *  do pacote — e é só ele que passa de 1,5, porque percentual nunca passa. É esse o corte.
+   *  A lista se repete (visões por pacote, por macro serviço e por local): vale a primeira. */
+  function pesosLerCurva(rows){
+    if(!rows||!rows.length)return null;
+    var num=function(v){
+      if(typeof v==='number')return isFinite(v)?v:null;
+      if(v==null||v==='')return null;
+      var t=String(v).replace(/[R$\s.]/g,'').replace(',','.');
+      var f=parseFloat(t);
+      return isFinite(f)?f:null;
+    };
+    var melhor=null;
+    for(var c=0;c<6;c++){
+      var itens=[], vistos={}, total=0;
+      for(var i=0;i<rows.length;i++){
+        var r=rows[i]||[];
+        var rot=r[c];
+        if(rot==null||String(rot).trim()==='')continue;
+        var k=estNorm(rot);
+        var v=num(r[c+1]);
+        if(v==null||!(v>1.5))continue;          // percentual nunca passa de 1
+        if(k.indexOf('RESUMO')===0){ if(!total)total=v; continue; }
+        if(k.indexOf('PACOTES:')!==0)continue;
+        var nome=String(rot).replace(/^\s*Pacotes:\s*/i,'').trim();
+        var nk=estNorm(nome);
+        if(vistos[nk])continue;
+        vistos[nk]=1;
+        itens.push({nome:nome,custo:v});
+      }
+      if(itens.length&&(!melhor||itens.length>melhor.itens.length))melhor={itens:itens,total:total,col:c};
+    }
+    if(!melhor||!melhor.itens.length)return null;
+    if(!(melhor.total>0))melhor.itens.forEach(function(x){ melhor.total+=x.custo; });
+    return melhor;
   }
   function histCurvaDialogo(serie,faixa,abas,nomeArq){
     var back=document.createElement('div'); back.className='segmenu-backdrop';
@@ -9878,6 +9931,86 @@
     h.pesos=mapa;
     await salvarHistorico(h);
   }
+  /** Abre a planilha da Curva S, lê o custo de cada pacote e deixa você dizer qual serviço é
+   *  qual. O peso sai do dinheiro: é a mesma régua que a curva da obra usa.
+   *  `aplicar(mapa)` recebe {indiceDoServico: peso} e devolve pro chamador — quem salva é a
+   *  tela de pesos, depois de você conferir. */
+  function pesosImportarArquivo(aplicar){
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var melhor=null, deOnde='';
+        (wb.SheetNames||[]).forEach(function(n){
+          var r=pesosLerCurva(sheetRows(wb.Sheets[n]));
+          if(r&&(!melhor||r.itens.length>melhor.itens.length)){ melhor=r; deOnde=n; }
+        });
+        if(!melhor)throw new Error('Não achei os custos por pacote neste arquivo. Procuro linhas que começam com "Pacotes:" e, na coluna ao lado, o custo em reais.'+
+          '\n\nAbas deste arquivo: '+(wb.SheetNames||[]).join(', '));
+        pesosMapaDialogo(melhor,file.name+' / '+deOnde,aplicar);
+      }).catch(function(e){ alert('Falha ao ler o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function pesosMapaDialogo(lido,fonte,aplicar){
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.style.zIndex='210';   // por cima da tela de pesos, que continua aberta atrás
+    var sel=lido.itens.map(function(it){ return histCasaServico(it.nome); });
+    var opts=function(k){
+      return '<option value="-1"'+(k<0?' selected':'')+'>— não usar —</option>'+
+        SERV.map(function(s,i){ return '<option value="'+i+'"'+(i===k?' selected':'')+'>'+escAttr(s.n)+'</option>'; }).join('');
+    };
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:720px;max-height:90vh;overflow:auto">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Pesos da planilha Curva S</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(fonte)+' · '+lido.itens.length+' pacotes somando '+
+        fmtBR(lido.total)+' — o peso de cada um é a fatia dele nesse total.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px;min-width:0"><thead><tr>'+
+        '<th>Pacote</th><th>Serviço</th><th class="r">Custo</th><th class="r">Peso</th></tr></thead><tbody>'+
+      lido.itens.map(function(it,i){
+        var pc=lido.total>0?(100*it.custo/lido.total):0;
+        return '<tr><td>'+escAttr(it.nome)+'</td>'+
+          '<td><select class="einp" data-pmsel="'+i+'" style="width:150px">'+opts(sel[i])+'</select></td>'+
+          '<td class="r mono">'+fmtBR(it.custo)+'</td>'+
+          '<td class="r mono">'+pc.toFixed(2).replace('.',',')+'%</td></tr>';
+      }).join('')+
+      '</tbody></table></div>'+
+      '<div id="pmResumo" style="margin-top:10px"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="pmCancel">Cancelar</button>'+
+        '<button class="btn primary" id="pmOk">Usar estes pesos</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#pmCancel').addEventListener('click',fecha);
+    function junta(){
+      var por={}, usado=0, fora=[];
+      lido.itens.forEach(function(it,i){
+        var si=sel[i];
+        if(si<0||!SERV[si]){ if(it.custo>0)fora.push(it.nome); return; }
+        por[si]=(por[si]||0)+it.custo; usado+=it.custo;
+      });
+      return {por:por,usado:usado,fora:fora};
+    }
+    function pinta(){
+      var r=junta();
+      var linhas=Object.keys(r.por).map(function(si){
+        return escAttr(SERV[si].n)+' <b>'+(100*r.por[si]/(r.usado||1)).toFixed(2).replace('.',',')+'%</b>';
+      });
+      back.querySelector('#pmResumo').innerHTML=
+        (linhas.length?('<div class="note" style="margin:0">Fica assim: '+linhas.join(' · ')+'</div>'):'<div class="note" style="margin:0">Nenhum pacote ligado ainda.</div>')+
+        (r.fora.length?('<div class="banner" style="margin-top:8px;color:var(--warn)"><div>Fora da conta: '+r.fora.map(escAttr).join(' · ')+
+          '. O peso deles é redistribuído entre os que ficaram — o total sempre fecha 100%.</div></div>'):'');
+      back.querySelector('#pmOk').disabled=!linhas.length;
+    }
+    back.querySelectorAll('[data-pmsel]').forEach(function(el){
+      el.addEventListener('change',function(){ sel[+el.getAttribute('data-pmsel')]=+el.value; pinta(); });
+    });
+    back.querySelector('#pmOk').addEventListener('click',function(){
+      var r=junta(), mapa={};
+      Object.keys(r.por).forEach(function(si){ mapa[si]=100*r.por[si]/(r.usado||1); });
+      fecha();
+      if(aplicar)aplicar(mapa);
+    });
+    pinta();
+  }
   function pesosDialogo(){
     if(!SERV.length){ alert('Cadastre os serviços antes.'); return; }
     var back=document.createElement('div'); back.className='segmenu-backdrop';
@@ -9899,7 +10032,8 @@
       }).join('')+
       '</tbody></table></div>'+
       '<div id="pzSoma" class="note" style="margin-top:10px"></div>'+
-      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
+        '<button class="btn" id="pzPuxar" style="margin-right:auto">↥ Puxar da planilha Curva S</button>'+
         '<button class="btn" id="pzCancel">Cancelar</button>'+
         '<button class="btn" id="pzLimpar">Voltar à quantidade</button>'+
         '<button class="btn primary" id="pzOk">Salvar pesos</button>'+
@@ -9908,6 +10042,17 @@
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     back.querySelector('#pzCancel').addEventListener('click',fecha);
+    back.querySelector('#pzPuxar').addEventListener('click',function(){
+      /* O arquivo preenche os campos; quem salva continua sendo voce, depois de conferir. */
+      pesosImportarArquivo(function(mapa){
+        back.querySelectorAll('[data-peso]').forEach(function(el){
+          var si=el.getAttribute('data-peso');
+          el.value=mapa[si]!=null?(Math.round(mapa[si]*100)/100):'';
+        });
+        pinta();
+        toast('Pesos preenchidos — confira e salve.');
+      });
+    });
     function le(){
       var m={}, soma=0;
       back.querySelectorAll('[data-peso]').forEach(function(el){
