@@ -1121,7 +1121,7 @@
    * montam o app pelo mesmo código. */
   async function sbFetchCadastro(obraId){
     var res=await Promise.all([
-      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco,orcamento,eap').eq('id',obraId).single(),
+      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco,orcamento,eap,historico').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       sbTudo(function(){return SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId).order('id',{ascending:true});}),
@@ -1172,7 +1172,7 @@
     LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
     PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO=''; PROG_LIDO=false;
     MP=[]; MP_LIDO=false; MP_ERRO=''; MP_DET=null; MP_FORM=null; MP_TAB='janela';
-    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
+    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,historico:obra.historico||null,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
   async function sbLoadCadastro(obraId){
     var dados=await sbFetchCadastro(obraId);
@@ -4664,6 +4664,7 @@
       weekSel='<select class="esel" id="cvWeekSel" style="height:28px">'+opts+'</select>';
     }
     return '<div class="cv-compact" id="cvRoot">'+
+    histCartaoHTML(window._curvaSPacote||'')+
     '<div class="cv-cardgrid" id="cvCards" style="margin-bottom:12px"></div>'+
     '<div class="card" style="padding:12px 15px;margin-bottom:14px">'+
       '<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:4px">'+
@@ -8590,6 +8591,8 @@
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
     if(view==='ac-curvas'){
       renderCurvaS();
+      var hiBtn=document.getElementById('histImpBtn');
+      if(hiBtn)hiBtn.addEventListener('click',importarHistoricoArquivo);
       var curveSelEl=document.getElementById('cvCurveSel');
       if(curveSelEl)curveSelEl.addEventListener('change',function(){
         window._curvaSSel=curveSelEl.value==='total'?'total':+curveSelEl.value;
@@ -9229,9 +9232,384 @@
     return weekly;
   }
   /** Converte quantidade semanal em % acumulado por serviço + total, dado o total de cada serviço. */
-  function cumulativePct(weekly,tw,totalByServ,grandTotal){
-    var series={}; SERV.forEach(function(s,si){series[si]=[0];});
-    var totalSeries=[0], accum=SERV.map(function(){return 0;}), grandAccum=0;
+  /* ================= HISTÓRICO ANTERIOR DA OBRA =================
+   *
+   * A obra começou antes de o planejamento desta plataforma existir. As quantidades de
+   * Lotes & Quantidades são o SALDO — o que falta fazer — e sem o histórico as curvas mediam
+   * o avanço contra uma obra que começava do zero no dia em que o plano começou.
+   *
+   * O histórico guarda, por serviço, a quantidade de CONTRATO e a já EXECUTADA até uma data
+   * de corte. Com ele:
+   *   - o denominador das curvas vira o contrato, não o saldo;
+   *   - previsto e realizado partem do patamar que a obra já tinha, em vez de zero;
+   *   - produção lançada com data anterior ao início do plano deixa de sumir: ela entra no
+   *     patamar inicial, em vez de ser descartada pelo mapa de semanas (que só conhece datas
+   *     a partir da semana 1).
+   *
+   * O que ele NÃO faz: mexer em `data_inicio`. Aquela data é a semana 1 do Tempo-Caminho;
+   * recuá-la empurraria todos os segmentos planejados para trás e destruiria o plano.
+   */
+  function histObra(){
+    var h=window._OBRA&&window._OBRA.historico;
+    return (h&&typeof h==='object'&&h.servicos)?h:null;
+  }
+  function histTemDados(){
+    var h=histObra(); if(!h)return false;
+    return Object.keys(h.servicos||{}).some(function(k){
+      var e=h.servicos[k];
+      return e&&((+e.contrato||0)>0||(+e.executado||0)>0);
+    });
+  }
+  /** Data de corte do acumulado. Produção lançada até aqui já está dentro do número
+   *  histórico — contar de novo dobraria o avanço. */
+  function histCorte(){ var h=histObra(); return (h&&h.corte)||''; }
+  /** Total CONTRATADO do serviço, ou null quando a obra não tem histórico importado. */
+  function histContratoServ(si){
+    var h=histObra(); if(!h)return null;
+    var sv=SERV[si]; if(!sv)return null;
+    var e=h.servicos[sv.id]; if(!e)return null;
+    var c=+e.contrato||0;
+    return c>0?c:null;
+  }
+  function histExecutadoServ(si){
+    var h=histObra(); if(!h)return 0;
+    var sv=SERV[si]; if(!sv)return 0;
+    var e=h.servicos[sv.id];
+    return e?(+e.executado||0):0;
+  }
+  /* O histórico é por SERVIÇO, não por lote — não dá pra recortar por lote nem por pacote
+   * contratual. Num relatório filtrado ele ficaria somando a obra inteira dentro de um
+   * recorte, o que daria um avanço maior que o real. Então: com filtro ativo, o histórico
+   * não entra, e a tela avisa. */
+  function histAplicavel(pacote){
+    if(!histTemDados())return false;
+    if(pacote)return false;
+    if(lotViewSet())return false;
+    return true;
+  }
+  function histMotivoDesligado(pacote){
+    if(!histTemDados())return '';
+    if(pacote)return 'pacote';
+    if(lotViewSet())return 'lotes';
+    return '';
+  }
+  /** Quantidade já realizada ANTES da semana 1, por serviço: o acumulado importado mais os
+   *  lançamentos de produção com data anterior ao início do plano (que o mapa de semanas
+   *  descartaria). Lançamento até a data de corte não entra: já está no acumulado. */
+  function histInicialPorServico(pacote){
+    var zero=SERV.map(function(){ return 0; });
+    if(!histAplicavel(pacote))return zero;
+    var out=SERV.map(function(s,si){ return histExecutadoServ(si); });
+    var corte=histCorte(), semana1=mondayOfIso(TC_START());
+    var idxS={}; SERV.forEach(function(sv,i){ idxS[sv.id]=i; });
+    (window.PROD_LIST||[]).forEach(function(r){
+      if(!r.data||r.data>=semana1)return;      // a partir da semana 1 a curva já conta
+      if(corte&&r.data<=corte)return;          // já está dentro do acumulado importado
+      var si=idxS[r.servId]; if(si==null)return;
+      out[si]+=+r.qtd||0;
+    });
+    return out;
+  }
+  async function salvarHistorico(obj){
+    if(!selectedObra)throw new Error('Nenhuma obra aberta.');
+    await sbUpdateObra(selectedObra.id,{historico:obj});
+    window._OBRA=Object.assign({},window._OBRA,{historico:obj});
+  }
+
+  /* ---------------- Importação do cronograma físico-financeiro ----------------
+   * A planilha de acompanhamento da obra traz, por item de contrato, a quantidade contratada,
+   * a já executada até uma data e o saldo. Os itens são detalhados (CORTE 1ª CAT aparece em
+   * 17 linhas de SICRO diferentes); o que interessa aqui é o GRUPO, que é o que vira serviço
+   * no planejamento. A importação soma por grupo e deixa você dizer qual serviço é qual. */
+  function histAchaAba(wb){
+    var nomes=wb.SheetNames||[];
+    var pref=null;
+    nomes.forEach(function(n){
+      var k=estNorm(n);
+      if(!pref&&k.indexOf('CRONOGRAMA')>=0&&k.indexOf('FF')>=0)pref=n;
+    });
+    if(pref)return pref;
+    // senão, a primeira aba cujo cabeçalho tenha CONTRATO + EXECUTADO + SALDO
+    for(var i=0;i<nomes.length;i++){
+      var rows=sheetRows(wb.Sheets[nomes[i]]);
+      if(histAchaCabecalho(rows))return nomes[i];
+    }
+    return null;
+  }
+  /** Procura a linha de cabeçalho com CONTRATO / EXECUTADO / SALDO e devolve os índices das
+   *  colunas de quantidade. O bloco tem duas linhas: a de cima nomeia (CONTRATO), a de baixo
+   *  diz QTDE. / TOTAL — a quantidade é a primeira coluna do bloco. */
+  function histAchaCabecalho(rows){
+    for(var i=0;i<Math.min(rows.length,40);i++){
+      var r=rows[i]||[], achou={};
+      for(var j=0;j<r.length;j++){
+        var k=estNorm(r[j]);
+        if(!k)continue;
+        if(achou.contrato==null&&k.indexOf('CONTRATO')>=0&&k.indexOf('SALDO')<0)achou.contrato=j;
+        if(achou.exec==null&&k.indexOf('EXECUTADO')>=0)achou.exec=j;
+        if(achou.saldo==null&&k.indexOf('SALDO')>=0)achou.saldo=j;
+      }
+      if(achou.contrato!=null&&achou.exec!=null){
+        // a data de corte costuma vir no próprio rótulo: "EXECUTADO (até 30/05/26)"
+        var rot=String(r[achou.exec]||'');
+        var md=/(\d{2})\/(\d{2})\/(\d{2,4})/.exec(rot);
+        var corte='';
+        if(md){
+          var ano=md[3].length===2?('20'+md[3]):md[3];
+          corte=ano+'-'+md[2]+'-'+md[1];
+        }
+        achou.linha=i; achou.corte=corte;
+        // descrição/unidade: as colunas à esquerda do bloco CONTRATO
+        for(var j2=0;j2<achou.contrato;j2++){
+          var k2=estNorm(r[j2]);
+          if(k2.indexOf('UNID')>=0&&achou.un==null)achou.un=j2;
+          if(k2.indexOf('DESCRI')>=0&&achou.desc==null)achou.desc=j2;
+        }
+        return achou;
+      }
+    }
+    return null;
+  }
+  /** Soma a planilha por grupo. O grupo é a coluna de texto repetida à esquerda da descrição
+   *  (na planilha da obra, "SUPRESSÃO", "CORTE 1ª CAT", "ATERRO"...). Procuramos a coluna que
+   *  mais se repete entre as primeiras — é a que agrupa. */
+  function histLerGrupos(rows,cab){
+    var ini=cab.linha+1;
+    var limite=Math.min(cab.desc!=null?cab.desc:cab.contrato,cab.contrato);
+    var melhor=-1, melhorNota=-1;
+    for(var j=0;j<limite;j++){
+      var vals={}, n=0;
+      for(var i=ini;i<rows.length;i++){
+        var v=rows[i]&&rows[i][j];
+        if(v==null||String(v).trim()==='')continue;
+        if(!isNaN(+v)&&String(v).trim()!=='')continue;   // coluna de número não agrupa
+        vals[estNorm(v)]=(vals[estNorm(v)]||0)+1; n++;
+      }
+      var dist=Object.keys(vals).length;
+      if(n<5||dist<2)continue;
+      var nota=n/dist;                 // quanto mais linhas por nome distinto, mais "grupo" é
+      if(nota>melhorNota){ melhorNota=nota; melhor=j; }
+    }
+    if(melhor<0)return [];
+    var num=function(v){
+      if(v==null||v==='')return 0;
+      if(typeof v==='number')return isFinite(v)?v:0;
+      var t=String(v).trim().replace(/\s/g,'');
+      if(t.indexOf(',')>=0)t=t.replace(/\./g,'').replace(',','.');
+      var f=parseFloat(t);
+      return isFinite(f)?f:0;
+    };
+    var mapa={}, ordem=[];
+    for(var i2=ini;i2<rows.length;i2++){
+      var r=rows[i2]||[];
+      var nome=r[melhor];
+      if(nome==null||String(nome).trim()==='')continue;
+      nome=String(nome).trim();
+      var c=num(r[cab.contrato]), e=num(r[cab.exec]);
+      var sa=cab.saldo!=null?num(r[cab.saldo]):0;
+      if(!(c>0||e>0||sa>0))continue;
+      if(!mapa[nome]){
+        mapa[nome]={nome:nome,un:cab.un!=null?String(r[cab.un]||'').trim():'',
+                    contrato:0,executado:0,saldo:0,linhas:0};
+        ordem.push(nome);
+      }
+      var a=mapa[nome];
+      a.contrato+=c; a.executado+=e; a.saldo+=sa; a.linhas++;
+      if(!a.un&&cab.un!=null)a.un=String(r[cab.un]||'').trim();
+    }
+    return ordem.map(function(k){ return mapa[k]; });
+  }
+  /** Casa o nome do grupo com um serviço cadastrado. Nome igual primeiro; depois quem contém
+   *  quem, do mais longo pro mais curto (CORTE 1ª CAT acha "Corte"; "Aterro" acha ATERRO). */
+  function histCasaServico(nomeGrupo){
+    var alvo=estNorm(nomeGrupo);
+    var exato=-1;
+    SERV.forEach(function(s,i){ if(exato<0&&estNorm(s.n)===alvo)exato=i; });
+    if(exato>=0)return exato;
+    var cand=[];
+    SERV.forEach(function(s,i){
+      var k=estNorm(s.n);
+      if(!k)return;
+      if(alvo.indexOf(k)>=0||k.indexOf(alvo)>=0)cand.push({i:i,len:k.length});
+    });
+    cand.sort(function(a,b){ return b.len-a.len; });
+    return cand.length?cand[0].i:-1;
+  }
+  function importarHistoricoArquivo(){
+    if(!selectedObra){ alert('Abra uma obra primeiro.'); return; }
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(!SERV.length){ alert('Cadastre os serviços antes de importar o histórico.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var aba=histAchaAba(wb);
+        if(!aba)throw new Error('Não achei nenhuma aba com um cronograma físico-financeiro (um cabeçalho com CONTRATO e EXECUTADO).');
+        var rows=sheetRows(wb.Sheets[aba]);
+        var cab=histAchaCabecalho(rows);
+        if(!cab)throw new Error('A aba "'+aba+'" não tem o cabeçalho esperado (CONTRATO e EXECUTADO).');
+        var grupos=histLerGrupos(rows,cab);
+        if(!grupos.length)throw new Error('Não consegui identificar os grupos de item na aba "'+aba+'".');
+        histDialogo(grupos,cab,file.name+' / '+aba);
+      }).catch(function(e){ alert('Falha ao ler o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function histDialogo(grupos,cab,fonte){
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    // saldo cadastrado hoje, por serviço — é contra isso que o saldo da planilha se confere
+    var saldoHoje=SERV.map(function(s,si){
+      var t=0; LOTS.forEach(function(l,li){ t+=(QTY[li]||[])[si]||0; });
+      return t;
+    });
+    var sel=grupos.map(function(g){ return histCasaServico(g.nome); });
+    var opts=function(k){
+      return '<option value="-1"'+(k<0?' selected':'')+'>— não importar —</option>'+
+        SERV.map(function(s,i){
+          return '<option value="'+i+'"'+(i===k?' selected':'')+'>'+escAttr(s.n)+'</option>';
+        }).join('');
+    };
+    var hoje=todayISO();
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:860px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar histórico da obra</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(fonte)+'</div>'+
+      '<div class="mpgrid">'+
+        '<label style="font-size:12.5px">O executado vale até<br><input class="einp" type="date" id="hsCorte" value="'+escAttr(cab.corte||'')+'" max="'+hoje+'" style="width:100%"></label>'+
+        '<label style="font-size:12.5px">Início real da obra<br><input class="einp" type="date" id="hsInicio" value="'+escAttr((histObra()&&histObra().inicio)||'')+'" max="'+hoje+'" style="width:100%"></label>'+
+      '</div>'+
+      '<div class="note" style="margin:8px 0 10px">A data de corte importa: produção já lançada na plataforma com data <b>até</b> ela é ignorada no avanço, porque já está dentro do acumulado da planilha. O início real é informativo.</div>'+
+      '<div class="tbl-wrap" style="max-height:46vh"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th>Grupo na planilha</th><th>Serviço</th><th class="r">Contrato</th><th class="r">Executado</th><th class="r">Saldo (planilha)</th><th class="r">Saldo cadastrado</th><th class="r">Dif.</th>'+
+      '</tr></thead><tbody>'+
+      grupos.map(function(g,i){
+        return '<tr data-hsrow="'+i+'">'+
+          '<td>'+escAttr(g.nome)+(g.un?(' <span class="note" style="margin:0">('+escAttr(g.un)+')</span>'):'')+'</td>'+
+          '<td><select class="einp" data-hssel="'+i+'" style="width:160px">'+opts(sel[i])+'</select></td>'+
+          '<td class="r mono">'+fmtBR(g.contrato)+'</td>'+
+          '<td class="r mono">'+fmtBR(g.executado)+'</td>'+
+          '<td class="r mono">'+fmtBR(g.saldo)+'</td>'+
+          '<td class="r mono hs-hoje">—</td><td class="r mono hs-dif">—</td></tr>';
+      }).join('')+
+      '</tbody></table></div>'+
+      '<div id="hsResumo" style="margin-top:10px"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="hsCancel">Cancelar</button>'+
+        '<button class="btn primary" id="hsOk">Gravar histórico</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#hsCancel').addEventListener('click',fecha);
+    function pinta(){
+      var usados={}, dup=false, n=0;
+      grupos.forEach(function(g,i){
+        var si=sel[i];
+        var tr=back.querySelector('[data-hsrow="'+i+'"]');
+        var tdH=tr.querySelector('.hs-hoje'), tdD=tr.querySelector('.hs-dif');
+        if(si<0){ tdH.textContent='—'; tdD.textContent='—'; tdD.style.color=''; return; }
+        n++;
+        if(usados[si])dup=true; usados[si]=(usados[si]||0)+1;
+        var h=saldoHoje[si], d=g.saldo-h;
+        tdH.textContent=fmtBR(h);
+        tdD.textContent=(d>0?'+':'')+fmtBR(d);
+        // 1% de folga: arredondamento de planilha não é divergência
+        tdD.style.color=(h>0&&Math.abs(d)>Math.max(1,0.01*Math.max(h,g.saldo)))?'var(--warn)':'var(--muted)';
+      });
+      var cont=0, exe=0;
+      grupos.forEach(function(g,i){ if(sel[i]>=0){ cont+=g.contrato; exe+=g.executado; } });
+      back.querySelector('#hsResumo').innerHTML=
+        '<div class="banner"><div>'+n+' grupo(s) ligados a um serviço. '+
+        'A partir daí, as curvas passam a medir o avanço contra o <b>contrato</b>, e previsto e realizado começam no patamar que a obra já tinha.'+
+        (dup?' <b style="color:var(--warn)">Dois grupos apontam para o mesmo serviço — eles serão somados.</b>':'')+
+        '</div></div>';
+      back.querySelector('#hsOk').disabled=!n;
+    }
+    back.querySelectorAll('[data-hssel]').forEach(function(s2){
+      s2.addEventListener('change',function(){ sel[+s2.getAttribute('data-hssel')]=+s2.value; pinta(); });
+    });
+    back.querySelector('#hsOk').addEventListener('click',async function(){
+      var btn=back.querySelector('#hsOk');
+      var obj={corte:back.querySelector('#hsCorte').value||'',
+               inicio:back.querySelector('#hsInicio').value||'',
+               fonte:fonte, importado_em:new Date().toISOString(), servicos:{}};
+      grupos.forEach(function(g,i){
+        var si=sel[i]; if(si<0||!SERV[si])return;
+        var id=SERV[si].id, e=obj.servicos[id];
+        if(!e)e=obj.servicos[id]={contrato:0,executado:0,grupo:g.nome,unidade:g.un||''};
+        else e.grupo+=' + '+g.nome;
+        e.contrato+=g.contrato; e.executado+=g.executado;
+      });
+      btn.disabled=true; btn.textContent='Gravando…';
+      try{
+        await salvarHistorico(obj);
+        fecha(); go(current); toast('Histórico gravado.');
+      }catch(e){
+        alert('Falha ao gravar: '+((e&&e.message)||e)+
+          '\n\nSe a mensagem fala em coluna que não existe, falta rodar sql/35_add_historico_obra.sql no Supabase.');
+        btn.disabled=false; btn.textContent='Gravar histórico';
+      }
+    });
+    pinta();
+  }
+  /** Cartão com o retrato da obra inteira: o que veio de antes, o que entrou no plano, e o
+   *  total contra o contrato. Sem histórico importado, explica como importar. */
+  function histCartaoHTML(pacote){
+    var tem=histTemDados();
+    var motivo=histMotivoDesligado(pacote);
+    var btn='<button class="btn" id="histImpBtn" title="Lê o cronograma físico-financeiro da planilha de acompanhamento e grava contrato e executado por serviço">↥ '+(tem?'Reimportar':'Importar')+' histórico da obra</button>';
+    if(!tem){
+      return '<div class="card" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
+        '<div><div class="eyebrow" style="margin-bottom:4px">Histórico da obra</div>'+
+        '<div class="note" style="margin:0;max-width:620px">A obra começou antes do plano desta plataforma. Sem o histórico, as curvas medem o avanço contra o <b>saldo</b> — como se a obra começasse do zero na semana 1. Importe o cronograma físico-financeiro para medir contra o contrato.</div></div>'+
+        btn+'</div></div>';
+    }
+    var h=histObra();
+    var cont=0, exe=0, agora=0;
+    var ini=histInicialPorServico(pacote);
+    SERV.forEach(function(s,si){
+      var c=histContratoServ(si); if(c)cont+=c;
+      exe+=histExecutadoServ(si);
+      agora+=ini[si]||0;
+    });
+    var depois=0;
+    var semana1=mondayOfIso(TC_START());
+    (window.PROD_LIST||[]).forEach(function(r){ if(r.data&&r.data>=semana1)depois+=+r.qtd||0; });
+    var antes=agora, total=antes+depois;
+    var pct=function(v){ return cont>0?(100*v/cont):0; };
+    var av=function(rot,v,cor){
+      return '<div style="flex:1;min-width:130px"><div class="note" style="margin:0 0 2px">'+rot+'</div>'+
+        '<div class="mono" style="font-size:17px;font-weight:700'+(cor?(';color:'+cor):'')+'">'+fmtBR(v)+'</div>'+
+        '<div class="note" style="margin:2px 0 0">'+pct(v).toFixed(1).replace('.',',')+'% do contrato</div></div>';
+    };
+    return '<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+
+        '<div><div class="eyebrow" style="margin-bottom:2px">A obra inteira</div>'+
+        '<div class="note" style="margin:0">Acumulado da planilha até '+(h.corte?brDate(h.corte):'(sem data)')+
+        (h.inicio?(' · obra iniciada em '+brDate(h.inicio)):'')+' · plano começa em '+brDate(semana1)+'</div></div>'+
+        btn+'</div>'+
+      '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
+        av('Antes do plano',antes,'var(--muted)')+
+        av('No plano (lançado)',depois)+
+        av('Total realizado',total,'var(--ok)')+
+        '<div style="flex:1;min-width:130px"><div class="note" style="margin:0 0 2px">Contrato</div>'+
+        '<div class="mono" style="font-size:17px;font-weight:700">'+fmtBR(cont)+'</div>'+
+        '<div class="note" style="margin:2px 0 0">soma das quantidades contratadas</div></div>'+
+      '</div>'+
+      (motivo?('<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O histórico é por serviço, não por lote — com '+
+        (motivo==='pacote'?'um pacote contratual selecionado':'um filtro de lotes ativo')+
+        ' ele não entra nas curvas, senão o avanço da obra inteira apareceria dentro do recorte. Tire o filtro para ver a obra como um todo.</div></div>'):'')+
+      '<div class="note" style="margin:10px 0 0">A soma mistura unidades diferentes (m³, m², m) — vale como ordem de grandeza e como base do percentual, igual ao resto das curvas.</div>'+
+    '</div>';
+  }
+  function cumulativePct(weekly,tw,totalByServ,grandTotal,histByServ){
+    /* histByServ = o que a obra JA tinha executado antes da semana 1 (historico importado).
+     * Entra como ponto de partida das duas curvas: o plano foi feito sabendo que essa parte
+     * estava pronta, entao comecar do zero diria que a obra nao saiu do lugar. Sem historico
+     * o vetor e zero e a conta e exatamente a de antes. */
+    var h=histByServ||SERV.map(function(){return 0;});
+    var accum=SERV.map(function(s,si){ return +h[si]||0; });
+    var grandAccum=accum.reduce(function(a,b){return a+b;},0);
+    var series={}; SERV.forEach(function(s,si){
+      series[si]=[totalByServ[si]>0?(accum[si]/totalByServ[si]*100):0];
+    });
+    var totalSeries=[grandTotal>0?(grandAccum/grandTotal*100):0];
     for(var w=1;w<=tw;w++){
       SERV.forEach(function(s,si){
         accum[si]+=weekly[w][si]||0;
@@ -9356,11 +9734,18 @@
     var twCliente=0; if(segsClienteAll)segsClienteAll.forEach(function(sg){twCliente=Math.max(twCliente,sg.start+sg.dur-1);});
     var tw=Math.max(twExec,twCliente,1); // horizonte sempre com base no cronograma integrado inteiro
 
-    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(!lotInView(li))return;if(pacote&&pacoteOfLote(li)!==pacote)return;t+=QTY[li][si]||0;});return t;});
+    /* Com historico importado o denominador e o CONTRATO, nao o saldo: medir contra o saldo
+     * diria que a obra comeca do zero na semana 1. Sem historico, nada muda. */
+    var usaHist=histAplicavel(pacote);
+    var totalByServ=SERV.map(function(s,si){
+      if(usaHist){ var c=histContratoServ(si); if(c)return c; }
+      var t=0;LOTS.forEach(function(l,li){if(!lotInView(li))return;if(pacote&&pacoteOfLote(li)!==pacote)return;t+=QTY[li][si]||0;});return t;
+    });
     var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+    var histIni=histInicialPorServico(pacote);
 
-    var executivo=cumulativePct(weeklyFromSegs(segsExec,tw),tw,totalByServ,grandTotal);
-    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalByServ,grandTotal):null;
+    var executivo=cumulativePct(weeklyFromSegs(segsExec,tw),tw,totalByServ,grandTotal,histIni);
+    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalByServ,grandTotal,histIni):null;
 
     // realizado: apontamentos reais de Produção Diária, agregados na semana de trabalho correspondente à data
     var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
@@ -9371,6 +9756,10 @@
       if(pacote){
         if(li0<0||pacoteOfLote(li0)!==pacote)return;
       }
+      /* Producao anterior ao plano ja entrou pelo patamar inicial (histInicialPorServico),
+       * e a lancada ate a data de corte ja esta dentro do acumulado importado. Contar aqui
+       * de novo dobraria o avanco. */
+      if(usaHist&&histCorte()&&r.data<=histCorte())return;
       var w4=weekIdxCache[r.data];
       if(w4===undefined)w4=weekIdxCache[r.data]=semDaData(r.data);
       if(w4==null)return;
@@ -9378,7 +9767,7 @@
       if(si==null)return;
       realWeekly[w4][si]+=r.qtd||0;
     });
-    var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal);
+    var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal,histIni);
 
     var hojeW=hojeWeekNumber(tw);
 
@@ -9391,9 +9780,9 @@
       var weeklyProj=[]; for(var wp=0;wp<=tw;wp++)weeklyProj[wp]=SERV.map(function(){return 0;});
       for(var wp2=1;wp2<=Math.min(hojeW,tw);wp2++)weeklyProj[wp2]=realWeekly[wp2].slice();
       segsProj.forEach(function(sg){ for(var i=0;i<sg.dur;i++){ var w5=sg.start+i; if(w5>hojeW&&w5<=tw)weeklyProj[w5][sg.si]+=sg.wq[i]||0; } });
-      projetado=cumulativePct(weeklyProj,tw,totalByServ,grandTotal);
+      projetado=cumulativePct(weeklyProj,tw,totalByServ,grandTotal,histIni);
     }
-    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode,pacote:pacote};
+    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode,pacote:pacote,usaHist:usaHist};
   }
   /** Extrai a série (array por semana) de uma "curva" (índice de serviço, ou 'total') de uma fonte cliente/executivo/real. */
   function curveSeries(src,sel){
@@ -13086,13 +13475,25 @@
     // Filtro de lotes dos DOIS lados: quantidade cadastrada e produção apontada. Filtrar só o
     // numerador faria o avanço despencar; só o denominador, estourar.
     var idxs=viewLotIdxs(), lotIds=window._LOTIDS||[];
-    var total=0; idxs.forEach(function(li){ total+=orcNum((QTY[li]||[])[si]); });
+    /* Com historico da obra importado, o avanco e medido contra o CONTRATO e ja parte do que
+     * foi executado antes do plano. Sem ele, o denominador continua sendo o saldo cadastrado
+     * — que diria que a obra comeca do zero no primeiro mes do plano. */
+    var usaHist=histAplicavel('');
+    var total=0;
+    if(usaHist){ var ct=histContratoServ(si); if(ct)total=ct; }
+    if(!(total>0)){ total=0; idxs.forEach(function(li){ total+=orcNum((QTY[li]||[])[si]); }); }
     if(!(total>0))return null;
     var lim=avaFimDoMes(mes).getTime(), feito=0;
+    var corte=usaHist?histCorte():'';
+    /* O acumulado importado so entra nos meses que terminam a partir da data de corte: antes
+     * dela nao se sabe como ele se distribuiu, e jogar o total inteiro num mes anterior
+     * inventaria avanco que ainda nao tinha acontecido. */
+    if(usaHist&&(!corte||new Date(corte+'T12:00:00').getTime()<=lim))feito+=histExecutadoServ(si);
     (window.PROD_LIST||[]).forEach(function(p){
       if(p.servId!==svcId)return;
       var lp=lotIds.indexOf(p.loteId);
       if(lp>=0&&!lotInView(lp))return;
+      if(corte&&p.data<=corte)return;   // ja esta dentro do acumulado importado
       var d=new Date(String(p.data)+'T12:00:00');
       if(d.getTime()<=lim)feito+=orcNum(p.qtd);
     });
