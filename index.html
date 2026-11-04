@@ -9845,6 +9845,13 @@
     var h=window._OBRA&&window._OBRA.historico;
     return (h&&typeof h==='object')?h:null;
   }
+  /** Grava o bloco `historico` da obra (curva de referencia e pesos). Mora aqui, junto de
+   *  histObra(), e nao dentro de nenhum importador: ela e de quem grava, nao de quem le. */
+  async function salvarHistorico(obj){
+    if(!selectedObra)throw new Error('Nenhuma obra aberta.');
+    await sbUpdateObra(selectedObra.id,{historico:obj});
+    window._OBRA=Object.assign({},window._OBRA,{historico:obj});
+  }
   function histCasaServico(nomeGrupo){
     var alvo=estNorm(nomeGrupo);
     var exato=-1;
