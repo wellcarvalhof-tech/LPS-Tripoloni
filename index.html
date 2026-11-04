@@ -4688,7 +4688,7 @@
       '</div>'+
       '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
       '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
-      '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--c5);font-weight:700">▬</span> Projeção (cronograma dinâmico) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado &nbsp;— a linha vertical marca a semana de hoje.</div>'+
+      '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--c5);font-weight:700">▬</span> Projeção (cronograma dinâmico) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado'+(histCurva()?'&nbsp; <span style="font-weight:700">···</span> Curva S da obra (referência, ponderada por venda) — só na curva geral':'')+' &nbsp;— a linha vertical marca a semana de hoje.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
       '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
@@ -8122,6 +8122,187 @@
     return ups.length;
   }
 
+  /* ---------------- Curva S de referência (planilha da obra) ----------------
+   * A obra já mantém uma Curva S própria — contratual, executiva e realizada, semana a semana,
+   * desde o começo de tudo. Ela é ponderada por PREÇO DE VENDA; a da plataforma é por
+   * quantidade física. São duas réguas diferentes, então a importada entra como REFERÊNCIA
+   * desenhada ao lado, nunca substituindo a conta do app — e a tela diz isso.
+   *
+   * O ganho é o pedaço que o app não tem como calcular: o avanço antes de o plano existir. */
+  function histCurva(){
+    var h=window._OBRA&&window._OBRA.historico;
+    var c=h&&h.curva;
+    return (c&&c.pontos&&c.pontos.length)?c:null;
+  }
+  /** Segunda-feira da semana ISO (ano, semana). A semana 1 é a que contém 4 de janeiro. */
+  function mondayOfIsoWeek(ano,semana){
+    var d=new Date(Date.UTC(ano,0,4));
+    var dow=d.getUTCDay()||7;                 // domingo = 7
+    d.setUTCDate(d.getUTCDate()-(dow-1)+(semana-1)*7);
+    return d.toISOString().slice(0,10);
+  }
+  /** Série da referência amarrada a um eixo de segundas-feiras. Curva acumulada: segunda sem
+   *  ponto próprio herda o último valor conhecido — não volta a zero nem some do gráfico. */
+  function histCurvaNoEixo(eixo){
+    var c=histCurva(); if(!c)return null;
+    var por={};
+    c.pontos.forEach(function(p){ if(p&&p.iso)por[p.iso]=p; });
+    var out={contratual:[],executiva:[],realizado:[]};
+    var ult={contratual:null,executiva:null,realizado:null};
+    var primeiro=c.pontos[0].iso, ultimoReal=null;
+    c.pontos.forEach(function(p){ if(p.r!=null)ultimoReal=p.iso; });
+    eixo.forEach(function(iso){
+      var p=por[iso];
+      if(p){
+        if(p.c!=null)ult.contratual=p.c;
+        if(p.e!=null)ult.executiva=p.e;
+        if(p.r!=null)ult.realizado=p.r;
+      }
+      var antes=(iso<primeiro);
+      out.contratual.push(antes?null:(ult.contratual==null?null:ult.contratual*100));
+      out.executiva.push(antes?null:(ult.executiva==null?null:ult.executiva*100));
+      // o realizado para onde a planilha parou: prolongar viraria promessa de avanço que
+      // ninguém apontou
+      out.realizado.push((antes||!ultimoReal||iso>ultimoReal)?null:(ult.realizado==null?null:ult.realizado*100));
+    });
+    return out;
+  }
+  function importarCurvaRefArquivo(){
+    if(!selectedObra){ alert('Abra uma obra primeiro.'); return; }
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var achaAba=function(chave){
+          var n=null;
+          (wb.SheetNames||[]).forEach(function(x){
+            if(!n&&estNorm(x).indexOf(chave)>=0)n=x;
+          });
+          return n;
+        };
+        var abas={c:achaAba('CONTRATUAL'),e:achaAba('EXECUTIV'),r:achaAba('REALIZAD')};
+        if(!abas.c&&!abas.e&&!abas.r)
+          throw new Error('Não achei as abas das curvas. O arquivo precisa ter abas com "Contratual", "Executivo" e/ou "Realizado" no nome.');
+        var serie={}, faixa={};
+        ['c','e','r'].forEach(function(k){
+          if(!abas[k])return;
+          var r=histCurvaLeAba(sheetRows(wb.Sheets[abas[k]]));
+          if(r){ serie[k]=r.pontos; faixa[k]=r; }
+        });
+        if(!Object.keys(serie).length)
+          throw new Error('As abas foram encontradas, mas não achei a linha de resumo com a curva acumulada dentro delas.');
+        histCurvaDialogo(serie,faixa,abas,file.name);
+      }).catch(function(e){ alert('Falha ao ler o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  /** Lê uma aba de curva: linha 0 = ano por coluna, linha 1 = semana, e a primeira linha cujo
+   *  rótulo começa com "Resumo" é a curva acumulada do projeto inteiro. */
+  function histCurvaLeAba(rows){
+    if(!rows||rows.length<3)return null;
+    var num=function(v){
+      if(v==null||v==='')return null;
+      if(typeof v==='number')return isFinite(v)?v:null;
+      var t=String(v).trim().replace('%','').replace(/\s/g,'');
+      if(t.indexOf(',')>=0)t=t.replace(/\./g,'').replace(',','.');
+      var f=parseFloat(t);
+      return isFinite(f)?f:null;
+    };
+    var anos=null, sems=null;
+    for(var i=0;i<Math.min(rows.length,8);i++){
+      var r=rows[i]||[];
+      var rot=estNorm(r[1]);
+      if(rot==='ANO'&&!anos)anos=r;
+      if(rot==='SEMANA'&&!sems)sems=r;
+    }
+    if(!anos||!sems)return null;
+    var idx=-1;
+    for(var j=0;j<rows.length;j++){
+      var rr=rows[j]||[];
+      if(rr[1]!=null&&estNorm(rr[1]).indexOf('RESUMO')===0){ idx=j; break; }
+    }
+    if(idx<0)return null;
+    var linha=rows[idx]||[], pontos=[], pri='', ult='', ultV=0, maxV=0;
+    for(var k=2;k<Math.max(anos.length,sems.length);k++){
+      var a=num(anos[k]), sm=num(sems[k]), v=num(linha[k]);
+      if(!a||!sm)continue;
+      var ano=Math.round(a);
+      /* A linha de anos da planilha segue sendo arrastada muito depois do fim da obra — chega a
+       * 3031, com zeros embaixo. Ano fora do mundo real nao e dado. */
+      if(ano<2000||ano>2100)break;
+      /* Curva acumulada nao desce. Quando o valor cai depois de ja ter subido, acabou o dado de
+       * verdade e comecou o rabo de zeros: parar aqui evita desenhar um despencamento que nao
+       * existe (o contratual chega a 100% e depois vinha uma coluna de 0). */
+      if(v!=null&&maxV>1e-9&&v+1e-9<maxV)break;
+      if(v!=null&&v>maxV)maxV=v;
+      var iso=mondayOfIsoWeek(ano,Math.round(sm));
+      pontos.push({iso:iso,v:(v==null?null:v)});
+      if(v!=null&&v>1e-9){ if(!pri)pri=iso; ult=iso; ultV=v; }
+    }
+    // corta o rabo de pontos sem valor depois do ultimo ponto util
+    while(pontos.length&&(pontos[pontos.length-1].v==null||pontos[pontos.length-1].v<=1e-9)&&pri)pontos.pop();
+    return pontos.length?{pontos:pontos,primeiro:pri,ultimo:ult,ultimoValor:ultV}:null;
+  }
+  function histCurvaDialogo(serie,faixa,abas,nomeArq){
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    var rotulo={c:'Contratual',e:'Executiva',r:'Realizado'};
+    var lin=function(k){
+      if(!faixa[k])return '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line-2);color:var(--muted)"><span>'+rotulo[k]+'</span><span>não encontrada</span></div>';
+      var f=faixa[k];
+      return '<div style="display:flex;justify-content:space-between;gap:14px;padding:7px 0;border-bottom:1px solid var(--line-2)">'+
+        '<span>'+rotulo[k]+' <span class="note" style="margin:0">(aba '+escAttr(abas[k])+')</span></span>'+
+        '<span class="mono" style="text-align:right;white-space:nowrap">'+brDate(f.primeiro)+' a '+brDate(f.ultimo)+
+        ' · termina em <b>'+(100*f.ultimoValor).toFixed(1).replace('.',',')+'%</b></span></div>';
+    };
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:600px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar Curva S da obra</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(nomeArq)+'</div>'+
+      lin('c')+lin('e')+lin('r')+
+      '<div class="banner" style="margin-top:12px"><div>Estas curvas entram como <b>referência</b>, desenhadas ao lado das do app — não substituem o cálculo da plataforma. '+
+        'Elas são ponderadas por <b>preço de venda</b> e as do app por <b>quantidade física</b>: são duas réguas diferentes no mesmo gráfico, e é por isso que elas não vão coincidir. '+
+        'O que elas trazem de único é o avanço de antes de o plano existir.</div></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="cfCancel">Cancelar</button>'+
+        (histCurva()?'<button class="btn" id="cfRemove">Remover a atual</button>':'')+
+        '<button class="btn primary" id="cfOk">Gravar referência</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#cfCancel').addEventListener('click',fecha);
+    var rm=back.querySelector('#cfRemove');
+    if(rm)rm.addEventListener('click',async function(){
+      if(!confirm('Remover a Curva S de referência desta obra?'))return;
+      try{
+        var h=Object.assign({},histObra()||{servicos:{}});
+        delete h.curva;
+        await salvarHistorico(h);
+        fecha(); go(current); toast('Referência removida.');
+      }catch(e){ alert('Falha: '+((e&&e.message)||e)); }
+    });
+    back.querySelector('#cfOk').addEventListener('click',async function(){
+      var btn=back.querySelector('#cfOk');
+      // uma linha por segunda-feira, com as três curvas juntas
+      var por={};
+      ['c','e','r'].forEach(function(k){
+        (serie[k]||[]).forEach(function(p){
+          var o=por[p.iso]||(por[p.iso]={iso:p.iso});
+          if(p.v!=null)o[k]=p.v;
+        });
+      });
+      var pontos=Object.keys(por).sort().map(function(iso){ return por[iso]; });
+      btn.disabled=true; btn.textContent='Gravando…';
+      try{
+        var h=Object.assign({},histObra()||{servicos:{}});
+        h.curva={fonte:nomeArq,importado_em:new Date().toISOString(),pontos:pontos};
+        await salvarHistorico(h);
+        fecha(); go('ac-curvas'); toast(pontos.length+' semanas de referência gravadas.');
+      }catch(e){
+        alert('Falha ao gravar: '+((e&&e.message)||e)+
+          '\n\nSe a mensagem fala em coluna que não existe, falta rodar sql/35_add_historico_obra.sql no Supabase.');
+        btn.disabled=false; btn.textContent='Gravar referência';
+      }
+    });
+  }
+
   /* ---------------- Quadro do realizado: semana × lote, pintado pelo que ACONTECEU ----------
    * A matriz de apontamento é desenhada pelo PLANO — a barra está onde o cronograma previu, e o
    * realizado só preenche o número dentro dela. Aqui é o contrário: a célula existe porque houve
@@ -8597,6 +8778,8 @@
       renderCurvaS();
       var hiBtn=document.getElementById('histImpBtn');
       if(hiBtn)hiBtn.addEventListener('click',importarHistoricoArquivo);
+      var crBtn=document.getElementById('curvaRefBtn');
+      if(crBtn)crBtn.addEventListener('click',importarCurvaRefArquivo);
       var curveSelEl=document.getElementById('cvCurveSel');
       if(curveSelEl)curveSelEl.addEventListener('change',function(){
         window._curvaSSel=curveSelEl.value==='total'?'total':+curveSelEl.value;
@@ -9557,7 +9740,11 @@
   function histCartaoHTML(pacote){
     var tem=histTemDados();
     var motivo=histMotivoDesligado(pacote);
-    var btn='<button class="btn" id="histImpBtn" title="Lê o cronograma físico-financeiro da planilha de acompanhamento e grava contrato e executado por serviço">↥ '+(tem?'Reimportar':'Importar')+' histórico da obra</button>';
+    var temCurva=!!histCurva();
+    var btn='<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn" id="histImpBtn" title="Lê o cronograma físico-financeiro da planilha de acompanhamento e grava contrato e executado por serviço">↥ '+(tem?'Reimportar':'Importar')+' histórico da obra</button>'+
+      '<button class="btn" id="curvaRefBtn" title="Lê a planilha Curva S da obra (contratual, executiva e realizada, semana a semana) e desenha como referência no gráfico">↥ '+(temCurva?'Reimportar':'Importar')+' Curva S da obra</button>'+
+    '</div>';
     if(!tem){
       return '<div class="card" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
         '<div><div class="eyebrow" style="margin-bottom:4px">Histórico da obra</div>'+
@@ -9599,6 +9786,8 @@
       (motivo?('<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O histórico é por serviço, não por lote — com '+
         (motivo==='pacote'?'um pacote contratual selecionado':'um filtro de lotes ativo')+
         ' ele não entra nas curvas, senão o avanço da obra inteira apareceria dentro do recorte. Tire o filtro para ver a obra como um todo.</div></div>'):'')+
+      (temCurva?('<div class="note" style="margin:10px 0 0">Curva S de referência: <b>'+histCurva().pontos.length+' semanas</b> a partir de '+
+        brDate(histCurva().pontos[0].iso)+', de '+escAttr(histCurva().fonte||'planilha da obra')+'. Ela é ponderada por preço de venda e as do app por quantidade física — por isso não coincidem.</div>'):'')+
       '<div class="note" style="margin:10px 0 0">A soma mistura unidades diferentes (m³, m², m) — vale como ordem de grandeza e como base do percentual, igual ao resto das curvas.</div>'+
     '</div>';
   }
@@ -9793,28 +9982,73 @@
     if(!src)return null;
     return sel==='total'?src.totalSeries:src.series[sel];
   }
+  /** Eixo do gráfico: a lista de segundas-feiras desenhadas, da esquerda pra direita.
+   *  Sem referência importada é só o plano (índice 0 = largada, índice w = semana w do plano).
+   *  Com referência que começa ANTES do plano, o eixo ganha na frente as semanas de calendário
+   *  que faltam — é onde a obra andou antes de este plano existir. */
+  function curvaEixo(tw){
+    var plano=[mondayOfIso(TC_START())];
+    for(var w=1;w<=tw;w++)plano.push(mondayOf(w).toISOString().slice(0,10));
+    var c=histCurva();
+    if(!c)return {eixo:plano,pre:0};
+    var ini=c.pontos[0].iso;
+    if(!(ini<plano[0]))return {eixo:plano,pre:0};
+    var pre=[], d=new Date(plano[0]+'T00:00:00'), guard=0;
+    d.setDate(d.getDate()-7);
+    while(d.toISOString().slice(0,10)>=ini&&guard++<520){
+      pre.unshift(d.toISOString().slice(0,10));
+      d.setDate(d.getDate()-7);
+    }
+    return {eixo:pre.concat(plano),pre:pre.length};
+  }
   function sCurve(id,data,sel){
     var el=document.getElementById(id); if(!el)return;
     var W=700,H=210,pl=30,pr=10,pt=10,pb=18,iw=W-pl-pr,ih=H-pt-pb;
     var afs='style="font-size:7.5px"';
     var tw=data.tw;
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
-    var n=tw+1;
+    var E=curvaEixo(tw), eixo=E.eixo, pre=E.pre;
+    var n=eixo.length;
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
     var s='';
     for(var g=0;g<=100;g+=25){s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" '+afs+' x="'+(pl-5)+'" y="'+(yy(g)+2.5)+'" text-anchor="end">'+g+'</text>';}
     var stepLbl=Math.max(1,Math.ceil((n-1)/9));   // "S45-26" é bem mais largo que "S45"
-    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" '+afs+' x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">'+rotSem(mondayOf(i))+'</text>';}
-    if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(tw)+'" y="'+(H-6)+'" text-anchor="middle">'+rotSem(mondayOf(tw))+'</text>';
-    function path(a){if(!a)return '';var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
+    var rotDe=function(i){ return rotSem(new Date(eixo[i]+'T00:00:00')); };
+    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" '+afs+' x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">'+rotDe(i)+'</text>';}
+    if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(n-1)+'" y="'+(H-6)+'" text-anchor="middle">'+rotDe(n-1)+'</text>';
+    /* As séries do app começam no índice `pre`: antes disso o plano não existia. Ponto nulo
+     * interrompe a linha em vez de puxá-la pra zero. */
+    function path(a,desl){
+      if(!a)return '';
+      var d='', abriu=false;
+      for(var j=0;j<a.length;j++){
+        var v=a[j];
+        if(v==null){ abriu=false; continue; }
+        d+=(abriu?'L':'M')+xx(j+(desl||0)).toFixed(1)+' '+yy(v).toFixed(1)+' ';
+        abriu=true;
+      }
+      return d;
+    }
+    // Referência da planilha da obra: tracejado fino, por baixo das curvas do app.
+    var ref=(sel==='total')?histCurvaNoEixo(eixo):null;
+    if(ref){
+      if(ref.contratual)s+='<path d="'+path(ref.contratual,0)+'" fill="none" stroke="var(--crit)" stroke-width="1" stroke-dasharray="1 2" opacity=".65"/>';
+      if(ref.executiva)s+='<path d="'+path(ref.executiva,0)+'" fill="none" stroke="var(--warn)" stroke-width="1" stroke-dasharray="1 2" opacity=".65"/>';
+      if(ref.realizado)s+='<path d="'+path(ref.realizado,0)+'" fill="none" stroke="var(--good)" stroke-width="1.2" stroke-dasharray="1 2" opacity=".8"/>';
+    }
+    if(pre>0){
+      var px=xx(pre);
+      s+='<line x1="'+px+'" y1="'+pt+'" x2="'+px+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-width="1"/>'+
+        '<text x="'+(px+3)+'" y="'+(pt+8)+'" class="axm" '+afs+' text-anchor="start">inicio do plano</text>';
+    }
     var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
     var cProj=data.projetado?curveSeries(data.projetado,sel):null;
-    if(cCliente)s+='<path d="'+path(cCliente)+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
-    if(cExec)s+='<path d="'+path(cExec)+'" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3"/>';
-    if(cProj)s+='<path d="'+path(cProj)+'" fill="none" stroke="var(--c5)" stroke-width="1.5" stroke-dasharray="2 2"/>';
-    if(cReal)s+='<path d="'+path(cReal)+'" fill="none" stroke="var(--good)" stroke-width="1.9"/>';
+    if(cCliente)s+='<path d="'+path(cCliente,pre)+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
+    if(cExec)s+='<path d="'+path(cExec,pre)+'" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3"/>';
+    if(cProj)s+='<path d="'+path(cProj,pre)+'" fill="none" stroke="var(--c5)" stroke-width="1.5" stroke-dasharray="2 2"/>';
+    if(cReal)s+='<path d="'+path(cReal,pre)+'" fill="none" stroke="var(--good)" stroke-width="1.9"/>';
     if(data.hojeW>0&&data.hojeW<=tw){
-      var hx=xx(data.hojeW);
+      var hx=xx(pre+data.hojeW);
       s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
         '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" '+afs+'>hoje</text>';
     }
