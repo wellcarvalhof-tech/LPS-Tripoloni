@@ -356,6 +356,9 @@
   .tcm-grip{position:absolute;left:2px;opacity:.4;font-weight:400}
   .tcm-badge{position:absolute;top:0;right:0;display:flex;align-items:center;gap:2px;padding:0 3px;font-size:9px;font-weight:700;color:#fff;border-bottom-left-radius:4px}
   .tcm-team{position:absolute;bottom:0;left:2px;font-size:8px;font-weight:700;line-height:1;opacity:.75}
+  /* Sigla de etapa da linha de balanço no lugar do número: texto curto, sem o alinhamento
+     numérico que a quantidade usa. */
+  .tcm-seg.tcm-etapa{font-variant-numeric:normal;letter-spacing:.02em}
   .tcm-rain{font-size:9px;font-weight:600;color:var(--info);white-space:nowrap}
   /* Linha de "hoje" na matriz: a borda marca o começo da semana corrente. As semanas descem
      da mais nova pra mais antiga, então essa borda é literalmente a linha do tempo de agora. */
@@ -15609,6 +15612,18 @@
         return ww>=loW&&ww<=hiW;
       });
     }
+    /* Onde há estudo de linha de balanço, a célula mostra a ETAPA da semana em vez da
+     * quantidade. Montado uma vez aqui: por célula seria recalcular o estudo inteiro. */
+    var lbSem=null;
+    try{ lbSem=lbEtapasPorSemana(); }catch(e){ lbSem=null; }
+    var temLB=lbSem&&Object.keys(lbSem).length>0;
+    function lbTexto(sg,w){
+      if(!temLB)return null;
+      var lid=(window._LOTIDS||[])[sg.li], sid=SERV[sg.si]&&SERV[sg.si].id;
+      if(!lid||!sid)return null;
+      var arr=lbSem[lid+'::'+sid+'::'+w];
+      return (arr&&arr.length)?arr.join(' '):null;
+    }
     var body='';
     for(var idx=calRows.length-1;idx>=0;idx--){
       var entry=calRows[idx], d=entry.date;
@@ -15663,9 +15678,10 @@
           var grip=sc.isStart?'<span class="tcm-grip">⋮</span>':'';
           var teamTag=sc.isStart?'<span class="tcm-team">'+teamLabel(sc.sg.name,sc.sg.team)+'</span>':'';
           var adj=sc.sg.adjusted?';outline:2px solid #fff;outline-offset:-2px':'';
-          return '<div class="tcm-seg" data-li="'+sc.sg.li+'" data-si="'+sc.sg.si+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
-            (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+adj+'" title="'+sc.sg.name+' — Equipe '+sc.sg.team+(sc.isEnd?' (saldo)':'')+(sc.sg.adjusted?' (ajustado)':'')+(sc.sg.overTarget?' — previsão de término depois da semana alvo':'')+'">'+
-            grip+fmtBR(sc.qty)+badge+overBadge+teamTag+'</div>';
+          var etp=lbTexto(sc.sg,sc.w);
+          return '<div class="tcm-seg'+(etp?' tcm-etapa':'')+'" data-li="'+sc.sg.li+'" data-si="'+sc.sg.si+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
+            (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+adj+'" title="'+sc.sg.name+(etp?(' — '+etp+' (linha de balanço)'):'')+' — Equipe '+sc.sg.team+(sc.isEnd?' (saldo)':'')+(sc.sg.adjusted?' (ajustado)':'')+(sc.sg.overTarget?' — previsão de término depois da semana alvo':'')+'">'+
+            grip+(etp||fmtBR(sc.qty))+badge+overBadge+teamTag+'</div>';
         }).join('');
         tds+='<td class="cell" data-lot="'+li+'"><div class="tcm-row">'+inner+'</div></td>';
       }
@@ -15888,6 +15904,39 @@
       root.servicos[id]={inicio:(sp&&sp.s>0)?sp.s:1,lotes:lotes,etapas:[],setas:[]};
     }
     return root.servicos[id];
+  }
+  /** Etapas da linha de balanço que acontecem em cada semana, por lote e serviço.
+   *
+   *  Serve pra matriz do Tempo-Caminho: numa OAE a quantidade não diz nada — "1" de ponte não é
+   *  informação —, mas saber que a semana é de armação do pilar é. Onde existe estudo, a célula
+   *  mostra a sigla das etapas da semana no lugar do número.
+   *
+   *  Devolve {"loteId::servicoId::semana": ["INF","MES"]}. Monta de uma vez pra todos os
+   *  serviços com estudo, porque a matriz desenha lote × semana e consultaria isso célula a
+   *  célula. */
+  function lbEtapasPorSemana(){
+    var root=lbRoot(), out={}, salvo=root.servicoSel;
+    Object.keys(root.servicos||{}).forEach(function(sid){
+      if(lbSvcIdx(sid)<0)return;
+      root.servicoSel=sid;
+      var calc=null;
+      try{ calc=lbCalc(); }catch(e){ calc=null; }
+      if(!calc||!calc.itens.length)return;
+      var ini=(calc.c&&calc.c.inicio)||1, porId={};
+      (calc.c.etapas||[]).forEach(function(e){ porId[e.id]=e; });
+      calc.itens.forEach(function(it){
+        var w0=lbDiaParaSemana(it.ini,ini);
+        var w1=lbDiaParaSemana(Math.max(it.ini,it.fim-0.001),ini);
+        var sig=lbSigla(porId[it.eid]);
+        for(var w=w0;w<=w1;w++){
+          var k=it.lote+'::'+sid+'::'+w;
+          if(!out[k])out[k]=[];
+          if(out[k].indexOf(sig)<0)out[k].push(sig);
+        }
+      });
+    });
+    root.servicoSel=salvo;
+    return out;
   }
   function lbMarkDirty(){ LB_DIRTY=true; undoMarca('lb'); refreshTopSaveBtn(); }
   /** Leva o estudo pro Tempo-Caminho: cada lote vira um ajuste manual do serviço, com a semana
@@ -16230,21 +16279,49 @@
     if(!elementos.length){ alert('Todas as etapas do arquivo já estão concluídas — não há o que trazer pra linha de balanço.'); return; }
 
     // 4) locais -> lotes da obra (casa pelo número, como no informe de produção)
-    var ids=lbLoteIds(), porNome={}, porNum={};
+    var ids=lbLoteIds(), porNome={}, porNum={}, porMarcaNum={};
     ids.forEach(function(id){
       var nm=lbNomeLote(id);
       porNome[estNorm(nm)]=id;
       var m=/(\d+)/.exec(nm||''); if(m&&!porNum[m[1]])porNum[m[1]]=id;
+      /* "249" e "OAE 249" dividem o mesmo número, e casar só por número jogava a ponte no lote
+       * da pista — o primeiro da lista com aquele número. A MARCA é o que sobra do nome tirando
+       * os dígitos ("OAE 249" -> "OAE", "249" -> ""), e ela desempata. */
+      if(m){
+        var marca=estNorm(nm).replace(/[\d]+/g,' ').replace(/\s+/g,' ').trim();
+        if(!porMarcaNum[marca])porMarcaNum[marca]={};
+        if(!porMarcaNum[marca][m[1]])porMarcaNum[marca][m[1]]=id;
+      }
     });
+    var marcas=Object.keys(porMarcaNum).filter(function(x){ return x; })
+      .sort(function(a,b){ return b.length-a.length; });   // marca mais específica primeiro
     var idxReg={}; reg.forEach(function(r){ if(r.id)idxReg[r.id]=r; });
-    var acha=function(txt){
-      if(!txt)return null;
-      var id=porNome[estNorm(txt)];
+    /* ctx = texto em volta do item (nome, grupo, serviço). Serve pra escolher entre lotes que
+     * dividem o número: item de OAE vai pro lote "OAE 249", não pro "249". */
+    var acha=function(txt,ctx){
+      if(!txt&&!ctx)return null;
+      var alvo=estNorm((ctx||'')+' '+(txt||''));
+      var pegaNum=function(t){
+        if(!t)return null;
+        var m=/(\d{3,})\s*$/.exec(String(t).trim())||/(\d+)/.exec(String(t));
+        return m?m[1]:null;
+      };
+      var num=pegaNum(txt)||pegaNum(ctx);
+      /* A marca vem ANTES do nome exato: a coluna de local do item de OAE costuma trazer só o
+       * KM ("249"), que bate exatamente com o lote da pista. Sem olhar a marca primeiro, a
+       * ponte caía na pista e o estudo ia pro lote errado. */
+      if(num){
+        for(var i=0;i<marcas.length;i++){
+          var mc=marcas[i];
+          /* Palavra inteira, não pedaço: a marca de "249 R1000" é "R", e procurar o pedaço
+           * "R" faria TERRAPLENAGEM casar com ela. Com borda de palavra só casa quem escreve
+           * a marca de verdade ("OAE 249"). */
+          if((' '+alvo+' ').indexOf(' '+mc+' ')>=0&&porMarcaNum[mc][num])return porMarcaNum[mc][num];
+        }
+      }
+      var id=txt?porNome[estNorm(txt)]:null;
       if(id)return id;
-      var m=/(\d{3,})\s*$/.exec(String(txt).trim());   // "NEW JERSEY - 249" -> 249
-      if(m&&porNum[m[1]])return porNum[m[1]];
-      m=/(\d+)/.exec(String(txt));
-      return (m&&porNum[m[1]])||null;
+      return (num&&porNum[num])||null;
     };
     /* O "local" da coluna B nem sempre é um lote: CONTENÇÕES e OUTROS SERVIÇOS são tipos de
      * serviço, e o KM deles está dentro da estrutura — em CONTENÇÕES como um nível da
@@ -16252,16 +16329,18 @@
      * procurado em três lugares, nesta ordem: a coluna B, os ancestrais e o próprio nome. */
     var deLote={}, semLote={}, loteDe={}, nomeLimpo={};
     elementos.forEach(function(r){
-      var id=acha(r.lote);
+      // o contexto leva o nome do item e o grupo: é onde aparece "OAE", "PONTE", "VIADUTO"
+      var ctx=[r.nome,r.grupo,r.lote].filter(Boolean).join(' ');
+      var id=acha(r.lote,ctx);
       if(!id&&r.id){                                   // sobe a hierarquia atrás de um KM
         for(var k=r.id.length-1;k>=1&&!id;k--){
           var pai=idxReg[r.id.slice(0,k)];
-          if(pai)id=acha(pai.nome);
+          if(pai)id=acha(pai.nome,ctx+' '+pai.nome);
         }
       }
       var limpo=r.nome.trim();
       if(!id){                                         // último recurso: o KM no próprio nome
-        id=acha(r.nome);
+        id=acha(r.nome,ctx);
         if(id)limpo=limpo.replace(/\s*[-–]\s*\d{3,}\s*$/,'').trim()||limpo;
       }
       loteDe[r.id||r.nome]=id||null;
