@@ -355,6 +355,8 @@
   .tcm-row{display:flex;min-height:28px;width:100%}
   .tcm-seg{flex:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:"IBM Plex Mono",monospace;position:relative;padding:2px 3px;cursor:grab;touch-action:none}
   .tcm-seg:active{cursor:grabbing}
+  td.cell.tcm-vazia{cursor:cell}
+  td.cell.tcm-vazia:hover{background:var(--elev);box-shadow:inset 0 0 0 1px var(--line)}
   /* Saldo ao vivo no lancamento de producao */
   .pd-saldo{border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;background:var(--elev);min-height:38px}
   .pd-linha{display:flex;gap:18px;flex-wrap:wrap;align-items:baseline}
@@ -11682,6 +11684,11 @@
       var byTeamPins={};
       allPins.forEach(function(p){ (byTeamPins[p.team]=byTeamPins[p.team]||[]).push(p); });
       var loteRange={};
+      /* Quanto de cada equipe os lotes FIXADOS ja consumiram. Sem isso, a equipe que tem um
+       * lote fixado continuava livre a partir da semana 1 no calculo automatico e aparecia
+       * em dois lugares na mesma semana — ela so nao podia estar em dois lugares dentro de
+       * cada caminho, nunca entre os dois. */
+      var ocupadoPorPino={};
       Object.keys(byTeamPins).forEach(function(teamKey){
         var t2=+teamKey;
         // Mesmo desempate da lousa: semana primeiro, e dentro da semana a ordem em que foi
@@ -11703,6 +11710,7 @@
           loteRange[p.li].max=Math.max(loteRange[p.li].max,packed.start+packed.duration-1);
           tPos=packed.endPos;
         });
+        ocupadoPorPino[t2]=tPos;
       });
       Object.keys(loteRange).forEach(function(liKey){
         startByKey[liKey+'::'+si]=loteRange[liKey].min; endByKey[liKey+'::'+si]=loteRange[liKey].max;
@@ -11719,7 +11727,7 @@
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
         if(seqFixa)remaining.sort(function(a,b){return a.seq-b.seq;});
-        var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(0);
+        var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(ocupadoPorPino[t0+1]||0);
         var teamLastLi=[]; for(var t0b=0;t0b<teams;t0b++)teamLastLi.push(null);
         // Cache do "melhor candidato" por equipe — resultado idêntico ao recalcular do zero a
         // cada rodada (mesma escolha, mesmo desempate), só que sem repetir a varredura completa
@@ -11790,7 +11798,7 @@
         });
         if(!noInt||seqFixa)teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
         teamLots.forEach(function(lotIdxs,tIdx){
-          var team=tIdx+1, tPos=0, lastLi=null;
+          var team=tIdx+1, tPos=ocupadoPorPino[team]||0, lastLi=null;
           if(noInt&&!seqFixa){
             var remainingT=lotIdxs.slice();
             while(remainingT.length){
@@ -17669,7 +17677,11 @@
         var li=lotIdxs[lx];
         var subs=(cell[w+'::'+li]||[]).filter(function(sc){return sc.qty>0&&!TC_HIDDEN_SVC[sc.sg.si];});
         if(!subs.length){
-          tds+='<td class="cell"'+(opts.apontar?(' data-apontnovo="'+w+'::'+li+'"'):(' data-lot="'+li+'"'))+'></td>';
+          /* No Ajuste manual a célula vazia também e um lugar onde se POE trabalho: clicar
+           * nela abre a escolha de serviço e equipe, em vez de so poder arrastar um bloco que
+           * ja existe (o que tirava a equipe de onde ela estava). */
+          tds+='<td class="cell'+(opts.novo?' tcm-vazia':'')+'"'+
+            (opts.apontar?(' data-apontnovo="'+w+'::'+li+'"'):(' data-lot="'+li+'"'+(opts.novo?(' data-tcnovo="'+li+'::'+w+'" title="Clique pra colocar um serviço aqui"'):'')))+'></td>';
           continue;
         }
         if(opts.apontar){
@@ -19706,13 +19718,13 @@
     }
     if(tab==='ajuste') return fsBarHTML()+'<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
       '<div><h3>Ajuste manual (arraste para mover)</h3>'+
-      '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para trocar a equipe. Duplo clique reseta.'+
+      '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para <b>trocar</b> a equipe de lote. Clique numa <b>célula vazia</b> pra <b>acrescentar</b> um serviço e uma equipe ali, sem tirar a equipe de onde ela está. Duplo clique reseta.'+
       (ADJ_DIRTY?' <b style="color:var(--warn)">Há ajustes não salvos.</b>':'')+'</p></div>'+
       '<div style="display:flex;gap:8px;white-space:nowrap">'+
         undoBotoesHTML()+'<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
       '</div></div>'+
-      '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false,buildScheduleVivo());
+      '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false,buildScheduleVivo(),{novo:true});
     if(tab==='tc'&&tcVistaAtual()==='projecao'){
       var proj=buildProjectedSchedule('historico');
       var fim=0; proj.forEach(function(g){ fim=Math.max(fim,g.start+g.dur-1); });
@@ -19988,6 +20000,98 @@
     if(_drag&&_drag.hlRow)_drag.hlRow.classList.remove('tcm-droprow');
     if(_drag&&_drag.hlCol)_drag.hlCol.classList.remove('tcm-dropcol');
   }
+  /** Clique numa célula vazia do Ajuste manual: escolhe o serviço e a equipe que entram ali.
+   *  É a contrapartida de arrastar um bloco — arrastar MOVE a equipe (ela sai de onde estava),
+   *  e isso aqui ACRESCENTA: a equipe continua com o que já tinha e ganha mais este lote,
+   *  entrando na sequência dela a partir da semana escolhida. */
+  function tcNovoDialogo(li,w){
+    if(matBloqueada()||isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(!SERV.length)return;
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    /* Serviço sem quantidade neste lote não tem o que executar aqui — fica listado, mas
+     * marcado, pra não parecer que sumiu. */
+    var opts=SERV.map(function(sv,i){
+      var q=(QTY[li]||[])[i]||0;
+      return '<option value="'+i+'"'+(q>0?'':' data-semqtd="1"')+'>'+escAttr(sv.n)+(q>0?(' — '+fmtBR(q)+' '+escAttr(sv.u)):' (sem quantidade neste lote)')+'</option>';
+    }).join('');
+    var primeiro=-1;
+    SERV.forEach(function(sv,i){ if(primeiro<0&&((QTY[li]||[])[i]||0)>0)primeiro=i; });
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:420px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Colocar serviço aqui</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(LOTS[li])+' · semana '+rotSem(mondayOf(w))+' ('+fmtDate(mondayOf(w))+')</div>'+
+      '<div style="display:flex;flex-direction:column;gap:10px">'+
+        '<label>Serviço<select class="esel" id="tnServ" style="width:100%">'+opts+'</select></label>'+
+        '<label>Equipe<select class="esel" id="tnTeam" style="width:100%"></select></label>'+
+        '<div class="note" id="tnInfo" style="min-height:2.6em"></div>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="tnCancel">Cancelar</button>'+
+        '<button class="btn primary" id="tnOk">Colocar aqui</button>'+
+      '</div></div>';
+    document.body.appendChild(back);
+    var selS=back.querySelector('#tnServ'), selT=back.querySelector('#tnTeam');
+    if(primeiro>=0)selS.value=primeiro;
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#tnCancel').addEventListener('click',fecha);
+    function pinta(){
+      var si=+selS.value, sv=SERV[si];
+      var q=(QTY[li]||[])[si]||0;
+      var eq=Math.max(1,sv.eq||1);
+      var atual=+selT.value||1;
+      selT.innerHTML='';
+      for(var t=1;t<=eq;t++){
+        var o=document.createElement('option');
+        o.value=t; o.textContent='Equipe '+t;
+        selT.appendChild(o);
+      }
+      selT.value=Math.min(atual,eq);
+      /* Onde essa equipe já está nesta semana: o motor não deixa ela produzir em dois lugares
+       * ao mesmo tempo, então o lote novo vai entrar DEPOIS. Dizer isso antes evita a surpresa
+       * de ver o bloco aparecer numa semana diferente da que foi clicada. */
+      var ocupado=null;
+      buildScheduleVivo().forEach(function(sg){
+        if(sg.si!==si||sg.team!==(+selT.value||1))return;
+        if(w>=sg.start&&w<=sg.start+sg.dur-1)ocupado=sg;
+      });
+      var info=back.querySelector('#tnInfo');
+      if(!(q>0)){
+        info.innerHTML='<span style="color:var(--crit)">'+escAttr(LOTS[li])+' não tem quantidade cadastrada de '+escAttr(sv.n)+'.</span> Cadastre em Lotes &amp; Quantidades — sem quantidade não há o que executar aqui.';
+        back.querySelector('#tnOk').disabled=true;
+        return;
+      }
+      back.querySelector('#tnOk').disabled=false;
+      /* O lote fixado passa a ser o compromisso da equipe: os outros lotes dela, que o app
+       * escolhe sozinho, se reorganizam DEPOIS dele. A equipe nao pode produzir em dois
+       * lugares ao mesmo tempo, e e melhor dizer isso antes do que a pessoa descobrir vendo
+       * a matriz mudar. */
+      var outros=0;
+      buildScheduleVivo().forEach(function(sg){
+        if(sg.si===si&&sg.team===(+selT.value||1)&&sg.li!==li)outros++;
+      });
+      info.innerHTML='Entra como <b>'+fmtBR(q)+' '+escAttr(sv.u)+'</b>, com a duração calculada pela produtividade da equipe.'+
+        (ocupado?('<br><span style="color:var(--warn)">A Equipe '+selT.value+' já está em '+escAttr(LOTS[ocupado.li])+' nesta semana.</span>'):'')+
+        (outros?('<br>'+(outros===1?'O outro lote dessa equipe passa':('Os outros '+outros+' lotes dessa equipe passam'))+
+          ' a vir <b>depois</b> deste — ela não produz em dois lugares ao mesmo tempo.'):'');
+    }
+    selS.addEventListener('change',pinta);
+    selT.addEventListener('change',pinta);
+    back.querySelector('#tnOk').addEventListener('click',function(){
+      var si=+selS.value, team=+selT.value||1;
+      var k=ovrKey(li,si); if(!k){ fecha(); return; }
+      /* Mesmo formato do arraste: pino de equipe + semana. Se o lote já tem pinos, o novo é
+       * acrescentado — dois times podem dividir o lote, como no arraste com "incluir". */
+      var atualOvr=OVR[k];
+      var pins=(atualOvr&&Array.isArray(atualOvr.pins))?atualOvr.pins.slice():[];
+      pins=pins.filter(function(p){ return p.team!==team; });
+      pins.push({team:team,startWeek:w});
+      OVR[k]=Object.assign({},atualOvr,{pinned:true,pins:pins});
+      ADJ_PENDING[k]=true;
+      adjDirty(); fecha(); renderCrono();
+      toast(SERV[si].n+' · Equipe '+team+' em '+LOTS[li]+'.');
+    });
+    pinta();
+  }
   function wireDragMatrix(){
     // O cronograma não muda entre o clique (pointerdown) e o soltar (pointerup) dentro do
     // mesmo arraste — só depois, ao soltar de fato. Calcula uma vez por render e reaproveita
@@ -20030,6 +20134,12 @@
         if(!_colDrag||_colDrag.el!==th)return;
         th.style.opacity=''; if(_colDrag.overEl)_colDrag.overEl.style.outline='';
         _colDrag=null;
+      });
+    });
+    document.querySelectorAll('[data-tcnovo]').forEach(function(td){
+      td.addEventListener('click',function(){
+        var pr=td.getAttribute('data-tcnovo').split('::');
+        tcNovoDialogo(+pr[0],+pr[1]);
       });
     });
     document.querySelectorAll('.tcm-seg[data-li]').forEach(function(el){
