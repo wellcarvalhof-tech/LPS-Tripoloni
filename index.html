@@ -10472,8 +10472,10 @@
     }
     if(pre>i0&&pre<=i1){
       var px=xx(posPerto(pre));
-      s+='<line x1="'+px+'" y1="'+pt+'" x2="'+px+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-width="1"/>'+
-        '<text x="'+(px+3)+'" y="'+(pt+8)+'" class="axm" '+afs+' text-anchor="start">inicio do plano</text>';
+      /* So o traço, sem rótulo: o texto colidia com o do cursor quando a semana escolhida
+       * caía perto do começo do plano. O traço sozinho já marca onde a curva importada dá
+       * lugar à daqui — que é onde o pontilhado vira linha cheia. */
+      s+='<line x1="'+px+'" y1="'+pt+'" x2="'+px+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-width="1"/>';
     }
     linhas.forEach(function(L){
       s+='<path d="'+path(L.d)+'" fill="none" stroke="'+L.cor+'" stroke-width="'+L.w+'"'+
