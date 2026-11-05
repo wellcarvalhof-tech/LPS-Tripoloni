@@ -2512,13 +2512,12 @@
       if(segsGenuinelyOverlap(a,b))
         out.push({id:b.id,txt:teamLabel(a.name,a.team)+' de '+a.name+' estaria em '+LOTS[a.li]+' e '+LOTS[b.li]+' ao mesmo tempo.'});
     }
-    // A colocação nasce numa semana válida, mas remover ou colocar algo antes pode empurrar quem
-    // já estava lá. Melhor dizer do que deixar o bloco aparecer calado em outro lugar.
-    segs.forEach(function(g){
-      if(g.pedida&&g.start>g.pedida)
-        out.push({id:g.id,txt:g.name+' em '+LOTS[g.li]+' foi empurrado da '+rotSem(mondayOf(g.pedida))+
-          ' para a '+rotSem(mondayOf(g.start))+' porque '+teamLabel(g.name,g.team)+' está ocupada antes.'});
-    });
+    /* "Foi empurrado da S45 pra S46" NAO e pendencia: o bloco esta na primeira semana em que
+     * ele cabe, que e exatamente o que a oficina promete. Como `pedida` guarda pra sempre a
+     * semana em que se clicou, isso virava um aviso permanente — numa matriz cheia, quase todo
+     * bloco aparecia, e as inconsistencias de verdade ficavam enterradas em dezenas de linhas
+     * que nao havia como "resolver". O deslize continua sendo avisado por toast na hora em que
+     * acontece (ofiMove e ofiPincela), que e quando ele e noticia. */
     // Invariante: numa semana, uma equipe não produz mais do que a produtividade dela (reduzida
     // pela praticabilidade). Vale a checagem porque o estouro nasce da SOMA de dois segmentos da
     // mesma equipe, e cada um isolado parece certo.
