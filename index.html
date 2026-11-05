@@ -11536,6 +11536,13 @@
    * versão ao vivo de propósito. O contrário (marcar os leitores um a um) deixaria qualquer
    * ponto esquecido mostrando o rascunho como se fosse o compromisso. */
   var CENARIO_VISTA=null;   // {id,nome,snap} — cenário sendo visualizado; não altera a obra
+  /* Versao do motor de calculo. Uma linha de base congelada e um REGISTRO: ela tem que
+   * desenhar amanha o mesmo que desenhava no dia em que foi congelada, mesmo que o motor
+   * tenha mudado no meio. Entao o snapshot guarda com que motor foi feito, e e esse que
+   * roda quando ele e lido. Snapshot sem o campo e anterior a isso: motor 1.
+   *   1 = lote fixado nao consumia o tempo da equipe no calculo automatico
+   *   2 = consome (uma equipe nao fica em dois lugares na mesma semana) */
+  var MOTOR_ATUAL=2, MOTOR=MOTOR_ATUAL;
   var REF_DENTRO=0;         // >0: já estamos dentro de um withSnapshot, não empilhar outro
   function snapRef(){
     if(CENARIO_VISTA)return CENARIO_VISTA.snap||null;
@@ -11727,7 +11734,7 @@
           remaining.push({li:li,seq:(o&&o.seq!=null)?o.seq:li,ready:readyPosFor(li)});
         });
         if(seqFixa)remaining.sort(function(a,b){return a.seq-b.seq;});
-        var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(ocupadoPorPino[t0+1]||0);
+        var teamPos=[]; for(var t0=0;t0<teams;t0++)teamPos.push(MOTOR>=2?(ocupadoPorPino[t0+1]||0):0);
         var teamLastLi=[]; for(var t0b=0;t0b<teams;t0b++)teamLastLi.push(null);
         // Cache do "melhor candidato" por equipe — resultado idêntico ao recalcular do zero a
         // cada rodada (mesma escolha, mesmo desempate), só que sem repetir a varredura completa
@@ -11798,7 +11805,7 @@
         });
         if(!noInt||seqFixa)teamLots.forEach(function(arr){arr.sort(function(a,b){return a.seq-b.seq;});});
         teamLots.forEach(function(lotIdxs,tIdx){
-          var team=tIdx+1, tPos=ocupadoPorPino[team]||0, lastLi=null;
+          var team=tIdx+1, tPos=MOTOR>=2?(ocupadoPorPino[team]||0):0, lastLi=null;
           if(noInt&&!seqFixa){
             var remainingT=lotIdxs.slice();
             while(remainingT.length){
@@ -12098,7 +12105,8 @@
       ovr:JSON.parse(JSON.stringify(OVR)),
       feriados:JSON.parse(JSON.stringify(calData())),
       servicos:SERV.map(function(s){return {id:s.id,nome:s.n,unidade:s.u,cor:s.hex,eq:s.eq,produtividade:s.p,lag:s.lag,config:JSON.parse(JSON.stringify(s.cfg||{}))};}),
-      quantidades:captureQuantidades()
+      quantidades:captureQuantidades(),
+      motor:MOTOR_ATUAL
     };
   }
   /** Normaliza cenarios.ajustes_manuais: formato novo ({ovr,feriados,servicos}) ou o formato
@@ -12112,10 +12120,11 @@
         feriados:(raw.feriados&&typeof raw.feriados==='object')?raw.feriados:{holidayWeeks:[],rainPeriods:[]},
         servicos:Array.isArray(raw.servicos)?raw.servicos:null,
         // cenário gravado antes disso não tem saldo próprio: null = usa o da obra
-        quantidades:(raw.quantidades&&typeof raw.quantidades==='object')?raw.quantidades:null
+        quantidades:(raw.quantidades&&typeof raw.quantidades==='object')?raw.quantidades:null,
+        motor:(+raw.motor>0)?+raw.motor:1
       };
     }
-    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null,quantidades:null};
+    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null,quantidades:null,motor:1};
   }
   /** Roda buildSchedule() com um snapshot completo (ajustes + calendário + serviços) em vez do
    *  estado ao vivo, sem alterar o estado global (restaura tudo no finally). snap=null usa o
@@ -12128,7 +12137,8 @@
     if(!snap)return fn();
     REF_DENTRO++;
     var savedOVR=OVR, savedSERV=SERV, savedFeriados=window._OBRA?window._OBRA.feriados:null;
-    var savedQTY=QTY;
+    var savedQTY=QTY, savedMOTOR=MOTOR;
+    MOTOR=(+snap.motor>0)?+snap.motor:1;
     OVR=snap.ovr||{};
     if(snap.servicos&&snap.servicos.length){
       SERV=snap.servicos.map(function(sc){
@@ -12158,6 +12168,7 @@
     finally{
       OVR=savedOVR; SERV=savedSERV; QTY=savedQTY;
       if(window._OBRA)window._OBRA=Object.assign({},window._OBRA,{feriados:savedFeriados});
+      MOTOR=savedMOTOR;
       REF_DENTRO--;
     }
   }
