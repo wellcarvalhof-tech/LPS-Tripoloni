@@ -15091,6 +15091,203 @@
 
     return cfg+kpis+painel+indices+tabela+listaAtraso+alertas;
   }
+  /* ===================== FÍSICO-FINANCEIRO (FiFi) =====================
+   * Custo e receita lado a lado, mês a mês. O orçamento tem as duas colunas em cada item —
+   * custo e faturamento — e a AVA só usa uma delas por vez (a "base do peso"). Aqui as duas
+   * aparecem juntas, que é o que mostra a margem acontecendo ao longo do tempo.
+   *
+   * Previsto sai do cronograma do app: a quantidade que cada serviço produz em cada mês, na
+   * proporção do total dele, aplicada ao valor do serviço no orçamento.
+   * Realizado sai do apontamento: quantidade produzida no mês ÷ quantidade cadastrada.
+   */
+  var FIFI_SERIES=[
+    {id:'bCustoP', rot:'Custo previsto no mês',    cor:'--warn',   tipo:'barra'},
+    {id:'bCustoR', rot:'Custo realizado no mês',   cor:'--crit',   tipo:'barra'},
+    {id:'bRecP',   rot:'Receita prevista no mês',  cor:'--accent', tipo:'barra'},
+    {id:'bRecR',   rot:'Receita realizada no mês', cor:'--good',   tipo:'barra'},
+    {id:'lCustoP', rot:'Custo previsto acum.',     cor:'--warn',   tipo:'linha', trace:true},
+    {id:'lCustoR', rot:'Custo realizado acum.',    cor:'--crit',   tipo:'linha'},
+    {id:'lRecP',   rot:'Receita prevista acum.',   cor:'--accent', tipo:'linha', trace:true},
+    {id:'lRecR',   rot:'Receita realizada acum.',  cor:'--good',   tipo:'linha'}
+  ];
+  function fifiVis(){
+    var v=window._fifiVis;
+    if(!v){ v=window._fifiVis={}; FIFI_SERIES.forEach(function(c){ v[c.id]=true; }); }
+    return v;
+  }
+  /** Custo e faturamento de cada serviço, somados das FOLHAS do orçamento vinculadas a ele.
+   *  Folha, nunca grupo: o grupo e o filho contariam o mesmo dinheiro duas vezes. */
+  function fifiValorPorServico(){
+    var arv=orcArvore(), custo={}, venda={}, sem={custo:0,venda:0};
+    Object.keys(arv.mapa).forEach(function(k){
+      var no=arv.mapa[k];
+      if(no.filhos.length)return;
+      var c=orcNum(no.it.custo), v=orcNum(no.it.venda);
+      if(no.it.svc){ custo[no.it.svc]=(custo[no.it.svc]||0)+c; venda[no.it.svc]=(venda[no.it.svc]||0)+v; }
+      else { sem.custo+=c; sem.venda+=v; }
+    });
+    return {custo:custo,venda:venda,sem:sem};
+  }
+  function fifiDados(){
+    if(!orcTem())return null;
+    var wq=weeklyQtyBySvc(), tw=wq.tw;
+    if(!tw)return null;
+    var V=fifiValorPorServico(), O=orcAtual();
+
+    // eixo: meses do cronograma + do orçamento + dos apontamentos, pra tudo caber no mesmo
+    var mesSet={}, mesDaSem=[];
+    for(var w=1;w<=tw;w++){ var k=orcMesKey(calWeekDate(w)); mesDaSem[w]=k; mesSet[k]=1; }
+    (O.meses||[]).forEach(function(k2){ mesSet[k2]=1; });
+    var lotIds=window._LOTIDS||[];
+    (window.PROD_LIST||[]).forEach(function(r){
+      var li=lotIds.indexOf(r.loteId);
+      if(li>=0&&!lotInView(li))return;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(r.data||''))return;
+      mesSet[orcMesKey(new Date(r.data+'T12:00:00'))]=1;
+    });
+    var meses=Object.keys(mesSet).sort(), N=meses.length, idx={};
+    meses.forEach(function(k3,i){ idx[k3]=i; });
+    var zeros=function(){ var a=[]; for(var i=0;i<N;i++)a.push(0); return a; };
+
+    var bCustoP=zeros(), bRecP=zeros(), bCustoR=zeros(), bRecR=zeros();
+    var porServico=[];
+    SERV.forEach(function(sv,si){
+      var cTot=V.custo[sv.id]||0, vTot=V.venda[sv.id]||0;
+      // previsto: fatia de cada mês na produção planejada do serviço
+      var serie=wq.M[si]||[], mesQ=zeros(), tot=0;
+      for(var w2=1;w2<=tw;w2++){
+        var q=serie[w2]||0; if(!q)continue;
+        mesQ[idx[mesDaSem[w2]]]+=q; tot+=q;
+      }
+      var recMes=zeros();
+      if(tot>0)for(var i2=0;i2<N;i2++){
+        var f=mesQ[i2]/tot;
+        bCustoP[i2]+=f*cTot; bRecP[i2]+=f*vTot; recMes[i2]=f*vTot;
+      }
+      // realizado: produção apontada ÷ quantidade cadastrada
+      var cad=0; LOTS.forEach(function(l,li2){ if(lotInView(li2))cad+=(QTY[li2]||[])[si]||0; });
+      var realQ=zeros();
+      (window.PROD_LIST||[]).forEach(function(r){
+        if(r.servId!==sv.id)return;
+        var li3=lotIds.indexOf(r.loteId);
+        if(li3>=0&&!lotInView(li3))return;
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(r.data||''))return;
+        var ki=idx[orcMesKey(new Date(r.data+'T12:00:00'))];
+        if(ki!=null)realQ[ki]+=+r.qtd||0;
+      });
+      if(cad>0)for(var i3=0;i3<N;i3++){
+        var fr=realQ[i3]/cad;
+        bCustoR[i3]+=fr*cTot; bRecR[i3]+=fr*vTot;
+      }
+      if(tot>0||cad>0)porServico.push({si:si,sv:sv,custo:cTot,venda:vTot,recMes:recMes,
+        totRec:recMes.reduce(function(a,b){return a+b;},0)});
+    });
+
+    /* Cauda morta: mês depois do fim de tudo so estica o eixo. "Ajustar à duração do projeto"
+     * é isso — o gráfico acaba onde a obra acaba. */
+    var ultimo=-1;
+    for(var i4=0;i4<N;i4++)
+      if(bCustoP[i4]>0.009||bRecP[i4]>0.009||bCustoR[i4]>0.009||bRecR[i4]>0.009)ultimo=i4;
+    if(ultimo>=0&&ultimo<N-1){
+      var corta=function(a){ return a.slice(0,ultimo+1); };
+      meses=corta(meses); N=meses.length;
+      bCustoP=corta(bCustoP); bRecP=corta(bRecP); bCustoR=corta(bCustoR); bRecR=corta(bRecR);
+      porServico.forEach(function(L){ L.recMes=corta(L.recMes); });
+    }
+    var acum=function(a){ var out=[],s2=0; a.forEach(function(v){ s2+=v; out.push(s2); }); return out; };
+    var totCusto=0, totVenda=0;
+    SERV.forEach(function(sv){ totCusto+=V.custo[sv.id]||0; totVenda+=V.venda[sv.id]||0; });
+    return {meses:meses,N:N,porServico:porServico,
+      bCustoP:bCustoP,bCustoR:bCustoR,bRecP:bRecP,bRecR:bRecR,
+      lCustoP:acum(bCustoP),lCustoR:acum(bCustoR),lRecP:acum(bRecP),lRecR:acum(bRecR),
+      totCusto:totCusto,totVenda:totVenda,sem:V.sem};
+  }
+  function fifiHTML(){
+    var D=fifiDados();
+    if(!D||!D.N)
+      return '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Sem cronograma pra distribuir</div>'+
+        '<div class="note">O Físico-Financeiro lê o cronograma do Tempo-Caminho e o orçamento: a quantidade de cada serviço em cada mês, '+
+        'vezes o custo e o faturamento dele. Monte o cronograma e vincule os itens do orçamento aos serviços.</div></div>';
+    var pct=(window._fifiUnid==='pct');
+    var fim=D.N-1;
+    var margem=D.totVenda>0?(100*(D.totVenda-D.totCusto)/D.totVenda):0;
+    var realC=D.lCustoR[fim], realR=D.lRecR[fim];
+    var margemReal=realR>0?(100*(realR-realC)/realR):null;
+    var kpis='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('warn','Custo previsto',fmtMoedaCurta(D.totCusto),D.sem.custo>0?(fmtMoedaCurta(D.sem.custo)+' sem vínculo'):'orçamento todo vinculado')+
+      kpi('accent','Receita prevista',fmtMoedaCurta(D.totVenda),'margem '+fmtDec(margem,1)+'%')+
+      kpi('good','Receita realizada',fmtMoedaCurta(realR),D.totVenda>0?(fmtDec(100*realR/D.totVenda,1)+'% do previsto'):'—')+
+      kpi(margemReal==null?'info':(margemReal<margem-0.05?'crit':'good'),'Margem realizada',
+        margemReal==null?'—':(fmtDec(margemReal,1)+'%'),
+        margemReal==null?'sem receita apontada'
+          :(Math.abs(margemReal-margem)<0.05?'igual à prevista'
+            :((margemReal>margem?'acima':'abaixo')+' da prevista')))+
+      '</div>';
+    var vis=fifiVis();
+    var chips='<div class="tc-svctoggle" id="fifiChips" style="margin:2px 0 6px">'+
+      FIFI_SERIES.map(function(c){
+        var on=!!vis[c.id];
+        return '<label class="lotchip'+(on?' on':' other')+'" title="'+(c.tipo==='barra'?'Barra do mês':'Linha acumulada')+'">'+
+          '<input type="checkbox" data-fifivis="'+c.id+'"'+(on?' checked':'')+'>'+
+          '<span class="swatch" style="background:var('+c.cor+')'+(c.tipo==='barra'?';opacity:.6':'')+'"></span>'+c.rot+'</label>';
+      }).join('')+'</div>';
+    var grafico='<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">'+
+        '<div><div class="eyebrow" style="margin:0">Curva físico-financeira</div>'+
+        '<div class="note">Barra = o que entra no mês; linha = acumulado. Custo e receita juntos, previsto e realizado. '+
+        'Eixos diferentes: acumulado à esquerda, mês à direita.</div></div>'+
+        '<div style="display:flex;gap:6px">'+
+          '<button class="subtab'+(pct?'':' active')+'" data-fifiunid="rs">R$</button>'+
+          '<button class="subtab'+(pct?' active':'')+'" data-fifiunid="pct">%</button></div>'+
+      '</div>'+chips+
+      '<svg class="chart" id="fifiSvg" style="width:100%;height:auto"></svg></div>';
+
+    // distribuição da receita prevista, serviço × mês — mesma leitura da aba Distribuição
+    var th='<th style="min-width:190px">Serviço</th>';
+    D.meses.forEach(function(m){ th+='<th class="r">'+orcMesLabel(m)+'</th>'; });
+    th+='<th class="r">Total</th>';
+    var linhas=D.porServico.filter(function(L){ return L.totRec>0; })
+      .sort(function(a,b){ return b.totRec-a.totRec; });
+    var corpo=linhas.map(function(L){
+      var tds=L.recMes.map(function(v){
+        return '<td class="r mono">'+(v>0.5?(pct?(fmtDec(100*v/(L.totRec||1),1)+'%'):fmtMoedaCurta(v).replace('R$ ','')):'—')+'</td>';
+      }).join('');
+      return '<tr><td><span class="swatch" style="background:'+svcColor(L.sv)+'"></span>'+escAttr(L.sv.n)+'</td>'+tds+
+        '<td class="r mono"><b>'+fmtMoedaCurta(L.totRec).replace('R$ ','')+'</b></td></tr>';
+    }).join('');
+    var totLinha=D.meses.map(function(_,i){
+      return '<td class="r mono"><b>'+(D.bRecP[i]>0.5?(pct?(fmtDec(100*D.bRecP[i]/(D.lRecP[D.N-1]||1),1)+'%'):fmtMoedaCurta(D.bRecP[i]).replace('R$ ','')):'—')+'</b></td>';
+    }).join('');
+    var tabela='<div class="card"><div class="eyebrow" style="margin-bottom:2px">Receita prevista mês a mês</div>'+
+      '<div class="note" style="margin-bottom:8px">O faturamento de cada serviço distribuído pelo cronograma do app — a mesma leitura da aba Distribuição, com o valor de venda em vez do custo.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+th+'</tr></thead><tbody>'+
+      (corpo||'<tr><td colspan="'+(D.N+2)+'" class="note">Nenhum serviço com faturamento vinculado.</td></tr>')+
+      '<tr style="background:var(--elev)"><td><b>Total</b></td>'+totLinha+
+      '<td class="r mono"><b>'+fmtMoedaCurta(D.lRecP[D.N-1]).replace('R$ ','')+'</b></td></tr>'+
+      '</tbody></table></div></div>';
+    return kpis+grafico+tabela;
+  }
+  function fifiDraw(){
+    var el=document.getElementById('fifiSvg'); if(!el)return;
+    var D=fifiDados(); if(!D)return;
+    var pct=(window._fifiUnid==='pct'), vis=fifiVis();
+    var baseC=D.totCusto||1, baseR=D.totVenda||1;
+    var conv=function(a,base){ return pct?a.map(function(v){ return 100*v/base; }):a; };
+    var dados={
+      bCustoP:conv(D.bCustoP,baseC), bCustoR:conv(D.bCustoR,baseC),
+      bRecP:conv(D.bRecP,baseR),     bRecR:conv(D.bRecR,baseR),
+      lCustoP:conv(D.lCustoP,baseC), lCustoR:conv(D.lCustoR,baseC),
+      lRecP:conv(D.lRecP,baseR),     lRecR:conv(D.lRecR,baseR)
+    };
+    var linhas=[], barras=[];
+    FIFI_SERIES.forEach(function(c){
+      if(!vis[c.id])return;
+      var item={lab:c.rot,cor:cssHex(c.cor),v:dados[c.id],trace:c.trace};
+      if(c.tipo==='barra')barras.push(item); else linhas.push(item);
+    });
+    avaComboSVG(el,linhas,barras,D.meses,{W:980,H:320,
+      fmt:pct?function(v){ return fmtDec(v,1)+'%'; }:function(v){ return fmtMoedaCurta(v).replace('R$ ',''); }});
+  }
   function avaDistHTML(){
     var X=avaDistribuicao();
     if(!X||!X.linhas.length)
@@ -15319,6 +15516,7 @@
     var tabs='<div class="subtabs" style="margin-bottom:12px">'+
       '<button class="subtab'+(AVA_TAB==='painel'?' active':'')+'" data-avatab="painel">Painel</button>'+
       '<button class="subtab'+(AVA_TAB==='dist'?' active':'')+'" data-avatab="dist" title="Quantidade, percentual e financeiro mês a mês, saindo do cronograma do app">Distribuição</button>'+
+      '<button class="subtab'+(AVA_TAB==='fifi'?' active':'')+'" data-avatab="fifi" title="Custo e receita juntos, previsto e realizado, mês a mês">Físico-Financeiro</button>'+
       '<button class="subtab'+(AVA_TAB==='lanc'?' active':'')+'" data-avatab="lanc">Lançamentos</button></div>';
     var fAva=filtroLotesTexto();
     var avisoAva=fAva?('<div class="banner" style="margin-bottom:12px">'+escAttr(fAva)+'. '+
@@ -15326,6 +15524,7 @@
       'Já o <b>avanço</b> dos serviços vinculados é o produzido ÷ quantidade cadastrada <b>desses lotes</b>.</div>'):'';
     var corpo;
     if(AVA_TAB==='dist')corpo=avaDistHTML();
+    else if(AVA_TAB==='fifi')corpo=fifiHTML();
     else if(!D)corpo='<div class="card"><div class="eyebrow" style="margin-bottom:4px">Orçamento sem cronograma de custo</div>'+
       '<div class="note">A planilha importada não trouxe custo distribuído por mês, então não há eixo de tempo pra COTA, '+
       'o COTR e o CRTR. A aba <b>Distribuição</b> funciona assim mesmo — ela monta o eixo pelo cronograma do app.</div></div>';
@@ -15335,6 +15534,7 @@
   };
   function avaDraw(){
     if(!orcTem())return;
+    if(AVA_TAB==='fifi'){ fifiDraw(); return; }
     if(AVA_TAB==='dist'){
       var elD=document.getElementById('avaDistSvg');
       if(elD){
@@ -15379,6 +15579,20 @@
     var ir=document.getElementById('avaIrOrc'); if(ir)ir.addEventListener('click',function(){ go('cad-orc'); });
     document.querySelectorAll('[data-avatab]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_TAB=b.getAttribute('data-avatab'); go('ac-ava'); });
+    });
+    document.querySelectorAll('[data-fifivis]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        fifiVis()[cb.getAttribute('data-fifivis')]=cb.checked;
+        cb.closest('label').classList.toggle('on',cb.checked);
+        cb.closest('label').classList.toggle('other',!cb.checked);
+        fifiDraw();
+      });
+    });
+    document.querySelectorAll('[data-fifiunid]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        window._fifiUnid=bt.getAttribute('data-fifiunid')==='pct'?'pct':'rs';
+        go('ac-ava');
+      });
     });
     document.querySelectorAll('[data-avavis]').forEach(function(cb){
       cb.addEventListener('change',function(){
