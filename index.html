@@ -5240,6 +5240,23 @@
     arr[bi]=it;
     boostsGrava(si,arr);
   }
+  /** Lote em que a equipe comeca, se cadastrado. '' ou nada = Auto (o app decide).
+   *  Guardado por ID de lote, pelo mesmo motivo dos aumentos: indice mudaria sozinho. */
+  function startLoteDaEquipe(s,team){
+    var arr=(s&&s.cfg&&Array.isArray(s.cfg.teamStartLots))?s.cfg.teamStartLots:[];
+    var id=arr[team-1];
+    if(!id)return -1;
+    return (window._LOTIDS||[]).indexOf(id);
+  }
+  function salvaStartLote(si,team,loteId){
+    var s=SERV[si]; if(!s)return;
+    var arr=((s.cfg&&Array.isArray(s.cfg.teamStartLots))?s.cfg.teamStartLots:[]).slice();
+    while(arr.length<team)arr.push('');
+    arr[team-1]=String(loteId||'');
+    s.cfg=Object.assign({},s.cfg,{teamStartLots:arr});
+    SVC_DIRTY[si]=true;
+    go(current);
+  }
   /** Produtividade da equipe NESTE lote: a base dela, trocada pelo aumento mais a frente que
    *  ja tenha comecado. "A partir do lote X" conta na ordem da lista de lotes — o lote X e
    *  todos depois dele. */
@@ -5267,8 +5284,18 @@
   }
   function svcDetail(s,si){
     var teams=[];for(var i=1;i<=s.eq;i++)teams.push(i);
-    var lotOpts='<option>Auto</option>'+LOTS.map(function(l){return '<option>'+l+'</option>';}).join('');
-    var startLots=teams.map(function(t){return '<span class="ed-team"><em>Equipe '+t+':</em><select class="esel">'+lotOpts+'</select></span>';}).join('');
+    /* Lote inicial de cada equipe: tambem era maquete — <select> sem handler, sem estado.
+     * Agora grava em cfg.teamStartLots[equipe-1] por ID do lote. */
+    var startIds=(s.cfg&&Array.isArray(s.cfg.teamStartLots))?s.cfg.teamStartLots:[];
+    var startLots=teams.map(function(t){
+      var atual=startIds[t-1]||'';
+      var op='<option value=""'+(atual?'':' selected')+'>Auto</option>'+
+        LOTS.map(function(l,li){
+          var id=(window._LOTIDS||[])[li]||'';
+          return '<option value="'+escAttr(id)+'"'+(atual===id?' selected':'')+'>'+escAttr(l)+'</option>';
+        }).join('');
+      return '<span class="ed-team"><em>Equipe '+t+':</em><select class="esel" data-startlot="'+t+'" data-si="'+si+'">'+op+'</select></span>';
+    }).join('');
     var teamProds=(s.cfg&&s.cfg.teamProductivities)||[];
     var prods=teams.map(function(t){var v=teamProds[t-1]>0?teamProds[t-1]:pnum(s.p);return '<span class="ed-team"><em>Equipe '+t+':</em><input class="einp" type="number" data-teamprod="'+t+'" value="'+v+'" style="width:82px"></span>';}).join('');
     /* Aumentos de produtividade: era maquete — os campos existiam, nenhum tinha handler, e o
@@ -9544,6 +9571,11 @@
         if(si==null||isNaN(si))return;
         inp.addEventListener('change',function(){saveTeamProd(si,+inp.getAttribute('data-teamprod'),inp.value);});
       });
+      document.querySelectorAll('[data-startlot]').forEach(function(sl){
+        sl.addEventListener('change',function(){
+          salvaStartLote(+sl.getAttribute('data-si'),+sl.getAttribute('data-startlot'),sl.value);
+        });
+      });
       document.querySelectorAll('[data-bstadd]').forEach(function(bt){
         bt.addEventListener('click',function(){ boostAdd(+bt.getAttribute('data-bstadd')); });
       });
@@ -11584,10 +11616,15 @@
       // Entre candidatos, escolhe o que termina mais cedo (considera a produtividade da
       // equipe); empate resolvido pela distância até o último lote que a equipe fez (logística
       // — usa a posição do lote na lista como proxy de distância) e por fim pela sequência.
-      function bestCandidate(cands,teamPos,teamNum,lastLi){
+      /* `soLi` e o lote de largada da equipe: enquanto ele estiver na fila, a equipe comeca
+       * por ele, custe o que custar no desempate. Se ja saiu da fila, a escolha volta a ser
+       * livre. Filtrar aqui dentro (em vez de recortar a lista fora) mantem o indice que o
+       * chamador usa pra remover o item escolhido. */
+      function bestCandidate(cands,teamPos,teamNum,lastLi,soLi){
         var best=null;
         for(var i=0;i<cands.length;i++){
           var c=cands[i];
+          if(soLi!=null&&soLi>=0&&c.li!==soLi)continue;
           var o=ovrGet(c.li,si);
           var effProd=(o&&o.productivity>0)?o.productivity:prodDaEquipe(s,teamProds,prod,teamNum,c.li);
           var startPos=Math.max(c.ready,teamPos);
@@ -11599,6 +11636,7 @@
             best={idx:i,packed:packed,dist:dist,li:c.li,qty:qty,endPos:packed.endPos};
           }
         }
+        if(!best&&soLi!=null&&soLi>=0)return bestCandidate(cands,teamPos,teamNum,lastLi);
         return best;
       }
       // Ajuste livre (arraste ou menu "Personalizar"): lote+serviço marcado como "pinned" sai do
@@ -11696,7 +11734,7 @@
             // Ordem dos lotes é a definida; o app só escolhe qual equipe pega o próximo.
             var prox=[remaining[0]];
             for(var tf=0;tf<teams;tf++){
-              var candF=bestCandidate(prox,teamPos[tf],tf+1,teamLastLi[tf]);
+              var candF=bestCandidate(prox,teamPos[tf],tf+1,teamLastLi[tf],teamLastLi[tf]==null?startLoteDaEquipe(s,tf+1):-1);
               if(!bestOverall||candF.endPos<bestOverall.endPos-1e-9||(Math.abs(candF.endPos-bestOverall.endPos)<1e-9&&candF.dist<bestOverall.dist-1e-9)){
                 bestOverall=candF; bestTeam=tf;
               }
@@ -11705,7 +11743,7 @@
           } else
           for(var tt=0;tt<teams;tt++){
             if(!teamBest[tt]){
-              teamBest[tt]=bestCandidate(remaining,teamPos[tt],tt+1,teamLastLi[tt]);
+              teamBest[tt]=bestCandidate(remaining,teamPos[tt],tt+1,teamLastLi[tt],teamLastLi[tt]==null?startLoteDaEquipe(s,tt+1):-1);
             }
             var cand=teamBest[tt];
             if(!bestOverall||cand.endPos<bestOverall.endPos-1e-9||(Math.abs(cand.endPos-bestOverall.endPos)<1e-9&&cand.dist<bestOverall.dist-1e-9)){
@@ -11734,8 +11772,17 @@
           if(QTY[li][si]<=0||pinnedLis[li]||MANUAL)return;
           var o=ovrGet(li,si);
           var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
-          if(!teamsArr||!teamsArr.length)teamsArr=[(o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1)];
+          if(!teamsArr||!teamsArr.length){
+            if(o&&o.team>0&&o.team<=teams)teamsArr=[o.team];   // equipe escolhida a mao manda
+            else {
+              /* Lote de largada: se este lote e o inicio de alguma equipe, ele e dela. */
+              var daLargada=-1;
+              for(var tq=1;tq<=teams;tq++){ if(startLoteDaEquipe(s,tq)===li){ daLargada=tq; break; } }
+              teamsArr=[daLargada>0?daLargada:((li%teams)+1)];
+            }
+          }
           var seq=(o&&o.seq!=null)?o.seq:li;
+          if(startLoteDaEquipe(s,teamsArr[0])===li)seq=-1;   // largada vem antes dos outros
           var qtyEach=QTY[li][si]/teamsArr.length;
           teamsArr.forEach(function(t2){
             teamLots[t2-1].push({li:li,seq:seq,ready:readyPosFor(li),qtyOverride:teamsArr.length>1?qtyEach:null});
@@ -11747,7 +11794,7 @@
           if(noInt&&!seqFixa){
             var remainingT=lotIdxs.slice();
             while(remainingT.length){
-              var pick=bestCandidate(remainingT,tPos,team,lastLi);
+              var pick=bestCandidate(remainingT,tPos,team,lastLi,lastLi==null?startLoteDaEquipe(s,team):-1);
               var packedP=pick.packed, liP=pick.li, qtyP=pick.qty;
               segs.push({li:liP,si:si,team:team,teams:teams,start:packedP.start,dur:packedP.duration,qty:qtyP,wq:packedP.wq,
                 color:teamColor(hex,team,Math.max(1,teams)),name:s.n,adjusted:!!(ovrKey(liP,si)&&ADJ_PENDING[ovrKey(liP,si)])});
