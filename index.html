@@ -4661,10 +4661,28 @@
       SERV.map(function(s,si){return '<option value="'+si+'"'+(sel===si?' selected':'')+'>'+s.n+'</option>';}).join('');
     var pacoteSel=pacotes.length?('<select class="esel" id="cvPacoteSel" style="height:28px" title="Filtrar por pacote contratual"><option value="">Todos os pacotes</option>'+
       pacotes.map(function(p){return '<option value="'+escAttr(p)+'"'+(window._curvaSPacote===p?' selected':'')+'>'+p+'</option>';}).join('')+'</select>'):'';
+    /* O seletor de periodo acompanha a escala do eixo: por mes ele lista MESES, e o valor
+     * continua sendo uma semana do plano — a ultima do mes, que num acumulado e o fechamento
+     * dele. Listar 200 semanas numa tela que esta lendo por mes nao ajuda ninguem. */
     var weekSel='';
     if(data.tw>0){
-      var opts='<option value="auto">Hoje'+(data.hojeW>0?' ('+rotSem(mondayOf(data.hojeW))+')':'')+'</option>';
-      for(var w=1;w<=data.tw;w++)opts+='<option value="'+w+'">'+rotSem(mondayOf(w))+'</option>';
+      var MES3=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+      var porMesSel=(window._curvaSEscala==='mes');
+      var rotW=function(w){
+        var d=mondayOf(w);
+        return porMesSel?(MES3[d.getMonth()]+'/'+String(d.getFullYear()).slice(2)):rotSem(d);
+      };
+      var opts='<option value="auto">Hoje'+(data.hojeW>0?' ('+rotW(data.hojeW)+')':'')+'</option>';
+      if(porMesSel){
+        var ultDoMes={};
+        for(var w=1;w<=data.tw;w++)ultDoMes[mondayOf(w).toISOString().slice(0,7)]=w;
+        Object.keys(ultDoMes).sort().forEach(function(k){
+          var w2=ultDoMes[k];
+          opts+='<option value="'+w2+'">'+rotW(w2)+'</option>';
+        });
+      } else {
+        for(var w3=1;w3<=data.tw;w3++)opts+='<option value="'+w3+'">'+rotW(w3)+'</option>';
+      }
       weekSel='<select class="esel" id="cvWeekSel" style="height:28px">'+opts+'</select>';
     }
     return '<div class="cv-compact" id="cvRoot">'+
@@ -4691,8 +4709,9 @@
         '</div>'+
       '</div>'+
       '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
+      '<div class="tc-svctoggle" id="cvChips" style="margin:6px 0 2px"></div>'+
       '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
-      '<div class="note" style="margin-top:4px;font-size:10px"><span style="color:var(--crit);font-weight:700">▬</span> Previsto cliente (linha de base) &nbsp; <span style="color:var(--warn);font-weight:700">▬</span> Previsto executivo (cronograma atual) &nbsp; <span style="color:var(--c5);font-weight:700">▬</span> Projeção (cronograma dinâmico) &nbsp; <span style="color:var(--good);font-weight:700">▬</span> Realizado'+(histCurva()?'&nbsp; <span style="font-weight:700">···</span> Curva S da obra (referência, ponderada por venda) — só na curva geral':'')+' &nbsp;— a linha vertical marca a semana de hoje.</div>'+
+      '<div class="note" style="margin-top:4px;font-size:10px">Marque nos chips acima quais curvas aparecem. A contratual e a executiva da planilha são ponderadas por venda; as daqui, pelos pesos cadastrados (ou pela quantidade). A linha vertical marca a semana de hoje.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
       '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
@@ -9199,7 +9218,10 @@
       var escSelEl=document.getElementById('cvEscalaSel');
       if(escSelEl)escSelEl.addEventListener('change',function(){
         window._curvaSEscala=escSelEl.value==='mes'?'mes':'semana';
-        renderCurvaS();
+        /* Redesenha a tela inteira, nao so o grafico: o seletor de periodo muda de semanas
+         * pra meses junto, e a semana escolhida pode nao ser mais uma das opcoes. */
+        window._curvaSWeek=null;
+        go('ac-curvas');
       });
       var projSelEl=document.getElementById('cvProjSel');
       if(projSelEl)projSelEl.addEventListener('change',function(){
@@ -10372,26 +10394,13 @@
     var E=curvaEixo(tw), eixo=E.eixo, pre=E.pre;
     var n=eixo.length;
 
-    /* Tudo alinhado no MESMO eixo antes de desenhar: a referência já vem por data, e as
-     * curvas do app começam no índice `pre` (antes disso o plano não existia). Alinhar aqui
-     * deixa o recorte e a escala mensal valerem para todas de uma vez. */
-    function desloca(a,d){
-      if(!a)return null;
-      var out=[], j;
-      for(j=0;j<n;j++)out.push(null);
-      for(j=0;j<a.length;j++){ var k=j+d; if(k>=0&&k<n)out[k]=a[j]; }
-      return out;
-    }
-    var ref=(sel==='total')?histCurvaNoEixo(eixo):null;
-    var linhas=[
-      {d:ref&&ref.contratual, cor:'var(--crit)', w:1,   dash:'1 2', op:.65},
-      {d:ref&&ref.executiva,  cor:'var(--warn)', w:1,   dash:'1 2', op:.65},
-      {d:ref&&ref.realizado,  cor:'var(--good)', w:1.2, dash:'1 2', op:.8 },
-      {d:desloca(curveSeries(data.cliente,sel),pre),   cor:'var(--crit)', w:1.6, dash:'',    op:1},
-      {d:desloca(curveSeries(data.executivo,sel),pre), cor:'var(--warn)', w:1.4, dash:'5 3', op:1},
-      {d:data.projetado?desloca(curveSeries(data.projetado,sel),pre):null, cor:'var(--c5)', w:1.5, dash:'2 2', op:1},
-      {d:desloca(curveSeries(data.real,sel),pre),      cor:'var(--good)', w:1.9, dash:'',    op:1}
-    ].filter(function(L){ return !!L.d; });
+    /* As mesmas séries que alimentam os cartões, filtradas pelo que está marcado nos chips —
+     * gráfico e número saindo da mesma conta. */
+    var S=curvaSeriesNoEixo(data,sel,eixo,pre), vis=curvaVis();
+    var linhas=CURVAS_DEF.filter(function(c){ return S[c.id]&&vis[c.id]; }).map(function(c){
+      return {d:S[c.id],cor:c.cor,w:c.w,dash:c.dash,op:c.ref?0.8:1};
+    });
+    if(!linhas.length){ el.innerHTML=''; el.removeAttribute('viewBox'); return; }
 
     /* Recorte: as pontas em que TODAS as curvas ainda estão no zero, ou já estão todas em
      * 100%, não dizem nada e comem metade da largura. Fora elas, com uma semana de folga de
@@ -10478,33 +10487,102 @@
     var colMap={good:'var(--good)',crit:'var(--crit)',warn:'var(--warn)',mut:'var(--muted)'};
     return '<div class="kpi"><div class="stripe" style="background:'+colMap[colorKey]+'"></div><div class="lab">'+lab+'</div><div class="val num">'+val+'</div><div class="foot">'+foot+'</div></div>';
   }
+  /* ---------------- Quais curvas aparecem no gráfico ----------------
+   * Contratual e executiva da planilha vêm do arquivo importado; a executiva atual vem do
+   * cronograma daqui. São versões diferentes do mesmo compromisso, e ver as três juntas é o
+   * ponto: dá pra enxergar o quanto o plano de hoje já se afastou do que foi contratado e do
+   * que a revisão anterior previa. */
+  var CURVAS_DEF=[
+    {id:'contratual', rot:'Contratual',          cor:'var(--crit)', w:1.5, dash:'',    ref:true },
+    {id:'execPlan',   rot:'Executiva da planilha',cor:'var(--c5)',  w:1.2, dash:'1 2', ref:true },
+    {id:'execAtual',  rot:'Executiva atual',     cor:'var(--warn)', w:1.5, dash:'5 3', ref:false},
+    {id:'base',       rot:'Linha de base',       cor:'var(--crit)', w:1.4, dash:'4 2', ref:false},
+    {id:'projecao',   rot:'Projeção',            cor:'var(--c5)',   w:1.5, dash:'2 2', ref:false},
+    {id:'realizado',  rot:'Realizado',           cor:'var(--good)', w:1.9, dash:'',    ref:false}
+  ];
+  function curvaVis(){
+    var v=window._curvaSVis;
+    if(!v){ v=window._curvaSVis={}; CURVAS_DEF.forEach(function(c){ v[c.id]=(c.id!=='base'); }); }
+    return v;
+  }
+  /** As séries de cada curva, já alinhadas no eixo de datas recebido. null = não existe. */
+  function curvaSeriesNoEixo(data,sel,eixo,pre){
+    var n=eixo.length;
+    var desloca=function(a){
+      if(!a)return null;
+      var out=[],j;
+      for(j=0;j<n;j++)out.push(null);
+      for(j=0;j<a.length;j++){ var k=j+pre; if(k>=0&&k<n)out[k]=a[j]; }
+      return out;
+    };
+    var ref=(sel==='total')?histCurvaNoEixo(eixo):null;
+    return {
+      contratual: ref?ref.contratual:desloca(curveSeries(data.cliente,sel)),
+      execPlan:   ref?ref.executiva:null,
+      execAtual:  desloca(curveSeries(data.executivo,sel)),
+      base:       ref?desloca(curveSeries(data.cliente,sel)):null,
+      projecao:   data.projetado?desloca(curveSeries(data.projetado,sel)):null,
+      realizado:  (function(){
+        /* Realizado é um só: o da planilha até onde ela vai, o do app dali em diante. Duas
+         * linhas verdes contando a mesma coisa só confundiriam. */
+        var app=desloca(curveSeries(data.real,sel));
+        if(!ref||!ref.realizado)return app;
+        var out=[];
+        for(var i=0;i<n;i++)out.push(app&&app[i]!=null?app[i]:ref.realizado[i]);
+        return out;
+      })()
+    };
+  }
+  /** Valor de uma curva na semana de plano `w` (o eixo é por data, então converte). */
+  function curvaValorNaSemana(series,eixo,pre,w){
+    var i=pre+w;
+    if(!series||i<0||i>=eixo.length)return null;
+    var v=series[i];
+    if(v!=null)return v;
+    // curva da planilha pode não ter ponto exatamente nessa segunda: pega o último conhecido
+    for(var j=i-1;j>=0;j--){ if(series[j]!=null)return series[j]; }
+    return null;
+  }
   function renderCurvaS(){
     var data=curvaSData();
     var sel=window._curvaSSel==null?'total':window._curvaSSel;
     var wSel=(window._curvaSWeek!=null&&window._curvaSWeek<=data.tw)?window._curvaSWeek:data.hojeW;
+    var E=curvaEixo(data.tw), S=curvaSeriesNoEixo(data,sel,E.eixo,E.pre);
+    var porMes=(window._curvaSEscala==='mes');
+    var MESES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+
     var refEl=document.getElementById('cvRef');
-    if(refEl)refEl.innerHTML=(data.baseline?('Previsto cliente: <b>linha de base '+data.baseline.revisao+'</b> — '+data.baseline.nome+(data.baseline.congeladoEm?(' (congelada em '+brDate(data.baseline.congeladoEm.slice(0,10))+')'):'')):
-      'Previsto cliente: <b>nenhuma linha de base gerada ainda</b> — congele uma em Cenários ou no Tempo-Caminho pra ativar essa curva.')+
-      (data.pacote?(' &nbsp;·&nbsp; Filtrando pacote contratual: <b>'+data.pacote+'</b>'):'');
+    if(refEl){
+      var c=histCurva();
+      refEl.innerHTML=(c
+        ? ('Contratual e executiva da planilha: <b>'+escAttr(c.fonte||'arquivo importado')+'</b> — ponderadas por venda.')
+        : ('Sem Curva S importada — a contratual usa a <b>'+(data.baseline?('linha de base '+data.baseline.revisao):'nenhuma linha de base')+'</b> daqui.'))+
+        (data.pacote?(' &nbsp;·&nbsp; Pacote: <b>'+data.pacote+'</b>'):'');
+    }
     var ptEl=document.getElementById('cvPrintTitle');
     if(ptEl)ptEl.textContent='Curva S — '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra')+' — '+(sel==='total'?'Curva geral':(SERV[sel]?SERV[sel].n:''))+(data.pacote?(' — '+data.pacote):'');
 
-    var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
-    var vCliente=(cCliente&&cCliente[wSel]!=null)?cCliente[wSel]:null;
-    var vExec=(cExec&&cExec[wSel]!=null)?cExec[wSel]:0;
-    var vReal=(cReal&&cReal[wSel]!=null)?cReal[wSel]:0;
-    var idpCliente=(vCliente!=null&&vCliente>0)?(vReal/vCliente):null;
-    var idpExec=vExec>0?(vReal/vExec):null;
-    var atWk=wSel>0?rotSem(mondayOf(wSel)):'antes do início';
+    var vContrat=curvaValorNaSemana(S.contratual,E.eixo,E.pre,wSel);
+    var vExec   =curvaValorNaSemana(S.execAtual,E.eixo,E.pre,wSel);
+    var vReal   =curvaValorNaSemana(S.realizado,E.eixo,E.pre,wSel);
+    if(vReal==null)vReal=0;
+    var idpContrat=(vContrat!=null&&vContrat>0)?(vReal/vContrat):null;
+    var idpExec=(vExec!=null&&vExec>0)?(vReal/vExec):null;
+    var d0=wSel>0?mondayOf(wSel):null;
+    var atRot=d0?(porMes?(MESES[d0.getMonth()]+'/'+String(d0.getFullYear()).slice(2)):rotSem(d0)):'antes do início';
 
     var cardsEl=document.getElementById('cvCards');
     if(cardsEl){
       var html='';
-      html+=kpiCardCv('good','Físico realizado',vReal.toFixed(1)+'%','acumulado · '+atWk);
-      html+=vCliente!=null?kpiCardCv('crit','Previsto cliente',vCliente.toFixed(1)+'%','curva contratual'):kpiCardCv('mut','Previsto cliente','—','sem linha de base');
-      html+=kpiCardCv('warn','Previsto executivo',vExec.toFixed(1)+'%','curva executiva (cronograma atual)');
-      html+=idpCliente!=null?kpiCardCv('crit','IDP cliente',idpCliente.toFixed(2),'realizado ÷ previsto cliente'):kpiCardCv('mut','IDP cliente','—','sem linha de base');
-      html+=kpiCardCv('warn','IDP executivo',idpExec!=null?idpExec.toFixed(2):'—','realizado ÷ previsto executivo');
+      html+=kpiCardCv('good','Físico realizado',vReal.toFixed(1)+'%','acumulado · '+atRot);
+      html+=vContrat!=null?kpiCardCv('crit','Previsto contratual',vContrat.toFixed(1)+'%',histCurva()?'curva contratual da planilha':'linha de base daqui')
+                          :kpiCardCv('mut','Previsto contratual','—','sem contratual importada nem linha de base');
+      html+=vExec!=null?kpiCardCv('warn','Previsto executivo',vExec.toFixed(1)+'%','cronograma atual daqui')
+                       :kpiCardCv('mut','Previsto executivo','—','fora do horizonte do plano');
+      html+=idpContrat!=null?kpiCardCv('crit','IDP contratual',idpContrat.toFixed(2),'realizado ÷ previsto contratual')
+                            :kpiCardCv('mut','IDP contratual','—','sem previsto contratual');
+      html+=idpExec!=null?kpiCardCv('warn','IDP executivo',idpExec.toFixed(2),'realizado ÷ previsto executivo')
+                         :kpiCardCv('mut','IDP executivo','—','sem previsto executivo');
       if(data.projetado){
         var cProjArr=curveSeries(data.projetado,sel), doneWeek=null;
         if(cProjArr)for(var wq=0;wq<cProjArr.length;wq++){ if(cProjArr[wq]>=99.95){doneWeek=wq;break;} }
@@ -10512,6 +10590,23 @@
         html+=kpiCardCv('mut','Previsão de término','🔮 '+projTxt,'ritmo '+(data.projMode==='historico'?'histórico':'previsto')+' a partir de hoje');
       }
       cardsEl.innerHTML=html;
+    }
+    // chips de visibilidade: só mostram as curvas que existem de verdade neste recorte
+    var chipsEl=document.getElementById('cvChips');
+    if(chipsEl){
+      var vis=curvaVis();
+      chipsEl.innerHTML=CURVAS_DEF.filter(function(c){ return !!S[c.id]; }).map(function(c){
+        var on=!!vis[c.id];
+        return '<label class="lotchip'+(on?' on':' other')+'" title="Mostrar ou esconder esta curva">'+
+          '<input type="checkbox" data-cvvis="'+c.id+'"'+(on?' checked':'')+'>'+
+          '<span class="swatch" style="background:'+c.cor+'"></span>'+c.rot+'</label>';
+      }).join('');
+      chipsEl.querySelectorAll('[data-cvvis]').forEach(function(cb){
+        cb.addEventListener('change',function(){
+          curvaVis()[cb.getAttribute('data-cvvis')]=cb.checked;
+          renderCurvaS();
+        });
+      });
     }
     sCurve('scv2',data,sel);
     renderCvBars(data,sel);
