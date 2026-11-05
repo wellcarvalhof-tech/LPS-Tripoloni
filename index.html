@@ -355,6 +355,14 @@
   .tcm-row{display:flex;min-height:28px;width:100%}
   .tcm-seg{flex:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:"IBM Plex Mono",monospace;position:relative;padding:2px 3px;cursor:grab;touch-action:none}
   .tcm-seg:active{cursor:grabbing}
+  /* Saldo ao vivo no lancamento de producao */
+  .pd-saldo{border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;background:var(--elev);min-height:38px}
+  .pd-linha{display:flex;gap:18px;flex-wrap:wrap;align-items:baseline}
+  .pd-item{display:inline-flex;flex-direction:column;line-height:1.25}
+  .pd-item em{font-style:normal;font-size:10.5px;color:var(--muted)}
+  .pd-item b{font-family:"IBM Plex Mono",monospace;font-size:13px}
+  .pd-barra{display:flex;height:6px;border-radius:4px;overflow:hidden;background:var(--line-2);margin-top:7px}
+  .pd-barra i{display:block;height:100%}
   /* Nome do servico dentro da barra: alinhado a esquerda e cortado com reticencias — nome
      longo numa celula estreita nao pode alargar a coluna nem vazar por cima da vizinha. */
   .tcm-seg.tcm-nome{justify-content:flex-start;padding-left:4px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;line-height:1.9}
@@ -9003,6 +9011,63 @@
     pinta();
     var q=back.querySelector('#pcQtd'); if(q)q.focus();
   }
+  /** Saldo do serviço no lote escolhido, ao vivo no formulário de lançamento.
+   *  Lançar sem ver o saldo é como medir no escuro: só na Curva S é que apareceria que o
+   *  serviço passou do cadastrado, dias depois. Aqui o estouro aparece na hora de digitar. */
+  function pdAtualizaSaldo(){
+    var alvo=document.getElementById('pdSaldo'); if(!alvo)return;
+    var selS=document.getElementById('pdServ'), selL=document.getElementById('pdLote');
+    var inpQ=document.getElementById('pdQtd'), un=document.getElementById('pdUn');
+    if(!selS||!selL)return;
+    var servId=selS.value, loteId=selL.value;
+    var si=-1; SERV.forEach(function(sv,i){ if(sv.id===servId)si=i; });
+    var li=(window._LOTIDS||[]).indexOf(loteId);
+    var sv=SERV[si];
+    if(un)un.textContent=sv?('('+sv.u+')'):'';
+    if(si<0||li<0){ alvo.innerHTML='<span class="note" style="margin:0">Escolha o serviço e o lote.</span>'; return; }
+
+    var cadastrado=orcNum((QTY[li]||[])[si]);
+    var apontado=0;
+    (window.PROD_LIST||[]).forEach(function(r){
+      if(r.servId===servId&&r.loteId===loteId)apontado+=+r.qtd||0;
+    });
+    var novo=+(inpQ&&inpQ.value)||0;
+    var saldo=cadastrado-apontado;
+    var depois=saldo-novo;
+    var u=sv.u||'';
+
+    if(!(cadastrado>0)){
+      alvo.innerHTML='<div class="pd-linha"><b style="color:var(--warn)">Sem quantidade cadastrada</b>'+
+        '<span class="note" style="margin:0">'+escAttr(sv.n)+' não tem quantidade em '+escAttr(LOTS[li])+
+        ' (Lotes &amp; Quantidades). Já apontado: '+fmtBR(apontado)+' '+escAttr(u)+'.</span></div>';
+      return;
+    }
+    var pc=Math.max(0,Math.min(1,apontado/cadastrado));
+    var pcNovo=Math.max(0,Math.min(1,(apontado+novo)/cadastrado));
+    /* A barra mostra duas coisas: o que já está apontado (cheio) e o que o lançamento em
+     * digitação acrescentaria (mais claro). Estourando, o trecho excedente fica vermelho. */
+    var estoura=depois<-1e-9;
+    var corNovo=estoura?'var(--crit)':'var(--accent)';
+    var barra='<div class="pd-barra"><i style="width:'+(100*pc).toFixed(1)+'%;background:var(--good)"></i>'+
+      (novo>0?('<i style="width:'+(100*Math.max(0,pcNovo-pc)).toFixed(1)+'%;background:'+corNovo+';opacity:.75"></i>'):'')+
+      '</div>';
+    var item=function(rot,val,cor){
+      return '<span class="pd-item"><em>'+rot+'</em><b'+(cor?(' style="color:'+cor+'"'):'')+'>'+val+'</b></span>';
+    };
+    alvo.innerHTML=
+      '<div class="pd-linha">'+
+        item('Cadastrado',fmtBR(cadastrado)+' '+escAttr(u))+
+        item('Já apontado',fmtBR(apontado)+' '+escAttr(u))+
+        item('Saldo',fmtBR(saldo)+' '+escAttr(u),saldo<0?'var(--crit)':'')+
+        (novo>0?item('Depois deste',fmtBR(depois)+' '+escAttr(u),estoura?'var(--crit)':'var(--good)'):'')+
+      '</div>'+barra+
+      (estoura
+        ? ('<div class="note" style="margin:4px 0 0;color:var(--crit)">Este lançamento passa o cadastrado em <b>'+
+            fmtBR(-depois)+' '+escAttr(u)+'</b>. Dá pra lançar assim mesmo — mas ou o apontamento está errado, ou a quantidade do lote precisa ser revista.</div>')
+        : (saldo<0
+          ? '<div class="note" style="margin:4px 0 0;color:var(--crit)">O apontado já passou o cadastrado neste lote.</div>'
+          : ''));
+  }
   function renderProd(){
     var root=document.getElementById('prodRoot');if(!root)return;
     /* O botão de puxar o realizado das estacas vivia só na aba Matriz de estacas, e é na
@@ -9024,7 +9089,9 @@
         fwrap('Data','<input id="pdData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
         fwrap('Serviço','<select id="pdServ" class="einp" style="width:100%">'+svcOpts+'</select>')+
         fwrap('Lote','<select id="pdLote" class="einp" style="width:100%">'+lotOpts+'</select>')+
-        fwrap('Quantidade','<input id="pdQtd" class="einp" type="number" style="width:100%" placeholder="0">')+
+        fwrap('Quantidade <span id="pdUn" class="note" style="margin:0"></span>','<input id="pdQtd" class="einp" type="number" min="0" style="width:100%" placeholder="0">')+
+        '<div class="mpf" style="grid-column:span 2"><label>Saldo deste serviço neste lote</label>'+
+          '<div id="pdSaldo" class="pd-saldo"></div></div>'+
         '</div><div style="margin-top:10px"><button class="btn primary" id="pdAdd">+ Lançar produção</button></div></div>';
       var rows=window.PROD_LIST.map(function(r){
         var sv=SERV.filter(function(x){return x.id===r.servId;})[0];
@@ -9070,6 +9137,13 @@
     if(cgTop)cgTop.addEventListener('click',importarCargasArquivo);
     var bdTop=document.getElementById('estBancosBtn');
     if(bdTop)bdTop.addEventListener('click',importarBancosArquivo);
+    ['pdServ','pdLote'].forEach(function(id){
+      var e=document.getElementById(id);
+      if(e)e.addEventListener('change',pdAtualizaSaldo);
+    });
+    var qEl=document.getElementById('pdQtd');
+    if(qEl){ qEl.addEventListener('input',pdAtualizaSaldo); qEl.addEventListener('change',pdAtualizaSaldo); }
+    pdAtualizaSaldo();
     var add=document.getElementById('pdAdd');
     if(add)add.addEventListener('click',async function(){
       if(!selectedObra)return;
