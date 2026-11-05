@@ -14879,7 +14879,10 @@
       if(barras.length)
         s+='<text class="axm" x="'+(W-pr+6)+'" y="'+(yL(vl)+3).toFixed(1)+'" text-anchor="start" opacity=".75">'+fmt(vb)+'</text>';
     }
-    var passo=Math.max(1,Math.ceil(n/12));
+    /* Rotular de 2 em 2 deixa metade das barras sem nome e o eixo deixa de servir pra ler o
+     * grafico. O passo sai da largura que cada mes tem: se "ago/26" cabe, todo mes recebe
+     * rotulo; so aperta quando nao cabe mesmo. */
+    var porMes=iw/Math.max(1,n-1), passo=Math.max(1,Math.ceil(42/Math.max(1,porMes)));
     for(var i=0;i<n;i+=passo)
       s+='<text class="axm" x="'+xx(i).toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+orcMesLabel(meses[i])+'</text>';
     // barras primeiro: as linhas passam por cima
@@ -14963,7 +14966,10 @@
     }
     if(opts.ref!=null&&opts.ref>=mn&&opts.ref<=mx)
       s+='<line x1="'+pl+'" y1="'+yy(opts.ref).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yy(opts.ref).toFixed(1)+'" stroke="var(--ink)" stroke-opacity=".45" stroke-dasharray="4 3"/>';
-    var passo=Math.max(1,Math.ceil(n/12));
+    /* Rotular de 2 em 2 deixa metade das barras sem nome e o eixo deixa de servir pra ler o
+     * grafico. O passo sai da largura que cada mes tem: se "ago/26" cabe, todo mes recebe
+     * rotulo; so aperta quando nao cabe mesmo. */
+    var porMes=iw/Math.max(1,n-1), passo=Math.max(1,Math.ceil(42/Math.max(1,porMes)));
     for(var i=0;i<n;i+=passo)
       s+='<text class="axm" x="'+xx(i).toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+orcMesLabel(meses[i])+'</text>';
     if(opts.corte!=null&&n>1)
