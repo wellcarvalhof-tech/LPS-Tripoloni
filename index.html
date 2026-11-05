@@ -14227,22 +14227,6 @@
       kpi(pesoVinc>0?'good':'crit','Vinculado a serviço',fmtDec(total>0?100*pesoVinc/total:0,1)+'%',vinc+' de '+nAtv+' atividades de nível 2')+
       '</div>';
 
-    var cfgCard='<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:8px">Configuração da AVA</div>'+
-      '<div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">'+
-        '<div class="field" style="margin:0"><label>Base do peso</label>'+
-          '<select class="inp" id="orcBase" style="width:170px">'+
-            '<option value="custo"'+(O.cfg.base!=='venda'?' selected':'')+'>Custo</option>'+
-            '<option value="venda"'+(O.cfg.base==='venda'?' selected':'')+'>Faturamento</option></select></div>'+
-        '<div class="field" style="margin:0"><label>Orçamento executivo (BAC)</label>'+
-          '<input class="inp" id="orcBac" type="number" step="0.01" min="0" value="'+(orcNum(O.cfg.bac)||'')+'" placeholder="'+Math.round(bac)+'" style="width:190px"></div>'+
-        '<div class="field" style="margin:0"><label>Limiar de atenção</label>'+
-          '<input class="inp" id="orcLA" type="number" step="0.01" min="0" max="2" value="'+(O.cfg.limiarAtencao||0.95)+'" style="width:120px"></div>'+
-        '<div class="field" style="margin:0"><label>Limiar crítico</label>'+
-          '<input class="inp" id="orcLC" type="number" step="0.01" min="0" max="2" value="'+(O.cfg.limiarCritico||0.9)+'" style="width:120px"></div>'+
-      '</div>'+
-      '<div class="note" style="margin-top:8px">O <b>BAC</b> em branco usa a soma da planilha ('+fmtMoeda(total)+'). '+
-      'Os limiares pintam os índices da AVA: abaixo do crítico fica vermelho, entre os dois fica amarelo.</div></div>';
-
     var periodo=O.meses.length>1?(orcMesLabel(O.meses[0])+' a '+orcMesLabel(O.meses[O.meses.length-1])+' · '+O.meses.length+' meses'):'sem cronograma mensal importado';
     var tabela='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
       '<div><div class="eyebrow" style="margin:0">EAP e pesos</div>'+
@@ -14261,7 +14245,7 @@
         return (r.it.cod==='1'?cab:'')+orcLinhaHTML(r,arv,total);
       }).join('')+
       '</tbody></table></div></div>';
-    return topo+kpis+cfgCard+tabela;
+    return topo+kpis+tabela;
   };
   function orcWire(){
     var b=document.getElementById('orcImp'); if(b)b.addEventListener('click',orcImportar);
@@ -14280,7 +14264,9 @@
         if(id==='orcBac')O.cfg.bac=orcNum(e.value);
         if(id==='orcLA')O.cfg.limiarAtencao=orcNum(e.value)||0.95;
         if(id==='orcLC')O.cfg.limiarCritico=orcNum(e.value)||0.9;
-        orcSujo(); go('cad-orc');
+        /* Os mesmos campos agora aparecem na AVA: redesenha a tela em que o usuario esta,
+         * nao sempre a do orcamento. */
+        orcSujo(); go(current==='ac-ava'?'ac-ava':'cad-orc');
       });
     });
     document.querySelectorAll('[data-orctog]').forEach(function(bt){
@@ -14641,6 +14627,120 @@
       linhas:linhas,arv:arv,alertas:alertas,totalPeso:totalPeso};
   }
   /* ---------- desenho ---------- */
+  /* ---------------- Curva da AVA: linhas de acumulado + barras do período ----------------
+   * Acumulado e período contam coisas diferentes e precisam dos dois desenhos: a linha mostra
+   * a trajetória, a barra mostra o que entrou no mês. Numa escala só, a barra do mês fica
+   * rente ao chão ao lado de um acumulado que chega aos milhões — por isso cada um tem o seu
+   * eixo, o acumulado à esquerda e o do período à direita. */
+  var AVA_CURVAS=[
+    {id:'cota', rot:'COTA (previsto)',  cor:'--warn',   tipo:'linha'},
+    {id:'cotr', rot:'COTR (realizado)', cor:'--accent', tipo:'linha'},
+    {id:'crtr', rot:'CRTR (custo real)',cor:'--crit',   tipo:'linha', trace:true},
+    {id:'bPrev',rot:'Previsto no mês',  cor:'--warn',   tipo:'barra'},
+    {id:'bReal',rot:'Realizado no mês', cor:'--accent', tipo:'barra'}
+  ];
+  function avaVis(){
+    var v=window._avaVis;
+    if(!v){ v=window._avaVis={}; AVA_CURVAS.forEach(function(c){ v[c.id]=true; }); }
+    return v;
+  }
+  /** Diferença mês a mês de uma série acumulada. É o que a barra mostra. */
+  function avaDelta(acc,corte){
+    var out=[];
+    for(var i=0;i<acc.length;i++){
+      if(corte!=null&&i>corte){ out.push(null); continue; }
+      var a=acc[i], b=i>0?acc[i-1]:0;
+      out.push((a==null||b==null)?null:Math.max(0,a-b));
+    }
+    return out;
+  }
+  function avaComboSVG(el,linhas,barras,meses,opts){
+    if(!el)return; opts=opts||{};
+    var W=opts.W||900,H=opts.H||300,pl=opts.pl||58,pr=opts.pr||58,pt=14,pb=38;
+    var iw=W-pl-pr, ih=H-pt-pb, n=meses.length;
+    el.setAttribute('viewBox','0 0 '+W+' '+H);
+    var maxL=0; linhas.forEach(function(s){ s.v.forEach(function(v){ if(v!=null)maxL=Math.max(maxL,v); }); });
+    var maxB=0; barras.forEach(function(s){ s.v.forEach(function(v){ if(v!=null)maxB=Math.max(maxB,v); }); });
+    maxL=maxL||1; maxB=maxB||1;
+    var xx=function(i){ return pl+(n<=1?iw/2:iw*i/(n-1)); };
+    var yL=function(v){ return pt+ih-ih*v/maxL; };
+    var yB=function(v){ return pt+ih-ih*v/maxB; };
+    var fmt=opts.fmt||function(v){ return fmtDec(v,2); };
+    var s='';
+    for(var g=0;g<=4;g++){
+      var vl=maxL*g/4, vb=maxB*g/4;
+      s+='<line x1="'+pl+'" y1="'+yL(vl).toFixed(1)+'" x2="'+(W-pr)+'" y2="'+yL(vl).toFixed(1)+'" stroke="var(--line)"/>'+
+         '<text class="axm" x="'+(pl-6)+'" y="'+(yL(vl)+3).toFixed(1)+'" text-anchor="end">'+fmt(vl)+'</text>';
+      if(barras.length)
+        s+='<text class="axm" x="'+(W-pr+6)+'" y="'+(yL(vl)+3).toFixed(1)+'" text-anchor="start" opacity=".75">'+fmt(vb)+'</text>';
+    }
+    var passo=Math.max(1,Math.ceil(n/12));
+    for(var i=0;i<n;i+=passo)
+      s+='<text class="axm" x="'+xx(i).toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+orcMesLabel(meses[i])+'</text>';
+    // barras primeiro: as linhas passam por cima
+    if(barras.length&&n){
+      var larguraGrupo=(n<=1?iw*0.5:iw/(n-1))*0.68;
+      var bw=Math.max(1.5,larguraGrupo/barras.length);
+      barras.forEach(function(sr,bi){
+        sr.v.forEach(function(v,i2){
+          if(v==null||!(v>0))return;
+          var x0=xx(i2)-larguraGrupo/2+bi*bw;
+          s+='<rect x="'+x0.toFixed(1)+'" y="'+yB(v).toFixed(1)+'" width="'+bw.toFixed(1)+
+             '" height="'+Math.max(0.6,(pt+ih-yB(v))).toFixed(1)+'" fill="'+sr.cor+'" opacity=".55">'+
+             '<title>'+escAttr(sr.lab+' · '+orcMesLabel(meses[i2])+': '+fmt(v))+'</title></rect>';
+        });
+      });
+    }
+    if(opts.corte!=null&&n>1)
+      s+='<line x1="'+xx(opts.corte).toFixed(1)+'" y1="'+pt+'" x2="'+xx(opts.corte).toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="3 3"><title>Data de corte</title></line>';
+    linhas.forEach(function(sr){
+      var d='', ligado=false;
+      sr.v.forEach(function(v,i3){
+        if(v==null){ ligado=false; return; }
+        d+=(ligado?'L':'M')+xx(i3).toFixed(1)+' '+yL(v).toFixed(1)+' '; ligado=true;
+      });
+      if(d)s+='<path d="'+d+'" fill="none" stroke="'+sr.cor+'" stroke-width="2.2"'+(sr.trace?' stroke-dasharray="5 4"':'')+'/>';
+      sr.v.forEach(function(v,i4){
+        if(v==null)return;
+        s+='<circle cx="'+xx(i4).toFixed(1)+'" cy="'+yL(v).toFixed(1)+'" r="2.6" fill="'+sr.cor+'">'+
+           '<title>'+escAttr(sr.lab+' · '+orcMesLabel(meses[i4])+': '+fmt(v))+'</title></circle>';
+      });
+    });
+    el.innerHTML=s;
+  }
+  /** Chips pra escolher o que aparece no gráfico da AVA. */
+  function avaChipsHTML(){
+    var vis=avaVis();
+    return '<div class="tc-svctoggle" id="avaChips" style="margin:2px 0 6px">'+
+      AVA_CURVAS.map(function(c){
+        var on=!!vis[c.id];
+        return '<label class="lotchip'+(on?' on':' other')+'" title="'+(c.tipo==='barra'?'Barra do mês':'Linha acumulada')+'">'+
+          '<input type="checkbox" data-avavis="'+c.id+'"'+(on?' checked':'')+'>'+
+          '<span class="swatch" style="background:var('+c.cor+')'+(c.tipo==='barra'?';opacity:.6':'')+'"></span>'+c.rot+'</label>';
+      }).join('')+'</div>';
+  }
+  /** Configuração da AVA. Mora na tela da AVA, que é onde esses números são lidos — base do
+   *  peso, BAC e os limiares que pintam os índices. O orçamento é cadastro; isto é análise. */
+  function avaCfgCardHTML(){
+    var O=orcAtual(), arv=orcArvore(), total=0;
+    arv.raizes.forEach(function(r){ total+=r.peso; });
+    var bac=orcBAC();
+    return '<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:8px">Configuração da AVA</div>'+
+      '<div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">'+
+        '<div class="field" style="margin:0"><label>Base do peso</label>'+
+          '<select class="inp" id="orcBase" style="width:170px">'+
+            '<option value="custo"'+(O.cfg.base!=='venda'?' selected':'')+'>Custo</option>'+
+            '<option value="venda"'+(O.cfg.base==='venda'?' selected':'')+'>Faturamento</option></select></div>'+
+        '<div class="field" style="margin:0"><label>Orçamento executivo (BAC)</label>'+
+          '<input class="inp" id="orcBac" type="number" step="0.01" min="0" value="'+(orcNum(O.cfg.bac)||'')+'" placeholder="'+Math.round(bac)+'" style="width:190px"></div>'+
+        '<div class="field" style="margin:0"><label>Limiar de atenção</label>'+
+          '<input class="inp" id="orcLA" type="number" step="0.01" min="0" max="2" value="'+(O.cfg.limiarAtencao||0.95)+'" style="width:120px"></div>'+
+        '<div class="field" style="margin:0"><label>Limiar crítico</label>'+
+          '<input class="inp" id="orcLC" type="number" step="0.01" min="0" max="2" value="'+(O.cfg.limiarCritico||0.9)+'" style="width:120px"></div>'+
+      '</div>'+
+      '<div class="note" style="margin-top:8px">O <b>BAC</b> em branco usa a soma da planilha ('+fmtMoeda(total)+'). '+
+      'Os limiares pintam os índices da AVA: abaixo do crítico fica vermelho, entre os dois fica amarelo.</div></div>';
+  }
   function avaLinhaSVG(el,series,meses,opts){
     if(!el)return; opts=opts||{};
     var W=opts.W||900,H=opts.H||300,pl=opts.pl||58,pr=16,pt=14,pb=38;
@@ -14708,15 +14808,17 @@
       '</div>';
 
     var curvaId='avaCurva', idxId='avaIdx';
+    var cfg=avaCfgCardHTML();
     var painel='<div class="card" style="margin-bottom:12px">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">'+
         '<div><div class="eyebrow" style="margin:0">Curva S</div>'+
-        '<div class="note">COTA (previsto), COTR (agregado) e CRTR (custo real), acumulados por mês</div></div>'+
+        '<div class="note">Linha = acumulado (COTA, COTR, CRTR). Barra = o que entra em cada mês, previsto e realizado. '+
+        'Os dois eixos são diferentes: acumulado à esquerda, mês à direita.</div></div>'+
         '<div style="display:flex;gap:6px">'+
           '<button class="subtab'+(AVA_UNID==='pct'?' active':'')+'" data-avaunid="pct">% do orçamento</button>'+
           '<button class="subtab'+(AVA_UNID==='rs'?' active':'')+'" data-avaunid="rs">R$</button></div>'+
       '</div>'+
-      avaLegenda([{lab:'COTA — previsto',cor:cssHex('--warn')},{lab:'COTR — agregado',cor:cssHex('--accent')},{lab:'CRTR — custo real',cor:cssHex('--crit'),trace:true}])+
+      avaChipsHTML()+
       '<svg class="chart" id="'+curvaId+'" style="width:100%;height:auto"></svg></div>';
 
     var indices='<div class="card" style="margin-bottom:12px">'+
@@ -14782,7 +14884,7 @@
         (D.alertas.length>40?('<div class="note" style="margin-top:6px">+ '+(D.alertas.length-40)+' outras</div>'):'')
       ):'<div class="note" style="color:var(--good)">Nada a apontar.</div>')+'</div>';
 
-    return kpis+painel+indices+tabela+listaAtraso+alertas;
+    return cfg+kpis+painel+indices+tabela+listaAtraso+alertas;
   }
   function avaDistHTML(){
     var X=avaDistribuicao();
@@ -15044,11 +15146,17 @@
     var el=document.getElementById('avaCurva');
     if(el){
       var f=AVA_UNID==='rs';
-      avaLinhaSVG(el,[
-        {lab:'COTA',cor:cssHex('--warn'),v:D.PV.map(function(v){ return f?v*D.BAC:v*100; })},
-        {lab:'COTR',cor:cssHex('--accent'),v:D.EV.map(function(v,i){ return i<=D.corte?(f?v*D.BAC:v*100):null; })},
-        {lab:'CRTR',cor:cssHex('--crit'),trace:true,v:D.AC.map(function(v,i){ return (i<=D.corte&&v>0)?(f?v:100*v/D.BAC):null; })}
-      ],D.meses,{W:900,H:300,corte:D.corte,ymax:f?null:100,
+      var vis=avaVis();
+      var sCota=D.PV.map(function(v){ return f?v*D.BAC:v*100; });
+      var sCotr=D.EV.map(function(v,i){ return i<=D.corte?(f?v*D.BAC:v*100):null; });
+      var sCrtr=D.AC.map(function(v,i){ return (i<=D.corte&&v>0)?(f?v:100*v/D.BAC):null; });
+      var linhas=[], barras=[];
+      if(vis.cota)linhas.push({lab:'COTA',cor:cssHex('--warn'),v:sCota});
+      if(vis.cotr)linhas.push({lab:'COTR',cor:cssHex('--accent'),v:sCotr});
+      if(vis.crtr)linhas.push({lab:'CRTR',cor:cssHex('--crit'),trace:true,v:sCrtr});
+      if(vis.bPrev)barras.push({lab:'Previsto no mês',cor:cssHex('--warn'),v:avaDelta(sCota,null)});
+      if(vis.bReal)barras.push({lab:'Realizado no mês',cor:cssHex('--accent'),v:avaDelta(sCotr,D.corte)});
+      avaComboSVG(el,linhas,barras,D.meses,{W:900,H:300,corte:D.corte,
         fmt:f?function(v){ return fmtMoedaCurta(v).replace('R$ ',''); }:function(v){ return Math.round(v)+'%'; }});
     }
     var ei=document.getElementById('avaIdx');
@@ -15066,6 +15174,14 @@
     var ir=document.getElementById('avaIrOrc'); if(ir)ir.addEventListener('click',function(){ go('cad-orc'); });
     document.querySelectorAll('[data-avatab]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_TAB=b.getAttribute('data-avatab'); go('ac-ava'); });
+    });
+    document.querySelectorAll('[data-avavis]').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        avaVis()[cb.getAttribute('data-avavis')]=cb.checked;
+        cb.closest('label').classList.toggle('on',cb.checked);
+        cb.closest('label').classList.toggle('other',!cb.checked);
+        avaDraw();
+      });
     });
     document.querySelectorAll('[data-avadistmed]').forEach(function(b){
       b.addEventListener('click',function(){ AVA_DIST_MED=b.getAttribute('data-avadistmed'); go('ac-ava'); });
