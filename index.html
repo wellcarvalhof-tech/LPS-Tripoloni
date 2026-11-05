@@ -4711,7 +4711,7 @@
       '<div class="print-only" style="margin:2px 0 8px"><h2 id="cvPrintTitle" style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px"></h2></div>'+
       '<div class="tc-svctoggle" id="cvChips" style="margin:6px 0 2px"></div>'+
       '<svg class="chart" id="scv2" viewBox="0 0 700 210" style="max-height:40vh"></svg>'+
-      '<div class="note" style="margin-top:4px;font-size:10px">Marque nos chips acima quais curvas aparecem. A contratual e a executiva da planilha são ponderadas por venda; as daqui, pelos pesos cadastrados (ou pela quantidade). A linha vertical marca a semana de hoje.</div>'+
+      '<div class="note" style="margin-top:4px;font-size:10px">Marque nos chips acima quais curvas aparecem. A contratual e a executiva da planilha são ponderadas por venda; as daqui, pelos pesos cadastrados (ou pela quantidade). A linha vertical marca o período escolhido ao lado — o mesmo dos cartões.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
       '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
@@ -10385,7 +10385,7 @@
     }
     return {eixo:pre.concat(plano),pre:pre.length};
   }
-  function sCurve(id,data,sel){
+  function sCurve(id,data,sel,wSel){
     var el=document.getElementById(id); if(!el)return;
     var W=700,H=210,pl=30,pr=10,pt=10,pb=18,iw=W-pl-pr,ih=H-pt-pb;
     var afs='style="font-size:7.5px"';
@@ -10416,6 +10416,10 @@
     while(i1>i0&&paradoEm(i1,'cem'))i1--;
     i0=Math.max(0,i0-1); i1=Math.min(n-1,i1+1);
     if(i1-i0<2){ i0=0; i1=n-1; }   // curva ainda sem movimento: mostra tudo
+    /* O cursor tem que caber no desenho: escolher uma semana da cauda que o recorte tirou
+     * faria a linha sumir, e os cartoes continuariam mostrando aquele periodo. */
+    var iCur=pre+((wSel!=null&&wSel>0&&wSel<=tw)?wSel:data.hojeW);
+    if(iCur>=0&&iCur<n){ i0=Math.min(i0,iCur); i1=Math.max(i1,iCur); }
 
     /* Escala do eixo: semana (um ponto por semana) ou mês (o último ponto de cada mês, que
      * num acumulado é o fechamento do mês). */
@@ -10475,11 +10479,18 @@
       s+='<path d="'+path(L.d)+'" fill="none" stroke="'+L.cor+'" stroke-width="'+L.w+'"'+
         (L.dash?(' stroke-dasharray="'+L.dash+'"'):'')+(L.op<1?(' opacity="'+L.op+'"'):'')+'/>';
     });
-    var hi=pre+data.hojeW;
-    if(data.hojeW>0&&data.hojeW<=tw&&hi>=i0&&hi<=i1){
+    /* A linha vertical e o CURSOR do painel: ela marca a semana escolhida no seletor, que e a
+     * mesma que os cartoes estao mostrando. Presa em "hoje" ela nao dizia nada quando se olhava
+     * outro periodo — os numeros mudavam e a linha ficava parada. */
+    var wCur=(wSel!=null&&wSel>0&&wSel<=tw)?wSel:data.hojeW;
+    var hi=pre+wCur;
+    if(wCur>0&&wCur<=tw&&hi>=i0&&hi<=i1){
       var hx=xx(posPerto(hi));
+      var dCur=mondayOf(wCur);
+      var rotCur=(wCur===data.hojeW)?'hoje'
+        :(porMes?(MESES[dCur.getMonth()]+'/'+String(dCur.getFullYear()).slice(2)):rotSem(dCur));
       s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
-        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" '+afs+'>hoje</text>';
+        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" '+afs+'>'+rotCur+'</text>';
     }
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
@@ -10608,7 +10619,7 @@
         });
       });
     }
-    sCurve('scv2',data,sel);
+    sCurve('scv2',data,sel,wSel);
     renderCvBars(data,sel);
     renderCvIdp(data,sel);
   }
