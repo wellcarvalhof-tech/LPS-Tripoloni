@@ -4678,6 +4678,10 @@
           '<select class="esel" id="cvCurveSel" style="height:28px">'+curveOpts+'</select>'+
           pacoteSel+
           weekSel+
+          '<select class="esel" id="cvEscalaSel" style="height:28px" title="Passo do eixo do tempo">'+
+            '<option value="semana"'+(window._curvaSEscala==='mes'?'':' selected')+'>Por semana</option>'+
+            '<option value="mes"'+(window._curvaSEscala==='mes'?' selected':'')+'>Por mês</option>'+
+          '</select>'+
           '<select class="esel" id="cvProjSel" style="height:28px" title="Cronograma dinâmico: reprojeta o restante a partir de hoje">'+
             '<option value=""'+(!window._curvaSProjMode?' selected':'')+'>Sem projeção</option>'+
             '<option value="previsto"'+(window._curvaSProjMode==='previsto'?' selected':'')+'>Projeção · ritmo previsto</option>'+
@@ -9192,6 +9196,11 @@
         window._curvaSPacote=pacoteSelEl.value||'';
         go('ac-curvas');
       });
+      var escSelEl=document.getElementById('cvEscalaSel');
+      if(escSelEl)escSelEl.addEventListener('change',function(){
+        window._curvaSEscala=escSelEl.value==='mes'?'mes':'semana';
+        renderCurvaS();
+      });
       var projSelEl=document.getElementById('cvProjSel');
       if(projSelEl)projSelEl.addEventListener('change',function(){
         window._curvaSProjMode=projSelEl.value||null;
@@ -10362,46 +10371,104 @@
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
     var E=curvaEixo(tw), eixo=E.eixo, pre=E.pre;
     var n=eixo.length;
-    var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
+
+    /* Tudo alinhado no MESMO eixo antes de desenhar: a referência já vem por data, e as
+     * curvas do app começam no índice `pre` (antes disso o plano não existia). Alinhar aqui
+     * deixa o recorte e a escala mensal valerem para todas de uma vez. */
+    function desloca(a,d){
+      if(!a)return null;
+      var out=[], j;
+      for(j=0;j<n;j++)out.push(null);
+      for(j=0;j<a.length;j++){ var k=j+d; if(k>=0&&k<n)out[k]=a[j]; }
+      return out;
+    }
+    var ref=(sel==='total')?histCurvaNoEixo(eixo):null;
+    var linhas=[
+      {d:ref&&ref.contratual, cor:'var(--crit)', w:1,   dash:'1 2', op:.65},
+      {d:ref&&ref.executiva,  cor:'var(--warn)', w:1,   dash:'1 2', op:.65},
+      {d:ref&&ref.realizado,  cor:'var(--good)', w:1.2, dash:'1 2', op:.8 },
+      {d:desloca(curveSeries(data.cliente,sel),pre),   cor:'var(--crit)', w:1.6, dash:'',    op:1},
+      {d:desloca(curveSeries(data.executivo,sel),pre), cor:'var(--warn)', w:1.4, dash:'5 3', op:1},
+      {d:data.projetado?desloca(curveSeries(data.projetado,sel),pre):null, cor:'var(--c5)', w:1.5, dash:'2 2', op:1},
+      {d:desloca(curveSeries(data.real,sel),pre),      cor:'var(--good)', w:1.9, dash:'',    op:1}
+    ].filter(function(L){ return !!L.d; });
+
+    /* Recorte: as pontas em que TODAS as curvas ainda estão no zero, ou já estão todas em
+     * 100%, não dizem nada e comem metade da largura. Fora elas, com uma semana de folga de
+     * cada lado pra não cortar rente ao primeiro movimento. */
+    var i0=0, i1=n-1;
+    var paradoEm=function(i,alvo){
+      return linhas.every(function(L){
+        var v=L.d[i];
+        return v==null||(alvo==='zero'?v<=0.1:v>=99.9);
+      });
+    };
+    while(i0<i1&&paradoEm(i0,'zero'))i0++;
+    while(i1>i0&&paradoEm(i1,'cem'))i1--;
+    i0=Math.max(0,i0-1); i1=Math.min(n-1,i1+1);
+    if(i1-i0<2){ i0=0; i1=n-1; }   // curva ainda sem movimento: mostra tudo
+
+    /* Escala do eixo: semana (um ponto por semana) ou mês (o último ponto de cada mês, que
+     * num acumulado é o fechamento do mês). */
+    var porMes=(window._curvaSEscala==='mes');
+    var idxs=[];
+    if(porMes){
+      var ultimoDoMes={};
+      for(var i2=i0;i2<=i1;i2++)ultimoDoMes[eixo[i2].slice(0,7)]=i2;
+      Object.keys(ultimoDoMes).sort().forEach(function(k){ idxs.push(ultimoDoMes[k]); });
+      if(idxs[0]!==i0)idxs.unshift(i0);
+    } else {
+      for(var i3=i0;i3<=i1;i3++)idxs.push(i3);
+    }
+    var pos={}; idxs.forEach(function(ix,k){ pos[ix]=k; });
+    var m=idxs.length;
+    var xx=function(k){ return pl+iw*k/Math.max(1,m-1); }, yy=function(v){ return pt+ih-ih*v/100; };
+    /* Ponto fora da escala (semana do meio do mês, na visão mensal) cai no ponto desenhado
+     * mais próximo — senão a linha de hoje e a do início do plano somem. */
+    var posPerto=function(ix){
+      if(pos[ix]!=null)return pos[ix];
+      var melhor=0, dist=1e9;
+      idxs.forEach(function(v,k){ var d2=Math.abs(v-ix); if(d2<dist){ dist=d2; melhor=k; } });
+      return melhor;
+    };
+
     var s='';
     for(var g=0;g<=100;g+=25){s+='<line x1="'+pl+'" y1="'+yy(g)+'" x2="'+(W-pr)+'" y2="'+yy(g)+'" stroke="var(--line)"/><text class="axm" '+afs+' x="'+(pl-5)+'" y="'+(yy(g)+2.5)+'" text-anchor="end">'+g+'</text>';}
-    var stepLbl=Math.max(1,Math.ceil((n-1)/9));   // "S45-26" é bem mais largo que "S45"
-    var rotDe=function(i){ return rotSem(new Date(eixo[i]+'T00:00:00')); };
-    for(var i=1;i<n;i+=stepLbl){s+='<text class="axm" '+afs+' x="'+xx(i)+'" y="'+(H-6)+'" text-anchor="middle">'+rotDe(i)+'</text>';}
-    if((n-1)%stepLbl!==0)s+='<text class="axm" '+afs+' x="'+xx(n-1)+'" y="'+(H-6)+'" text-anchor="middle">'+rotDe(n-1)+'</text>';
-    /* As séries do app começam no índice `pre`: antes disso o plano não existia. Ponto nulo
-     * interrompe a linha em vez de puxá-la pra zero. */
-    function path(a,desl){
-      if(!a)return '';
-      var d='', abriu=false;
-      for(var j=0;j<a.length;j++){
-        var v=a[j];
+    var MESES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    var rotDe=function(k){
+      var d3=new Date(eixo[idxs[k]]+'T00:00:00');
+      return porMes?(MESES[d3.getMonth()]+'/'+String(d3.getFullYear()).slice(2)):rotSem(d3);
+    };
+    var stepLbl=Math.max(1,Math.ceil((m-1)/(porMes?11:9)));
+    var ultRot=0;
+    for(var i4=0;i4<m;i4+=stepLbl){ s+='<text class="axm" '+afs+' x="'+xx(i4)+'" y="'+(H-6)+'" text-anchor="middle">'+rotDe(i4)+'</text>'; ultRot=i4; }
+    /* O rotulo da ultima coluna so entra se nao for colar no anterior: "S19-27 S21-27"
+     * grudados viram um borrao na ponta do eixo. */
+    if(m-1-ultRot>=Math.max(1,stepLbl*0.6))
+      s+='<text class="axm" '+afs+' x="'+xx(m-1)+'" y="'+(H-6)+'" text-anchor="middle">'+rotDe(m-1)+'</text>';
+
+    function path(a){
+      var d4='', abriu=false;
+      for(var k=0;k<m;k++){
+        var v=a[idxs[k]];
         if(v==null){ abriu=false; continue; }
-        d+=(abriu?'L':'M')+xx(j+(desl||0)).toFixed(1)+' '+yy(v).toFixed(1)+' ';
+        d4+=(abriu?'L':'M')+xx(k).toFixed(1)+' '+yy(v).toFixed(1)+' ';
         abriu=true;
       }
-      return d;
+      return d4;
     }
-    // Referência da planilha da obra: tracejado fino, por baixo das curvas do app.
-    var ref=(sel==='total')?histCurvaNoEixo(eixo):null;
-    if(ref){
-      if(ref.contratual)s+='<path d="'+path(ref.contratual,0)+'" fill="none" stroke="var(--crit)" stroke-width="1" stroke-dasharray="1 2" opacity=".65"/>';
-      if(ref.executiva)s+='<path d="'+path(ref.executiva,0)+'" fill="none" stroke="var(--warn)" stroke-width="1" stroke-dasharray="1 2" opacity=".65"/>';
-      if(ref.realizado)s+='<path d="'+path(ref.realizado,0)+'" fill="none" stroke="var(--good)" stroke-width="1.2" stroke-dasharray="1 2" opacity=".8"/>';
-    }
-    if(pre>0){
-      var px=xx(pre);
+    if(pre>i0&&pre<=i1){
+      var px=xx(posPerto(pre));
       s+='<line x1="'+px+'" y1="'+pt+'" x2="'+px+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-width="1"/>'+
         '<text x="'+(px+3)+'" y="'+(pt+8)+'" class="axm" '+afs+' text-anchor="start">inicio do plano</text>';
     }
-    var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
-    var cProj=data.projetado?curveSeries(data.projetado,sel):null;
-    if(cCliente)s+='<path d="'+path(cCliente,pre)+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
-    if(cExec)s+='<path d="'+path(cExec,pre)+'" fill="none" stroke="var(--warn)" stroke-width="1.4" stroke-dasharray="5 3"/>';
-    if(cProj)s+='<path d="'+path(cProj,pre)+'" fill="none" stroke="var(--c5)" stroke-width="1.5" stroke-dasharray="2 2"/>';
-    if(cReal)s+='<path d="'+path(cReal,pre)+'" fill="none" stroke="var(--good)" stroke-width="1.9"/>';
-    if(data.hojeW>0&&data.hojeW<=tw){
-      var hx=xx(pre+data.hojeW);
+    linhas.forEach(function(L){
+      s+='<path d="'+path(L.d)+'" fill="none" stroke="'+L.cor+'" stroke-width="'+L.w+'"'+
+        (L.dash?(' stroke-dasharray="'+L.dash+'"'):'')+(L.op<1?(' opacity="'+L.op+'"'):'')+'/>';
+    });
+    var hi=pre+data.hojeW;
+    if(data.hojeW>0&&data.hojeW<=tw&&hi>=i0&&hi<=i1){
+      var hx=xx(posPerto(hi));
       s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
         '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" '+afs+'>hoje</text>';
     }
