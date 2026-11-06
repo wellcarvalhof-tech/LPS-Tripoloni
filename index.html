@@ -424,6 +424,20 @@
   .ofi-ghost{position:fixed;pointer-events:none;z-index:250;opacity:.9;border-radius:5px;padding:3px 9px;
     font-size:11px;font-weight:700;font-family:"IBM Plex Mono",monospace;box-shadow:0 8px 20px rgba(0,0,0,.45)}
   .ofi-aviso{border-left:3px solid var(--warn);padding-left:9px;margin:8px 0;font-size:12.5px;color:var(--ink-2)}
+  /* Explicacao longa que so aparece ao passar o mouse no titulo. Depois da primeira leitura
+   * ela so rouba altura de tela de quem veio trabalhar — mas apagar seria tirar a unica
+   * explicacao de como a tela funciona. Entao fica guardada atras do titulo. */
+  .ajuda{position:relative;display:inline-flex;align-items:center;gap:5px;cursor:help}
+  .ajuda-ico{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+    border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:9px;font-weight:700;line-height:1}
+  .ajuda:hover .ajuda-ico,.ajuda:focus-within .ajuda-ico{border-color:var(--accent);color:var(--accent)}
+  .ajuda-bolha{position:absolute;left:0;top:calc(100% + 7px);z-index:80;width:min(620px,80vw);
+    background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:9px;
+    box-shadow:var(--shadow);padding:11px 13px;font-size:12.5px;line-height:1.55;color:var(--ink-2);
+    text-transform:none;letter-spacing:0;font-weight:400;text-align:left;
+    opacity:0;visibility:hidden;transition:opacity .12s ease;pointer-events:none}
+  .ajuda:hover .ajuda-bolha,.ajuda:focus-within .ajuda-bolha{opacity:1;visibility:visible}
+  .ajuda-bolha p{margin:0 0 7px}.ajuda-bolha p:last-child{margin-bottom:0}
   /* Paleta: o serviço escolhido fica na mão até trocar, igual pincel. */
   .ofi-pal{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   .ofi-tinta{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);
@@ -3255,19 +3269,28 @@
       '<button class="btn" id="ofiLimpar"'+(segs.length?'':' disabled')+'>Limpar estudo</button>'+
       '<button class="btn" id="ofiArrumar"'+(pend.length?'':' disabled')+' title="Desliza quem está fora de ordem para a primeira semana válida">Arrumar pendências</button>'+
       '<span class="note" style="align-self:center">'+segs.length+' colocação(ões) · '+faltam+' serviço(s) com quantidade ainda fora da matriz</span></div>';
+    /* Como montar: vale pros dois modos e e a mesma explicacao sempre — fica na bolha. */
+    var comoMontar='<p>Monte clicando nas células. Um lote aceita vários serviços na mesma semana (frentes em paralelo) e mais de uma equipe no mesmo serviço — nesse caso a quantidade do lote é rateada entre elas pela produtividade de cada uma, pra todas terminarem na mesma semana.</p>'+
+      '<p>A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</p>';
+    /* O titulo vira o gatilho da ajuda. tabindex pra quem navega por teclado tambem alcancar. */
+    var titAjuda=function(rot,corpo,extra){
+      return '<div class="eyebrow">'+
+        '<span class="ajuda" tabindex="0">'+rot+'<span class="ajuda-ico" aria-hidden="true">?</span>'+
+          '<span class="ajuda-bolha" role="tooltip">'+corpo+'</span></span>'+
+        (extra||'')+'</div>';
+    };
     return '<div class="card">'+
       (estudo
-        ? ('<div class="eyebrow">Oficina — montagem manual <span class="wip">◔ estudo</span></div>'+
+        ? (titAjuda('Oficina — montagem manual <span class="wip">◔ estudo</span>',comoMontar)+
            '<div class="ofi-aviso"><b>Nada aqui é gravado.</b> Este estudo não toca o cronograma ao vivo, nem um cenário, nem o banco — vive só nesta aba e some ao recarregar a página. '+
            'Serve pra testar uma montagem e comparar com o automático antes de decidir qualquer coisa.'+
            '<div style="margin-top:8px"><button class="btn" id="ofiPromove"'+(segs.length?'':' disabled')+'>↑ Levar para o Tempo-Caminho manual</button></div></div>')
-        : ('<div class="eyebrow">Tempo-Caminho manual</div>'+
-           '<div class="ofi-aviso" style="border-left-color:var(--accent)">Este é o cronograma da obra: o que você desenha aqui alimenta Resumo, Gantt, Curva S, histograma e programação. '+
-           'Lote que você não colocar simplesmente não entra no cronograma. Lembre de <b>salvar</b>.'+
-           (ADJ_DIRTY?' <b style="color:var(--warn)">Há mudanças não salvas.</b>':'')+'</div>'))+
-      '<div class="note" style="margin-bottom:10px">Monte clicando nas células. Um lote aceita vários serviços na mesma semana (frentes em paralelo) e mais de uma equipe no mesmo serviço — nesse caso a quantidade do lote é rateada entre elas pela produtividade de cada uma, pra todas terminarem na mesma semana. '+
-        'A ordem dos lotes é livre — pode montar de trás pra frente, pular e voltar. O app só garante predecessora concluída no mesmo lote e equipe livre, e desliza pra primeira semana que serve, dizendo por quê. '+
-        'A duração é sempre calculada (quantidade ÷ produtividade da equipe, com a chuva de cada semana).</div>'+
+        /* No modo da obra, o "há mudanças não salvas" NAO entra na bolha: avisar que tem
+         * trabalho por salvar so quando o mouse passa por cima e o mesmo que nao avisar. */
+        : titAjuda('Tempo-Caminho manual',
+            '<p>Este é o cronograma da obra: o que você desenha aqui alimenta Resumo, Gantt, Curva S, histograma e programação. '+
+            'Lote que você não colocar simplesmente não entra no cronograma. Lembre de <b>salvar</b>.</p>'+comoMontar,
+            (ADJ_DIRTY?' <b style="color:var(--warn);text-transform:none;letter-spacing:0">Há mudanças não salvas.</b>':'')))+
       paleta+acoes+listaPend+cmp+
       (estudo?'':tcZoomBarHTML())+
       ofiMatrizHTML(segs,lotIdxs,totalWeeks,!estudo)+'</div>';
