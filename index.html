@@ -21132,6 +21132,9 @@
     if(!('serviceWorker' in navigator))return;
     if(location.protocol!=='http:'&&location.protocol!=='https:')return;
     navigator.serviceWorker.register('sw.js').then(function(reg){
+      /* Versão nova pode já estar esperando desde a visita anterior — nesse caso o
+       * 'updatefound' não dispara nunca e o aviso jamais apareceria. */
+      if(reg.waiting&&navigator.serviceWorker.controller)mostrarAtualizacao(reg);
       reg.addEventListener('updatefound',function(){
         var novo=reg.installing; if(!novo)return;
         novo.addEventListener('statechange',function(){
@@ -21139,21 +21142,40 @@
           if(novo.state==='installed'&&navigator.serviceWorker.controller)mostrarAtualizacao(reg);
         });
       });
+      // Volta pra aba: confere se saiu versão nova enquanto ela estava em segundo plano.
+      document.addEventListener('visibilitychange',function(){
+        if(!document.hidden)reg.update().catch(function(){});
+      });
     }).catch(function(e){ console.warn('Service worker não registrado:',e&&e.message); });
     var recarregando=false;
     navigator.serviceWorker.addEventListener('controllerchange',function(){
       if(recarregando)return; recarregando=true; location.reload();
     });
   })();
+  /** Aviso de versão nova. O botão TEM que levar a algum lugar: antes ele mandava um recado pro
+   *  worker em espera e torcia pelo 'controllerchange'. Se o worker já não estivesse mais em
+   *  espera, ou se a troca não viesse, o clique não fazia nada e o aviso ficava ali, morto.
+   *  Agora ele: avisa que está trabalhando, procura o worker em espera na hora do clique (e não
+   *  o que existia quando o aviso nasceu), e recarrega de qualquer jeito se a troca não chegar.
+   *  Recarregar sozinho ja resolve: o worker busca a navegação na REDE antes do cache. */
   function mostrarAtualizacao(reg){
+    if(document.getElementById('avisoNovaVersao'))return;   // um aviso só, não uma pilha
     var b=document.createElement('div');
+    b.id='avisoNovaVersao';
     b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:200;display:flex;gap:10px;align-items:center;'+
       'background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:11px;padding:10px 14px;font-size:13px';
-    b.innerHTML='Nova versão disponível. <button class="btn primary" style="padding:5px 11px">Atualizar</button>';
-    b.querySelector('button').addEventListener('click',function(){
-      if(reg.waiting)reg.waiting.postMessage('pular-espera'); else location.reload();
-    });
+    b.innerHTML='Nova versão disponível. <button class="btn primary" id="btAtualizar" style="padding:5px 11px">Atualizar</button>';
     document.body.appendChild(b);
+    document.getElementById('btAtualizar').addEventListener('click',function(){
+      var bt=this;
+      bt.disabled=true; bt.textContent='Atualizando…';
+      function cutuca(r){ if(r&&r.waiting)r.waiting.postMessage('pular-espera'); }
+      cutuca(reg);
+      if(navigator.serviceWorker.getRegistration)
+        navigator.serviceWorker.getRegistration().then(cutuca).catch(function(){});
+      // Rede de segurança: se o controllerchange não vier, recarrega na marra.
+      setTimeout(function(){ location.reload(); },2500);
+    });
   }
 
   (async function boot(){
