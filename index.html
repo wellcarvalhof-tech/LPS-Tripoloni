@@ -462,6 +462,31 @@
   .edtbl.compact .einp{height:24px;padding:0 4px;font-size:11.5px;border-radius:4px}
   .edtbl.compact .einp[type=number]{width:58px}
   .edtbl.compact .einp[type=date]{width:112px}
+  /* ---- Lotes & Quantidades: muitas colunas de servico x muitas linhas de lote ----
+   * A tabela rola dentro dela mesma em vez de rolar a pagina. Assim o cabecalho e as
+   * colunas de identificacao ficam parados enquanto se procura o servico la na direita:
+   * rolar ate a decima coluna sem isso faz a linha perder o nome do lote, e o numero
+   * digitado vai parar no lote errado sem ninguem perceber. */
+  .lot-wrap{overflow:auto;max-height:calc(100vh - 212px);min-height:300px;
+    border:1px solid var(--line);border-radius:9px}
+  .lot-tbl{min-width:100%;width:auto;font-size:12px;border-collapse:separate;border-spacing:0}
+  .lot-tbl th,.lot-tbl td{padding:3px 5px}
+  .lot-tbl thead th{position:sticky;top:0;z-index:3;background:var(--elev)}
+  .lot-tbl .einp{height:25px;padding:0 5px;font-size:11.5px;border-radius:5px}
+  .lot-tbl .iconbtn{width:21px;height:21px;font-size:10px;border-radius:5px}
+  /* Colunas presas a esquerda. Os left: sao a soma dos width: das colunas anteriores —
+   * mexeu numa largura, mexa no left da seguinte, senao elas se sobrepoem ao rolar. */
+  .lot-tbl .lk{position:sticky;background:var(--surface);z-index:2}
+  .lot-tbl thead .lk{background:var(--elev);z-index:4}
+  .lot-tbl .lk0{left:0;width:26px;min-width:26px}
+  .lot-tbl .lk1{left:26px;width:96px;min-width:96px}
+  .lot-tbl .lk2{left:122px;width:126px;min-width:126px;box-shadow:1px 0 0 var(--line)}
+  /* Cabecalho do servico em duas linhas: "OAC Bueiros e Dispositivos" nao cabe em 72px
+   * numa linha so, e cortar sem aviso e pior do que quebrar. Nome inteiro no title. */
+  .lot-tbl th.lot-svc{white-space:normal;width:72px;min-width:72px;max-width:72px;
+    line-height:1.12;font-size:9px;letter-spacing:.01em;vertical-align:bottom;padding-bottom:4px}
+  .lot-tbl th.lot-svc .u{display:block;color:var(--muted);font-weight:400;font-size:8.5px}
+  .lot-tbl td.lot-q .einp{width:62px;text-align:right}
   .esel{height:28px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);padding:0 6px;font-family:inherit;font-size:12px}
   .esw{width:40px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:none}
   .iconbtn{width:26px;height:26px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);cursor:pointer;display:inline-grid;place-items:center;font-size:12px;line-height:1}
@@ -1574,6 +1599,21 @@
     var contentEl0=document.getElementById('content');
     var keepContentScroll=sameView&&contentEl0?contentEl0.scrollTop:0;
     var keepPageScroll=sameView?(window.scrollY||window.pageYOffset||0):0;
+    /* Tabelas que rolam dentro delas mesmas tem rolagem propria, que o scroll da pagina
+     * nao representa. Sem guardar isso, redesenhar joga a tabela de volta pro canto
+     * superior esquerdo e quem estava na coluna 12 perde o lugar. */
+    var keepWraps=(sameView&&contentEl0)
+      ? Array.prototype.map.call(contentEl0.querySelectorAll('.tbl-wrap,.lot-wrap'),
+          function(w){ return [w.scrollLeft,w.scrollTop]; })
+      : null;
+    var repoeWraps=function(){
+      if(!keepWraps)return;
+      var ce=document.getElementById('content'); if(!ce)return;
+      var ws=ce.querySelectorAll('.tbl-wrap,.lot-wrap');
+      for(var wi=0;wi<ws.length&&wi<keepWraps.length;wi++){
+        ws[wi].scrollLeft=keepWraps[wi][0]; ws[wi].scrollTop=keepWraps[wi][1];
+      }
+    };
     current=view;
     // Antes de montar o HTML: os botões de desfazer são desenhados junto com a tela, e trocar o
     // contexto depois deixava "Refazer" aceso com o histórico da tela anterior.
@@ -1592,6 +1632,7 @@
     if(sameView){
       document.getElementById('content').scrollTop=keepContentScroll;
       window.scrollTo(0,keepPageScroll);
+      repoeWraps();
       // innerHTML destrói o campo que estava com foco (o que disparou o "change" que levou até
       // aqui) — o navegador então tenta focar outra coisa e, ao fazer isso, pode rolar a página
       // de novo por conta própria, num passo seguinte ao script (depois do scrollTo acima). Reaplica
@@ -1599,6 +1640,7 @@
       requestAnimationFrame(function(){
         var ce=document.getElementById('content'); if(ce)ce.scrollTop=keepContentScroll;
         window.scrollTo(0,keepPageScroll);
+        repoeWraps();
       });
     }else{
       document.getElementById('content').scrollTop=0; window.scrollTo(0,0);
@@ -3483,15 +3525,18 @@
 
   var LOT_SELECTED={}; // {li: true} — lotes marcados pra exclusão em lote
   VIEWS['cad-lotes']=function(){
-    var th='<th style="width:26px"><input type="checkbox" id="selAllLotes"'+(LOTS.length&&Object.keys(LOT_SELECTED).length===LOTS.length?' checked':'')+'></th><th>#</th><th>Nome</th><th>Pacote contratual</th>'+SERV.map(function(s){return '<th class="r" style="border-bottom:3px solid '+svcColor(s)+'">'+s.n+' <span style="color:var(--muted);font-weight:400">('+s.u+')</span></th>';}).join('')+'<th></th>';
+    /* lk0/lk1/lk2 sao as colunas que ficam presas na esquerda ao rolar pro lado. */
+    var th='<th class="lk lk0"><input type="checkbox" id="selAllLotes"'+(LOTS.length&&Object.keys(LOT_SELECTED).length===LOTS.length?' checked':'')+'></th>'+
+      '<th class="lk lk1">#</th><th class="lk lk2">Nome</th><th>Pacote</th>'+
+      SERV.map(function(s){return '<th class="r lot-svc" style="border-bottom:3px solid '+svcColor(s)+'" title="'+escAttr(s.n+' ('+s.u+')')+'">'+escAttr(s.n)+'<span class="u">'+escAttr(s.u)+'</span></th>';}).join('')+'<th></th>';
     var rows=LOTS.map(function(l,li){
-      var qcells=SERV.map(function(s,si){return '<td><input class="einp" data-qty-si="'+si+'" type="number" style="width:96px" value="'+(QTY[li][si]||0)+'"></td>';}).join('');
-      return '<tr data-li="'+li+'"><td><input type="checkbox" data-selrow="'+li+'"'+(LOT_SELECTED[li]?' checked':'')+'></td>'+
-        '<td><div style="display:flex;align-items:center;gap:4px"><span data-lotgrip="'+li+'" style="opacity:.4;cursor:grab;touch-action:none" title="Arraste pra reordenar">⠿</span><span style="width:18px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
+      var qcells=SERV.map(function(s,si){return '<td class="lot-q"><input class="einp" data-qty-si="'+si+'" type="number" value="'+(QTY[li][si]||0)+'"></td>';}).join('');
+      return '<tr data-li="'+li+'"><td class="lk lk0"><input type="checkbox" data-selrow="'+li+'"'+(LOT_SELECTED[li]?' checked':'')+'></td>'+
+        '<td class="lk lk1"><div style="display:flex;align-items:center;gap:2px"><span data-lotgrip="'+li+'" style="opacity:.4;cursor:grab;touch-action:none" title="Arraste pra reordenar">⠿</span><span style="width:16px;text-align:center;color:var(--muted)">'+(li+1)+'</span>'+
         '<button class="iconbtn" data-up="'+li+'" title="subir"'+(li===0?' disabled':'')+'>↑</button><button class="iconbtn" data-down="'+li+'" title="descer"'+(li===LOTS.length-1?' disabled':'')+'>↓</button></div></td>'+
-        '<td><input class="einp" data-lotenome style="width:150px" value="'+escAttr(l)+'"></td>'+
-        '<td><input class="einp" data-lotepacote list="pacoteOpts" style="width:130px" placeholder="ex.: Lote 1" value="'+escAttr(LOTE_PACOTE[li]||'')+'"></td>'+
-        qcells+'<td style="display:flex;gap:4px"><button class="iconbtn" data-goestacas="'+li+'" title="Controle de produção por estaca">📏</button><button class="iconbtn" data-dellote>✕</button></td></tr>';
+        '<td class="lk lk2"><input class="einp" data-lotenome style="width:114px" value="'+escAttr(l)+'"></td>'+
+        '<td><input class="einp" data-lotepacote list="pacoteOpts" style="width:92px" placeholder="ex.: Lote 1" value="'+escAttr(LOTE_PACOTE[li]||'')+'"></td>'+
+        qcells+'<td style="display:flex;gap:3px"><button class="iconbtn" data-goestacas="'+li+'" title="Controle de produção por estaca">📏</button><button class="iconbtn" data-dellote>✕</button></td></tr>';
     }).join('');
     var pacoteSet={}; LOTE_PACOTE.forEach(function(p){if(p)pacoteSet[p]=true;});
     var pacoteOpts='<datalist id="pacoteOpts">'+Object.keys(pacoteSet).map(function(p){return '<option value="'+escAttr(p)+'">';}).join('')+'</datalist>';
@@ -3516,8 +3561,8 @@
            '<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+' title="Grava só no cenário aberto — a obra e os outros cenários não mudam">💾 Salvar no cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</button>')
         : ('<button class="btn primary" id="saveLotes"'+(lotesDirty?'':' disabled')+'>💾 Salvar '+(CENARIOS.length?'na obra':'alterações')+'</button>')))+
     avisoSaldo+
-    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+pacoteOpts+
-    '<div class="note" style="margin-top:10px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes. <b>Pacote contratual</b> é opcional — preencha quando a obra for dividida em mais de um contrato (ex.: "Lote 1", "Lote 2") pra depois ver a Curva S e os relatórios separados por pacote, mesmo com o cronograma todo integrado. Clique em 📏 pra controlar a produção por estaca (corte, aterro, CFT, base...) dentro do lote, sem mudar o cronograma, que continua calculado por lote.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
+    '<div class="card" style="padding:12px 13px"><div class="lot-wrap"><table class="edtbl lot-tbl"><thead><tr>'+th+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+pacoteOpts+
+    '<div class="note" style="margin-top:8px">Use <b>↑ ↓</b> ou arraste <b>⠿</b> pra reordenar a sequência executiva dos lotes. <b>Pacote contratual</b> é opcional — preencha quando a obra for dividida em mais de um contrato (ex.: "Lote 1", "Lote 2") pra depois ver a Curva S e os relatórios separados por pacote, mesmo com o cronograma todo integrado. Clique em 📏 pra controlar a produção por estaca (corte, aterro, CFT, base...) dentro do lote, sem mudar o cronograma, que continua calculado por lote.'+(LOTS.length?'':' Nenhum lote cadastrado ainda.')+'</div></div>';
   };
 
   /** Apoio Administrativo — mão de obra e recursos indiretos necessários pra execução da obra
@@ -4853,18 +4898,35 @@
     }catch(e){ alert('Falha ao adicionar: '+((e&&e.message)||e)); }
   }
   var LOT_NAME_DIRTY={}, QTY_DIRTY={}, LOT_PACOTE_DIRTY={}; // lotes/quantidades com edição pendente de salvar
+  /** Editar uma celula NAO redesenha a tela. Redesenhar a cada numero digitado zerava a
+   *  rolagem da tabela — numa matriz de 15 servicos por 40 lotes, isso e a diferenca entre
+   *  digitar e ter que cacar de novo onde se estava, a cada campo. O unico efeito visivel
+   *  da edicao e o botao de salvar acender, entao e so isso que a gente mexe aqui. */
+  function lotesAcendeSalvar(){
+    ['saveLotes','saveLotesObra'].forEach(function(id){
+      var b=document.getElementById(id); if(b)b.disabled=false;
+    });
+    refreshTopSaveBtn();
+  }
   function saveLoteNome(li,inp){
     var id=(window._LOTIDS||[])[li]; if(!id)return;
     var val=inp.value.trim(); if(!val){inp.value=LOTS[li];return;}
     LOTS[li]=val;
     LOT_NAME_DIRTY[li]=true;
-    go('cad-lotes');
+    lotesAcendeSalvar();
   }
   function savePacote(li,inp){
     var id=(window._LOTIDS||[])[li]; if(!id)return;
-    LOTE_PACOTE[li]=inp.value.trim();
+    var val=inp.value.trim();
+    LOTE_PACOTE[li]=val;
     LOT_PACOTE_DIRTY[li]=true;
-    go('cad-lotes');
+    /* O datalist de pacotes se alimenta do que ja foi digitado; sem redesenho, um pacote
+     * novo so apareceria pro proximo lote na proxima visita. Acrescenta na hora. */
+    var dl=document.getElementById('pacoteOpts');
+    if(dl&&val&&!Array.prototype.some.call(dl.options,function(o){return o.value===val;})){
+      var o=document.createElement('option'); o.value=val; dl.appendChild(o);
+    }
+    lotesAcendeSalvar();
   }
   function saveQuantidade(li,si,inp){
     var loteId=(window._LOTIDS||[])[li], sv=SERV[si];
@@ -4873,7 +4935,7 @@
     inp.value=val;
     QTY[li][si]=val;
     QTY_DIRTY[li+'::'+si]=true;
-    go('cad-lotes');
+    lotesAcendeSalvar();
   }
   /** destino: 'obra' grava o saldo em lote_servico; 'cenario' grava no cenário aberto.
    *  Sem destino, decide pelo estado — é o que o botão do topo usa. Nome do lote e pacote
