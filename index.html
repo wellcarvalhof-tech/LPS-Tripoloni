@@ -488,6 +488,14 @@
   .lot-tbl th.lot-svc .u{display:block;color:var(--muted);font-weight:400;font-size:8.5px}
   .lot-tbl td.lot-q .einp{width:62px;text-align:right}
   .esel{height:28px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);padding:0 6px;font-family:inherit;font-size:12px}
+  /* Filtros do histograma como listas, numa fileira so ao lado do titulo. Em botoes eram
+   * seis fileiras empilhadas que tomavam a largura inteira do cabecalho e empurravam o
+   * grafico pra baixo — e era preciso caçar qual botao estava aceso pra saber o filtro. */
+  .histfs{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;justify-content:flex-end}
+  .histf{display:inline-flex;flex-direction:column;gap:2px}
+  .histf-r{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
+  .histf .esel{max-width:200px}
+  .histf .esel:disabled{opacity:.4;cursor:not-allowed}
   .esw{width:40px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:none}
   .iconbtn{width:26px;height:26px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);cursor:pointer;display:inline-grid;place-items:center;font-size:12px;line-height:1}
   .iconbtn:disabled{opacity:.35;cursor:not-allowed}
@@ -3818,19 +3826,16 @@
     var t=0; per.semanas.forEach(function(w){ t+=(serie[w-1]||0); });
     return t;
   }
-  function histPeriodoBotoesHTML(){
-    return [['semana','Semana'],['mes','Mês']].map(function(o){
-      return '<button class="subtab'+(HIST_PERIODO===o[0]?' active':'')+'" data-histper="'+o[0]+'" title="'+
-        (o[0]==='mes'?'Cada barra é o pico do mês — quantos recursos chegaram a estar mobilizados. Acumulado e IAH não mudam.'
-                     :'Uma barra por semana do cronograma')+'">'+o[1]+'</button>';
-    }).join('');
-  }
   function histModoLabel(m){ return (m||HIST_MODO)==='continuo'?'Da mobilização à desmobilização':'Durante a execução'; }
   // Classificação da mão de obra (característica da função, independente de onde está alocada):
   // 'todas'|'mod' (direta)|'moi' (indireta)|'sem' (função ainda sem classificação).
   var HIST_CLASSE='todas';   // mão de obra: todas|direto|indireto|terceirizado|sem
   // Equipamentos: qual PARCELA do realizado mostrar (o previsto é sempre o geral).
   var HIST_CLASSE_EQ='todos'; // todos (total) | proprio | terceiro
+  /* 'todos' ou o id de UM recurso: o grafico passa a mostrar so ele. Quando tem um recurso
+   * escolhido, Tipo e Mao de obra nao se aplicam — o recurso ja e a escolha mais especifica,
+   * e cruzar os dois so produzia grafico vazio sem explicar por que. */
+  var HIST_RECURSO='todos';
   /** Classificação de um recurso, por domínio:
    *   mão de obra  -> 'direto' | 'indireto' | 'terceirizado'
    *   equipamento  -> 'proprio' (Tripoloni) | 'terceiro' (locado)
@@ -4631,36 +4636,52 @@
 
     var servicoPR=servicoPRHTML(computeServicePR(hist,SVCPR_FILTER));
 
-    var filtroBtns=['todos','funcao','equipamento'].map(function(f){
-      var lbl=f==='todos'?'Todos':f==='funcao'?'Funções':'Equipamentos';
-      return '<button class="subtab'+(HIST_FILTER===f?' active':'')+'" data-histfilter="'+f+'">'+lbl+'</button>';
-    }).join('');
-    var origemBtns=['todos','direto','indireto'].map(function(o){
-      var lbl=o==='todos'?'Todos':o==='direto'?'Alocado em serviços':'Alocado no apoio';
-      return '<button class="subtab'+(HIST_ORIGEM===o?' active':'')+'" data-historigem="'+o+'">'+lbl+'</button>';
-    }).join('');
+    /* Uma lista por filtro. Mostra o escolhido sem precisar procurar o botao aceso, e as
+     * seis cabem numa fileira so ao lado do titulo em vez de seis fileiras empilhadas. */
     var nSemClasse=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!resClasse(r);}).length;
-    var classeBtns=[['todas','Todas'],['direto','Direto'],['indireto','Indireto'],['terceirizado','Terceirizada']].concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]).map(function(o){
-      return '<button class="subtab'+(HIST_CLASSE===o[0]?' active':'')+'" data-histclasse="'+o[0]+'">'+o[1]+'</button>';
-    }).join('');
-    var classeEqBtns=[['todos','Total'],['proprio','Só Tripoloni'],['terceiro','Só terceiro']].map(function(o){
-      return '<button class="subtab'+(HIST_CLASSE_EQ===o[0]?' active':'')+'" data-histclasseeq="'+o[0]+'">'+o[1]+'</button>';
-    }).join('');
-    var modoBtns=[['continuo','Mobilização → desmobilização'],['execucao','Durante a execução']].map(function(o){
-      return '<button class="subtab'+(HIST_MODO===o[0]?' active':'')+'" data-histmodo="'+o[0]+'" title="'+
-        (o[0]==='continuo'?'Padrão: conta a equipe da primeira à última semana dela, inclusive as semanas paradas entre frentes — ela permanece até o fim do serviço'
-                          :'Conta a equipe só nas semanas com serviço acontecendo (o recesso continua contando)')+'">'+o[1]+'</button>';
-    }).join('');
+    /* Recurso apagado do cadastro nao pode deixar o grafico vazio pra sempre. */
+    if(HIST_RECURSO!=='todos'&&!RECURSOS.some(function(r){return r.id===HIST_RECURSO;}))HIST_RECURSO='todos';
+    var umRecurso=(HIST_RECURSO!=='todos');
+    var histSel=function(chave,rot,opcoes,atual,dica,off){
+      return '<label class="histf"'+(dica?(' title="'+escAttr(dica)+'"'):'')+'>'+
+        '<span class="histf-r">'+escAttr(rot)+'</span>'+
+        '<select class="esel" data-histsel="'+chave+'"'+(off?' disabled':'')+'>'+
+          opcoes.map(function(o){
+            return '<option value="'+escAttr(o[0])+'"'+(atual===o[0]?' selected':'')+'>'+escAttr(o[1])+'</option>';
+          }).join('')+'</select></label>';
+    };
+    /* Lista de recursos agrupada por tipo — num cadastro com dezenas de funcoes e
+     * equipamentos, uma lista corrida nao se navega. */
+    var recOpts='<option value="todos"'+(umRecurso?'':' selected')+'>Todos os recursos</option>';
+    [['funcao','Funções'],['equipamento','Equipamentos']].forEach(function(g){
+      var lista=RECURSOS.filter(function(r){ return r.tipo===g[0]; })
+        .sort(function(a,b){ return String(a.n||'').localeCompare(String(b.n||'')); });
+      if(!lista.length)return;
+      recOpts+='<optgroup label="'+g[1]+'">'+lista.map(function(r){
+        return '<option value="'+escAttr(r.id)+'"'+(HIST_RECURSO===r.id?' selected':'')+'>'+escAttr(r.n)+'</option>';
+      }).join('')+'</optgroup>';
+    });
+    var histFiltrosHTML='<div class="histfs">'+
+      '<label class="histf" title="Mostra o gráfico de um recurso só. Escolhendo um, Tipo e Mão de obra deixam de valer — o recurso já é a escolha mais específica.">'+
+        '<span class="histf-r">Recurso</span>'+
+        '<select class="esel" data-histsel="recurso" style="max-width:220px">'+recOpts+'</select></label>'+
+      histSel('filter','Tipo',[['todos','Todos'],['funcao','Funções'],['equipamento','Equipamentos']],
+        HIST_FILTER,umRecurso?'Não se aplica com um recurso escolhido':'Funções, equipamentos ou os dois',umRecurso)+
+      histSel('origem','Origem',[['todos','Todos'],['direto','Alocado em serviços'],['indireto','Alocado no apoio']],
+        HIST_ORIGEM,'Onde o recurso está alocado: equipe típica de serviços × Apoio Administrativo')+
+      histSel('classe','Mão de obra',[['todas','Todas'],['direto','Direto'],['indireto','Indireto'],['terceirizado','Terceirizada']]
+        .concat(nSemClasse?[['sem','Sem classificação ('+nSemClasse+')']]:[]),
+        HIST_CLASSE,umRecurso?'Não se aplica com um recurso escolhido':'Classificação da categoria da função no cadastro',umRecurso)+
+      histSel('classeeq','Realizado de equip.',[['todos','Total'],['proprio','Só Tripoloni'],['terceiro','Só terceiro']],
+        HIST_CLASSE_EQ,'Divide o realizado de equipamento entre frota própria e locada; o previsto é geral')+
+      histSel('modo','Contagem',[['continuo','Mobilização → desmobilização'],['execucao','Durante a execução']],
+        HIST_MODO,'O que fazer com a semana em que a equipe está na obra mas sem frente liberada. Mobilização → desmobilização conta da primeira à última semana dela, inclusive as paradas entre frentes; Durante a execução conta só as semanas com serviço acontecendo.')+
+      histSel('periodo','Período',[['semana','Semana'],['mes','Mês']],
+        HIST_PERIODO,'No mês, cada barra é o pico — quantos recursos chegaram a estar mobilizados. Acumulado e IAH não mudam.')+
+      '</div>';
     var grafico=sectionCard('grafico','Histograma de recursos no tempo',null,
-      '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Tipo:</span>'+filtroBtns+'</div>'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Origem:</span>'+origemBtns+'</div>'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0">Mão de obra:</span>'+classeBtns+'</div>'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="Divide o realizado de equipamento entre frota própria e locada; o previsto é geral">Realizado de equipamento:</span>'+classeEqBtns+'</div>'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="O que fazer com a semana em que a equipe está na obra mas sem frente liberada">Contagem:</span>'+modoBtns+'</div>'+
-        '<div style="display:flex;gap:2px;align-items:center"><span class="note" style="margin:0 6px 0 0" title="No mês, cada barra é o pico — quantos recursos chegaram a estar mobilizados">Período:</span>'+histPeriodoBotoesHTML()+'</div>'+
-      '</div>',
-      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas". <b>Contagem</b> decide a semana em que a equipe está na obra sem frente liberada: o padrão é <b>mobilização → desmobilização</b>, em que ela permanece até o fim do serviço. A exportação pergunta de novo, e aí dá pra gerar o relatório pelo outro critério sem mexer na tela.</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
+      histFiltrosHTML,
+      RECURSOS.length?'<div class="note" style="margin-bottom:8px">Quantitativo geral por semana — previsto (cinza) × realizado apontado (cor conforme comparação). <b>Origem</b> = onde o recurso está alocado (equipe típica de serviços × Apoio Administrativo). <b>Mão de obra</b> = classificação da categoria da função no cadastro (direto/indireto/terceirizada). <b>Realizado de equipamento</b> separa a parcela própria da locada dentro do realizado apontado — o previsto é sempre o geral, porque no planejamento não se sabe o que será locado — pra ver toda a mão de obra do apoio, use Origem "Alocado no apoio" com Mão de obra "Todas". <b>Contagem</b> decide a semana em que a equipe está na obra sem frente liberada: o padrão é <b>mobilização → desmobilização</b>, em que ela permanece até o fim do serviço. <b>Recurso</b> isola uma função ou equipamento — escolhendo um, Tipo e Mão de obra deixam de valer, porque o recurso já é a escolha mais específica. A exportação pergunta de novo, e aí dá pra gerar o relatório pelo outro critério sem mexer na tela.</div><div class="note" id="histJanela" style="margin-bottom:6px"></div><svg class="chart" id="histSvg" viewBox="0 0 900 290" style="max-height:56vh"></svg><div class="legend" id="histLeg" style="margin-top:8px"></div>':'<div class="note">Nenhum recurso pra exibir.</div>'
     );
 
     // Os quatro cards de cadastro (funções, equipamentos, equipe típica, apoio) ficam dentro de um
@@ -9950,29 +9971,20 @@
       }
       wireApoioCrewAdd('funcao','apoioCrewAddInputFuncao','apoioCrewAddQtyFuncao','apoioCrewAddBtnFuncao');
       wireApoioCrewAdd('equipamento','apoioCrewAddInputEquip','apoioCrewAddQtyEquip','apoioCrewAddBtnEquip');
-      document.querySelectorAll('[data-histfilter]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_FILTER=b.getAttribute('data-histfilter'); go('cr-hist');});
-      });
-      document.querySelectorAll('[data-historigem]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_ORIGEM=b.getAttribute('data-historigem'); go('cr-hist');});
-      });
-      document.querySelectorAll('[data-histper]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_PERIODO=b.getAttribute('data-histper'); go('cr-hist');});
-      });
-      document.querySelectorAll('[data-catclasse]').forEach(function(sel){
-        sel.addEventListener('change',function(){
-          setClasseCat(sel.getAttribute('data-catclasse'),sel.value,sel.getAttribute('data-cattipo')||'funcao');
+      /* Um so tratador pras listas de filtro: todas fazem a mesma coisa — guardam a
+       * escolha e redesenham a aba. */
+      document.querySelectorAll('[data-histsel]').forEach(function(sl){
+        sl.addEventListener('change',function(){
+          var k=sl.getAttribute('data-histsel'), v=sl.value;
+          if(k==='filter')HIST_FILTER=v;
+          else if(k==='origem')HIST_ORIGEM=v;
+          else if(k==='classe')HIST_CLASSE=v;
+          else if(k==='classeeq')HIST_CLASSE_EQ=v;
+          else if(k==='modo')HIST_MODO=v;
+          else if(k==='periodo')HIST_PERIODO=v;
+          else if(k==='recurso')HIST_RECURSO=v;
           go('cr-hist');
         });
-      });
-      document.querySelectorAll('[data-histclasse]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_CLASSE=b.getAttribute('data-histclasse'); go('cr-hist');});
-      });
-      document.querySelectorAll('[data-histclasseeq]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_CLASSE_EQ=b.getAttribute('data-histclasseeq'); go('cr-hist');});
-      });
-      document.querySelectorAll('[data-histmodo]').forEach(function(b){
-        b.addEventListener('click',function(){HIST_MODO=b.getAttribute('data-histmodo'); go('cr-hist');});
       });
       document.querySelectorAll('[data-realfilter]').forEach(function(b){
         b.addEventListener('click',function(){REAL_FILTER=b.getAttribute('data-realfilter'); go('cr-hist');});
@@ -11029,6 +11041,9 @@
     var el=document.getElementById('histSvg'); if(!el)return;
     var hist=computeHistogram(), tw=hist.tw;
     var visRes=RECURSOS.filter(function(r){
+      /* Recurso escolhido manda em tudo: Tipo e Mao de obra sao jeitos de chegar a um
+       * conjunto de recursos, e aqui o conjunto ja foi dito, com nome e sobrenome. */
+      if(HIST_RECURSO!=='todos')return r.id===HIST_RECURSO;
       if(HIST_FILTER!=='todos'&&r.tipo!==HIST_FILTER)return false;
       return passaClasse(r,HIST_CLASSE);
     });
