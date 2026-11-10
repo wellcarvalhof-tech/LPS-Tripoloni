@@ -5131,33 +5131,118 @@
     XLSX.writeFile(wb,nome+'_apoio_administrativo.xlsx');
     toast('Apoio administrativo exportado.');
   }
+  /** Erro do PostgREST por extenso. A message sozinha diz "duplicate key ... apoio_admin_pkey"
+   *  e esconde justamente o que resolve: o details traz "Key (coluna)=(valor) already exists".
+   *  Sem isso não dá pra saber se bateu no id ou no conteúdo — e foi exatamente o que faltou
+   *  quando isso apareceu na obra. */
+  function apoioErroTxt(e){
+    if(!e)return 'erro desconhecido';
+    var p=[((e.message||e)+'')];
+    if(e.details)p.push(String(e.details));
+    if(e.hint)p.push('Dica: '+e.hint);
+    if(e.code)p.push('(código '+e.code+')');
+    return p.join(String.fromCharCode(10));
+  }
+  /** Conflito na chave primária (id). É o único conflito que refazer os ids resolve: qualquer
+   *  outro é de conteúdo, e tentar de novo com id novo daria no mesmo. */
+  function apoioConflitoDeId(e){
+    if(!e||e.code!=='23505')return false;
+    var d=String(e.details||e.message||'');
+    return /\(id\)/.test(d)||/_pkey/.test(d);
+  }
+  /** Relê o Apoio Administrativo direto do banco. A importação compara com o que está GRAVADO,
+   *  não com o que a tela tem em memória: depois de uma importação que parou no meio, a tela
+   *  continua mostrando a lista antiga, e reimportar recriaria o que já tinha entrado. */
+  async function sbListApoio(obraId){
+    await sbRequireSession();
+    var r=await SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true});
+    if(r.error)throw r.error;
+    return r.data||[];
+  }
+  /** Cria vários itens numa requisição só. Um insert por item deixava a importação pela metade
+   *  quando um deles falhava: parte gravada, nada na tela e nenhum aviso de onde parou. */
+  async function sbCreateApoioMuitos(obraId,itens){
+    await sbRequireSession();
+    var linhas=itens.map(function(it){ return Object.assign({id:newUuid(),obra_id:obraId},it); });
+    var r=await SB.from('apoio_admin').insert(linhas);
+    if(r.error)throw r.error;
+    return linhas;
+  }
+  async function recarregaApoio(){
+    try{
+      var apo=await sbListApoio(selectedObra.id);
+      APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
+      APOIO_DIRTY={}; APOIO_SELECTED={};
+    }catch(e){}
+    go('cad-apoio');
+  }
   /** Importa Apoio Administrativo — Nível 1/2 podem vir em células mescladas (só a primeira
-   * linha do grupo preenchida) igual à planilha real da obra; a "desce" pras linhas seguintes
-   * até aparecer o próximo valor. Não apaga nada — só cria o que ainda não existe (mesma
-   * combinação exata de Nível 1+2+3 já cadastrada é ignorada, não duplica). */
+   * linha do grupo preenchida) igual à planilha real da obra; o valor desce pras linhas
+   * seguintes até aparecer o próximo. Não apaga nada — só cria o que ainda não existe. */
   async function importApoioWorkbook(wb){
     if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
     var ws=wb.Sheets['ApoioAdministrativo']||wb.Sheets['Apoio Administrativo']||wb.Sheets[wb.SheetNames[0]];
     if(!ws){alert('Planilha vazia.');return;}
     var aoa=sheetRows(ws);
     if(aoa.length<2){alert('Planilha vazia.');return;}
-    if(!confirm('Importar essa planilha de Apoio Administrativo? Itens com Nível 1+2+3 idênticos a um já cadastrado são ignorados (não duplica); os demais são criados. Nada é apagado.'))return;
-    var existing={}; APOIO.forEach(function(a){existing[(a.n1||'').trim().toLowerCase()+'::'+(a.n2||'').trim().toLowerCase()+'::'+(a.n3||'').trim().toLowerCase()]=true;});
-    var rows=aoa.slice(1);
-    var lastN1='', lastN2='', created=0;
-    for(var i=0;i<rows.length;i++){
-      var row=rows[i]; if(!row)continue;
+    var NL=String.fromCharCode(10);
+
+    var lidos=[], lastN1='', lastN2='';
+    aoa.slice(1).forEach(function(row){
+      if(!row)return;
       var n1=row[0]!=null?String(row[0]).trim():''; if(n1)lastN1=n1; else n1=lastN1;
       var n2=row[1]!=null?String(row[1]).trim():''; if(n2)lastN2=n2; else n2=lastN2;
-      var n3=row[2]!=null?String(row[2]).trim():''; if(!n3)continue;
-      var key=n1.toLowerCase()+'::'+n2.toLowerCase()+'::'+n3.toLowerCase();
-      if(existing[key])continue;
-      var id=await sbCreateApoio(selectedObra.id,{nivel1:n1,nivel2:n2||null,nivel3:n3,ordem:APOIO.length});
-      APOIO.push({id:id,n1:n1,n2:n2,n3:n3,cfg:{}});
-      existing[key]=true; created++;
+      var n3=row[2]!=null?String(row[2]).trim():''; if(!n3)return;
+      lidos.push({n1:n1,n2:n2,n3:n3});
+    });
+    if(!lidos.length){
+      alert('Não achei nenhum item na planilha. O Nível 3 é obrigatório — é ele que dá nome ao item.');
+      return;
     }
-    go('cad-apoio');
-    toast(created+' item(ns) importado(s).');
+    var chave=function(a,b,c){
+      return String(a||'').trim().toLowerCase()+'::'+String(b||'').trim().toLowerCase()+'::'+String(c||'').trim().toLowerCase();
+    };
+    var jaGravados;
+    try{ jaGravados=await sbListApoio(selectedObra.id); }
+    catch(e){ alert('Não deu pra ler o que já está cadastrado:'+NL+NL+apoioErroTxt(e)); return; }
+
+    var existe={};
+    jaGravados.forEach(function(r){ existe[chave(r.nivel1,r.nivel2,r.nivel3)]=true; });
+    var novos=[];
+    lidos.forEach(function(it){
+      var k=chave(it.n1,it.n2,it.n3);
+      if(existe[k])return;   // já está no banco, ou repetido dentro da própria planilha
+      existe[k]=true;
+      novos.push(it);
+    });
+    var repetidos=lidos.length-novos.length;
+    if(!novos.length){
+      alert('Nada a importar: '+lidos.length+' item(ns) na planilha, todos já cadastrados.');
+      return;
+    }
+    if(!confirm('Importar '+novos.length+' item(ns) de Apoio Administrativo?'+
+      (repetidos?(NL+NL+repetidos+' linha(s) da planilha já estavam cadastradas e serão ignoradas.'):'')+
+      NL+NL+'Nada é apagado.'))return;
+
+    var base=jaGravados.length;
+    var linhas=novos.map(function(it,i){ return {nivel1:it.n1,nivel2:it.n2||null,nivel3:it.n3,ordem:base+i}; });
+    try{
+      try{
+        await sbCreateApoioMuitos(selectedObra.id,linhas);
+      }catch(e1){
+        if(!apoioConflitoDeId(e1))throw e1;
+        await sbCreateApoioMuitos(selectedObra.id,linhas);   // ids novos
+      }
+    }catch(e){
+      await recarregaApoio();
+      alert('A planilha foi lida sem problema — quem recusou foi o banco, na hora de gravar:'+NL+NL+
+        apoioErroTxt(e)+NL+NL+
+        'Como tudo vai numa requisição só, ou entrou tudo ou não entrou nada — não ficou pela metade. '+
+        'A lista na tela acabou de ser recarregada do banco.');
+      return;
+    }
+    await recarregaApoio();
+    toast(novos.length+' item(ns) importado(s)'+(repetidos?(' · '+repetidos+' já existia(m)'):'')+'.');
   }
   /** Composição de função/equipamento de um item de Apoio Administrativo — mesma lógica de
    * saveCrewQty() (equipe típica do serviço), só que gravando em APOIO[ai].cfg.crew em vez de
@@ -9816,7 +9901,7 @@
       var expA=document.getElementById('apoioExportar');
       if(expA)expA.addEventListener('click',exportApoioWorkbook);
       var impA=document.getElementById('apoioImportar');
-      if(impA)impA.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importApoioWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
+      if(impA)impA.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importApoioWorkbook).catch(function(err){alert('Falha na importação do Apoio Administrativo: '+((err&&err.message)||err));});});});
     }
     if(view==='cad-cal'){
       var cn=document.getElementById('calNome');
