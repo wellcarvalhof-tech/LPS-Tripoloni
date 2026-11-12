@@ -2632,7 +2632,7 @@
   /** Uma pincelada: coloca o serviço que está na mão, sem diálogo, e avisa por toast se deslizou.
    *  É o modo de desenhar — escolhe a tinta uma vez e sai aplicando lote a lote. */
   function ofiPincela(li,semana){
-    if(OFI&&OFI.ovr&&matBloqueada()){ toast('Cronograma travado pela linha de base — use "Liberar edição".'); return true; }
+    if(OFI&&OFI.ovr&&matBloqueada()){ toast(motivoBloqueio()); return true; }
     var si=ofiInit().pincel.si; if(si==null)return false;
     var sv=SERV[si]; if(!sv)return false;
     if(!((QTY[li]||[])[si]>0)){ toast(sv.n+' não tem quantidade em '+LOTS[li]+'.'); return true; }
@@ -2756,7 +2756,7 @@
   }
   /** Diálogo de colocar/mover um serviço numa célula (lote x semana). */
   function ofiDialogo(li,semana,editId){
-    if(OFI&&OFI.ovr&&matBloqueada()){ toast('Cronograma travado pela linha de base — use "Liberar edição".'); return; }
+    if(OFI&&OFI.ovr&&matBloqueada()){ toast(motivoBloqueio()); return; }
     var atual=editId?ofiInit().plano.filter(function(x){return x.id===editId;})[0]:null;
     var cands=SERV.map(function(sv,si){ return {sv:sv,si:si,qty:(QTY[li]||[])[si]||0}; })
       .filter(function(c){ return c.qty>0; });
@@ -10133,23 +10133,8 @@
       });
       document.querySelectorAll('[data-cnload]').forEach(function(b){
         b.addEventListener('click',function(){
-          var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnload');})[0]; if(!c)return;
-          if(hasAnyDirty()&&!confirm('Há alterações não salvas no cronograma atual. Carregar este cenário substitui o que está em edição agora (o que já foi salvo no banco não é perdido). Continuar?'))return;
-          var snap=c.snap||{ovr:{},feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
-          OVR=JSON.parse(JSON.stringify(snap.ovr||{}));
-          if(snap.servicos&&snap.servicos.length){
-            SERV=snap.servicos.map(function(sc){
-              var orig=SERV.filter(function(x){return x.id===sc.id;})[0]||{};
-              return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:JSON.parse(JSON.stringify(sc.config||{}))};
-            });
-          }
-          window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
-          aplicaQuantidadesDoSnap(snap);   // o saldo do cenário entra na edição junto com o resto
-          adjDirty(); ADJ_PENDING={};
-          ACTIVE_CENARIO={id:c.id,nome:c.nome};
-          window._cronoTab='ajuste';
-          toast('Cenário "'+c.nome+'" carregado — você está editando ele agora (calendário, serviços e ajustes).');
-          go('cr-matriz');
+          var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cnload');})[0];
+          if(c)cenarioAbreNoEditor(c);
         });
       });
       document.querySelectorAll('[data-cnapply]').forEach(function(b){
@@ -12920,7 +12905,17 @@
     // ninguém precisa apagar o registro de que ele foi aberto.
     return !!(activeBaseline()&&!ACTIVE_CENARIO&&!(IS_APP_ADMIN&&OVR&&OVR.__editavel));
   }
-  function matBloqueada(){ return isReadOnly()||tcTravada(); }
+  /** Por que a edicao esta fechada agora — '' quando esta aberta. Uma fonte so pra decidir e
+   *  pra explicar: antes a mensagem falava em linha de base mesmo quando o motivo era outro. */
+  function motivoBloqueio(){
+    if(isReadOnly())return 'Seu perfil é só de visualização.';
+    /* Vendo um cenário, a tela desenha a partir dele, mas a edição iria pro cronograma da
+     * obra: você mexeria numa coisa e veria outra, e a obra ficaria suja sem ninguém notar. */
+    if(CENARIO_VISTA)return 'Você está vendo o cenário "'+CENARIO_VISTA.nome+'" — a tela mostra ele, mas a edição iria pro cronograma da obra. Use "Editar este cenário" na tarja do topo, ou saia do cenário.';
+    if(tcTravada())return 'Cronograma travado pela linha de base — use "Liberar edição".';
+    return '';
+  }
+  function matBloqueada(){ return !!motivoBloqueio(); }
   /** Destravar a linha de base é do desenvolvedor. Planejador gera a revisão (isso sim é dele),
    *  mas não reabre o plano congelado: é o compromisso da obra, e reabrir sem gerar revisão nova
    *  é como mudar o contrato sem assinar aditivo. Pra estudar outro plano existe o cenário. */
@@ -12979,6 +12974,30 @@
   /** Faixa fixa avisando que o que está na tela é um cenário, e não a obra. Entra em todas as
    *  telas de leitura, porque o cenário muda a matriz, a Curva S, o histograma e os relatórios
    *  ao mesmo tempo — ver o aviso só na tela de cenários não ajudaria ninguém. */
+  /** Abre um cenario no editor: o estado ao vivo passa a SER ele (ajustes, calendario,
+   *  servicos e saldo), e o que for salvo dali vai pro cenario, nao pra obra. Usada pelo
+   *  botao da lista e pelo da tarja de visualizacao — eram dois caminhos pra mesma coisa,
+   *  e so um deles abria de verdade. */
+  function cenarioAbreNoEditor(c){
+    if(!c)return;
+    if(hasAnyDirty()&&!confirm('Há alterações não salvas no cronograma atual. Carregar este cenário substitui o que está em edição agora (o que já foi salvo no banco não é perdido). Continuar?'))return;
+    var snap=c.snap||{ovr:{},feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null};
+    OVR=JSON.parse(JSON.stringify(snap.ovr||{}));
+    if(snap.servicos&&snap.servicos.length){
+      SERV=snap.servicos.map(function(sc){
+        var orig=SERV.filter(function(x){return x.id===sc.id;})[0]||{};
+        return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:JSON.parse(JSON.stringify(sc.config||{})),grupo:orig.grupo||''};
+      });
+    }
+    window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
+    aplicaQuantidadesDoSnap(snap);   // o saldo do cenário entra na edição junto com o resto
+    adjDirty(); ADJ_PENDING={};
+    CENARIO_VISTA=null;              // ver e editar sao modos diferentes; nao ficam ligados juntos
+    ACTIVE_CENARIO={id:c.id,nome:c.nome};
+    window._cronoTab='ajuste';
+    toast('Cenário "'+c.nome+'" aberto no editor — o que você salvar vai pra ele, não pra obra.');
+    go('cr-matriz');
+  }
   function cenarioBannerHTML(){
     if(!CENARIO_VISTA)return '';
     return '<div class="banner" style="margin-bottom:12px;border-color:var(--accent)">'+
@@ -12992,7 +13011,12 @@
     var a=document.getElementById('cnSair');
     if(a)a.addEventListener('click',cenarioSair);
     var b=document.getElementById('cnEditar');
-    if(b)b.addEventListener('click',function(){ CENARIO_VISTA=null; go('cr-cenarios'); toast('Use "✎ Editar" na linha do cenário pra abrir no editor.'); });
+    if(b)b.addEventListener('click',function(){
+      var c=CENARIOS.filter(function(x){return x.id===CENARIO_VISTA.id;})[0];
+      if(!c){ CENARIO_VISTA=null; go('cr-cenarios'); return; }
+      CENARIO_VISTA=null;
+      cenarioAbreNoEditor(c);
+    });
   }
   function activeBaseline(){
     return CENARIOS.filter(function(c){return c.tipo==='baseline'&&c.ativo;})[0]||null;
@@ -21166,7 +21190,7 @@
    *  e isso aqui ACRESCENTA: a equipe continua com o que já tinha e ganha mais este lote,
    *  entrando na sequência dela a partir da semana escolhida. */
   function tcNovoDialogo(li,w){
-    if(matBloqueada()||isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(matBloqueada()){ toast(motivoBloqueio()); return; }
     if(!SERV.length)return;
     var back=document.createElement('div'); back.className='segmenu-backdrop';
     /* Serviço sem quantidade neste lote não tem o que executar aqui — fica listado, mas
@@ -21541,7 +21565,7 @@
       b.addEventListener('click',function(){
         var m=b.getAttribute('data-tcmodo');
         if((m==='manual')===tcManual())return;
-        if(matBloqueada()){ toast(tcTravada()?'O cronograma está travado pela linha de base. Use "Liberar edição".':'Seu perfil não permite mudar o cronograma.'); return; }
+        if(matBloqueada()){ toast(motivoBloqueio()); return; }
         if(m==='manual'){
           var pins=tcmLeOvr().length;
           if(!confirm('Passar para o Tempo-Caminho manual?'+String.fromCharCode(10)+String.fromCharCode(10)+
