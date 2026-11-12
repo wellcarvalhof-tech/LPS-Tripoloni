@@ -2308,7 +2308,7 @@
         o.pins.forEach(function(pin){
           if(!(pin.team>0&&pin.startWeek>0))return;
           plano.push({id:id++,li:li,si:si,team:pin.team,ini:pin.startWeek,
-            ord:(pin.ordem!=null?pin.ordem:1e9)});
+            ord:(pin.ordem!=null?pin.ordem:1e9),fix:pin.fix||null});
         });
       });
     });
@@ -2341,7 +2341,11 @@
       // A sequência em que foi montado precisa ser GRAVADA: duas colocações podem cair na mesma
       // semana (a equipe faz uma na primeira metade e outra na segunda), e sem isso o desempate
       // caía no número do lote — quem montasse de trás pra frente via o app inverter tudo.
-      o.pins=itens.map(function(x){ return {team:x.team,startWeek:x.ini,qty:rateio[x.team],ordem:x.ord}; });
+      o.pins=itens.map(function(x){
+        var p={team:x.team,startWeek:x.ini,qty:rateio[x.team],ordem:x.ord};
+        if(x.fix&&Object.keys(x.fix).length)p.fix=x.fix;   // semanas lançadas à mão
+        return p;
+      });
     });
     adjDirty();
   }
@@ -2465,10 +2469,10 @@
    *  mas aqui a ordem é livre: quem colocou a semana 20 primeiro precisa poder voltar e
    *  preencher a 3. A duração é recalculada a cada tentativa porque ela depende de onde começa
    *  (semana de chuva rende menos). */
-  function ofiEncaixa(ocupados,pos,qty,prod,periods,cache,svcId){
+  function ofiEncaixa(ocupados,pos,qty,prod,periods,cache,svcId,fixas){
     var guard=0, pk;
     while(guard++<500){
-      pk=packSegment(pos,qty/prod,prod,qty,periods,cache,undefined,svcId);
+      pk=packSegment(pos,qty/prod,prod,qty,periods,cache,undefined,svcId,fixas);
       var bate=null;
       for(var i=0;i<ocupados.length;i++){
         if(pos<ocupados[i].b-1e-9&&pk.endPos>ocupados[i].a+1e-9){ bate=ocupados[i]; break; }
@@ -2504,9 +2508,9 @@
       var prod=ofiProd(s,it.team), qty=(rateios[k]||{})[it.team]||0;
       if(!(prod>0)||!(qty>0))return null;
       var ocup=posEquipe[ke]||(posEquipe[ke]=[]);
-      var r=ofiEncaixa(ocup,it.ini-1,qty,prod,periods,cache,s.id);
+      var r=ofiEncaixa(ocup,it.ini-1,qty,prod,periods,cache,s.id,it.fix);
       ocup.push({a:r.pos,b:r.pk.endPos}); ocup.sort(function(x,y){ return x.a-y.a; });
-      return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,pedida:it.ini,
+      return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,pedida:it.ini,fix:it.fix||null,
               startPos:r.pos,start:r.pk.start,dur:r.pk.duration,endPos:r.pk.endPos,wq:r.pk.wq,
               color:svcColor(s),name:s.n,divididoEm:times[k].length};
     }).filter(Boolean);
@@ -2755,17 +2759,25 @@
         'Cadastre a quantidade em Tempo Caminho > Lotes & Quantidades.');
       return;
     }
+    /* Semanas com produção digitada à mão. A regra continua sendo o rateio automático: só as
+     * semanas que estiverem aqui saem dele, e o que sobra se redistribui pelas outras. */
+    var fix=Object.assign({},(atual&&atual.fix)||{});
+    var abreFix=Object.keys(fix).length>0;
+
     var back=document.createElement('div'); back.className='segmenu-backdrop';
     var svcOpts=cands.map(function(c){
       return '<option value="'+c.si+'"'+(atual&&atual.si===c.si?' selected':'')+'>'+escAttr(c.sv.n)+' — '+fmtBR(c.qty)+' '+escAttr(c.sv.u)+'</option>';
     }).join('');
-    back.innerHTML='<div class="segmenu-panel card" style="max-width:460px">'+
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:480px">'+
       '<div class="eyebrow" style="margin-bottom:2px">'+(atual?'Mover':'Colocar')+' em '+escAttr(LOTS[li])+' · '+rotSem(mondayOf(semana))+'</div>'+
       '<div class="note" style="margin-bottom:12px">A duração não se digita: sai da quantidade do lote dividida pela produtividade da equipe, com a chuva reduzindo semana a semana. Se a semana escolhida não servir, o app desliza pra primeira que serve e diz por quê.</div>'+
       '<div style="display:flex;flex-direction:column;gap:10px">'+
         '<label>Serviço<select class="esel" id="ofiSvc">'+svcOpts+'</select></label>'+
         '<label>Equipe<select class="esel" id="ofiTeam"></select></label>'+
         '<div class="note" id="ofiPrev" style="min-height:3.2em"></div>'+
+        '<div><button type="button" class="btn" id="ofiFixTgl" style="padding:4px 10px;font-size:12px">'+
+          (abreFix?'▾':'▸')+' Lançar a produção de semanas específicas</button></div>'+
+        '<div id="ofiFixBox"'+(abreFix?'':' style="display:none"')+'></div>'+
       '</div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">'+
         (atual?'<button class="btn" id="ofiDel">Remover</button>':'')+
@@ -2776,6 +2788,7 @@
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     var selSvc=back.querySelector('#ofiSvc'), selTeam=back.querySelector('#ofiTeam'), prev=back.querySelector('#ofiPrev');
+    var fixBox=back.querySelector('#ofiFixBox'), fixTgl=back.querySelector('#ofiFixTgl');
     function enchEquipes(){
       var sv=SERV[+selSvc.value], n=Math.max(1,sv.eq||1), o='', usadas=ofiEquipesNoLote(li,+selSvc.value,editId), primeira=null;
       for(var t=1;t<=n;t++){
@@ -2788,15 +2801,16 @@
       if(!(atual&&usadas.indexOf(atual.team)<0)&&primeira!=null&&selTeam.selectedOptions[0]&&selTeam.selectedOptions[0].disabled)selTeam.value=String(primeira);
       if(primeira==null&&!atual)selTeam.innerHTML=o;   // todas ocupadas: deixa visível o porquê
     }
+    function limpaFix(){ Object.keys(fix).forEach(function(k){ delete fix[k]; }); }
     function previa(){
       var si=+selSvc.value, team=+selTeam.value;
       var outras=ofiEquipesNoLote(li,si,editId);
       var nEq=outras.length+1;
       var qty=ofiQtdDaEquipe(li,si,outras.concat([team]),team);
       var r=ofiPrimeiraValida(li,si,team,semana,editId,qty);
-      if(r.impossivel){ prev.innerHTML='<span style="color:var(--crit)">Sem quantidade neste lote ou sem produtividade cadastrada — não dá pra calcular a duração.</span>'; return r; }
+      if(r.impossivel){ prev.innerHTML='<span style="color:var(--crit)">Sem quantidade neste lote ou sem produtividade cadastrada — não dá pra calcular a duração.</span>'; desenhaFix(null,0,''); return r; }
       var sv=SERV[si], prod=ofiProd(sv,team);
-      var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{},undefined,sv.id);
+      var pk=packSegment(r.semana-1,qty/prod,prod,qty,calRainPeriods(),{},undefined,sv.id,fix);
       var fim=pk.start+pk.duration-1;
       var txt='<b>'+rotSem(mondayOf(pk.start))+'</b> até <b>'+rotSem(mondayOf(fim))+'</b> — '+pk.duration+' semana(s), '+fmtBR(qty)+' '+escAttr(sv.u)+
         (nEq>1?(' <span style="color:var(--warn)">(de '+fmtBR((QTY[li]||[])[si]||0)+' — rateado entre '+nEq+' equipes pela produtividade de cada uma)</span>'):'')+'.';
@@ -2808,10 +2822,63 @@
           (motivos.length?' — '+motivos.join(' e '):'')+'.</span>';
       }
       prev.innerHTML=txt;
+      desenhaFix(pk,qty,sv.u);
       return r;
     }
-    selSvc.addEventListener('change',function(){ enchEquipes(); previa(); });
-    selTeam.addEventListener('change',previa);
+    /** Uma linha por semana do bloco. Vazio = automático; digitou, aquela semana sai do rateio
+     *  e o resto se redistribui pelas outras. Fixar TODAS as semanas é o único jeito de o saldo
+     *  não fechar, então isso é avisado em vez de impedido. */
+    function desenhaFix(pk,qty,un){
+      if(!pk){ fixBox.innerHTML='<div class="note">Escolha um serviço com quantidade pra poder lançar semana a semana.</div>'; return; }
+      var linhas='', somaFix=0, nFix=0;
+      for(var i=0;i<pk.duration;i++){
+        var w=pk.start+i, v=fix[w], temV=(v!=null&&v!=='');
+        if(temV){ somaFix+=(+v||0); nFix++; }
+        linhas+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'+
+          '<span class="mono" style="width:68px;color:var(--muted);font-size:11.5px">'+rotSem(mondayOf(w))+'</span>'+
+          '<input class="einp" type="number" min="0" step="any" data-fixw="'+w+'" style="width:96px;text-align:right" '+
+            'value="'+(temV?escAttr(String(v)):'')+'" placeholder="'+fmtBR(Math.round((pk.wq[i]||0)*100)/100)+'">'+
+          '<span class="note" style="margin:0;font-size:11px">'+escAttr(un||'')+(temV?'':' · automático')+'</span>'+
+          (temV?'<button type="button" class="iconbtn" data-fixdel="'+w+'" title="Voltar esta semana pro automático">✕</button>':'')+
+        '</div>';
+      }
+      /* Semana fixada que o bloco não alcança mais (ele encurtou, ou deslizou). Some da lista
+       * acima, então precisa aparecer em algum lugar — senão vira ajuste fantasma. */
+      var fora=Object.keys(fix).filter(function(w){ return +w<pk.start||+w>pk.start+pk.duration-1; });
+      var sobra=qty-somaFix;
+      fixBox.innerHTML=
+        '<div class="note" style="margin:0 0 8px">Deixe em branco pra manter o automático. O que você digitar sai do rateio; '+
+          'o restante continua distribuído sozinho pelas outras semanas, com a chuva.</div>'+
+        linhas+
+        (nFix?('<div class="note" style="margin:6px 0 0">Lançado à mão: <b>'+fmtBR(somaFix)+' '+escAttr(un||'')+'</b> em '+nFix+' semana(s). '+
+          (sobra>1e-9?('Sobram '+fmtBR(sobra)+' pro automático.')
+           :(sobra<-1e-9?'<span style="color:var(--crit)">Passa '+fmtBR(-sobra)+' do total do bloco — o excedente é cortado na última semana lançada.</span>'
+                        :'Fecha o total do bloco.'))+'</div>'):'')+
+        (fora.length?('<div class="note" style="margin:6px 0 0;color:var(--warn)">'+fora.length+' semana(s) lançada(s) fora do bloco ('+
+          fora.map(function(w){return rotSem(mondayOf(+w));}).join(', ')+') — não valem mais. '+
+          '<button type="button" class="btn" id="ofiFixFora" style="padding:2px 8px;font-size:11px">Descartar</button></div>'):'');
+      fixBox.querySelectorAll('[data-fixw]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          var w=inp.getAttribute('data-fixw'), s=(inp.value||'').trim();
+          if(s==='')delete fix[w]; else fix[w]=Math.max(0,parseFloat(s)||0);
+          previa();
+        });
+      });
+      fixBox.querySelectorAll('[data-fixdel]').forEach(function(b){
+        b.addEventListener('click',function(){ delete fix[b.getAttribute('data-fixdel')]; previa(); });
+      });
+      var bf=fixBox.querySelector('#ofiFixFora');
+      if(bf)bf.addEventListener('click',function(){ fora.forEach(function(w){ delete fix[w]; }); previa(); });
+    }
+    fixTgl.addEventListener('click',function(){
+      var aberto=fixBox.style.display!=='none';
+      fixBox.style.display=aberto?'none':'';
+      fixTgl.textContent=(aberto?'▸':'▾')+' Lançar a produção de semanas específicas';
+    });
+    /* Trocar de serviço ou de equipe muda a quantidade e as semanas: o que foi lançado pra
+     * outra combinação não vale mais, e manter seria pior do que perder. */
+    selSvc.addEventListener('change',function(){ limpaFix(); enchEquipes(); previa(); });
+    selTeam.addEventListener('change',function(){ limpaFix(); previa(); });
     back.querySelector('#ofiCancel').addEventListener('click',fecha);
     var del=back.querySelector('#ofiDel');
     if(del)del.addEventListener('click',function(){
@@ -2823,10 +2890,12 @@
       var r=previa(); if(r.impossivel)return;
       ofiSnapshot();
       var si=+selSvc.value, team=+selTeam.value;
+      var fixLimpo=null;
+      Object.keys(fix).forEach(function(w){ (fixLimpo||(fixLimpo={}))[w]=fix[w]; });
       if(editId){
-        OFI.plano.forEach(function(x){ if(x.id===editId){ x.si=si; x.team=team; x.ini=r.semana; } });
+        OFI.plano.forEach(function(x){ if(x.id===editId){ x.si=si; x.team=team; x.ini=r.semana; x.fix=fixLimpo; } });
       } else {
-        OFI.plano.push({id:OFI.prox++,li:li,si:si,team:team,ini:r.semana,ord:OFI.plano.length});
+        OFI.plano.push({id:OFI.prox++,li:li,si:si,team:team,ini:r.semana,ord:OFI.plano.length,fix:fixLimpo});
       }
       fecha(); ofiRedesenha();
     });
@@ -11677,7 +11746,11 @@
    *  semanas). Semanas de chuva rendem menos (weekFactor<1), alongando a duração real —
    *  e se a equipe termina um lote no meio de uma semana, o próximo lote começa exatamente
    *  dali, consumindo o resto da capacidade daquela mesma semana. */
-  function packSegment(startPos,weeksNeeded,prod,qty,periods,cache,fixedDuration,svcId){
+  /** `fixas` = {semana: quantidade} lançada à mão. A regra continua sendo o rateio
+   *  automático: só as semanas presentes aqui saem dele (consomem exatamente o que foi
+   *  digitado e a semana inteira), e o que sobra se distribui pelas outras como sempre.
+   *  Semana lançada com 0 é parada de propósito — o bloco atravessa ela sem produzir. */
+  function packSegment(startPos,weeksNeeded,prod,qty,periods,cache,fixedDuration,svcId,fixas){
     if(fixedDuration>0){
       var endPos0=startPos+fixedDuration;
       var start0=Math.floor(startPos+1e-9)+1, end0=Math.max(start0,Math.ceil(endPos0-1e-9));
@@ -11689,6 +11762,28 @@
       var sum0=weights.reduce(function(x,y){return x+y;},0);
       var wq0=sum0>0?weights.map(function(x){return qty*x/sum0;}):weights.map(function(){return 0;});
       return {start:start0,end:end0,duration:end0-start0+1,endPos:endPos0,wq:wq0};
+    }
+    var temFix=false; if(fixas)for(var kf in fixas){ if(Object.prototype.hasOwnProperty.call(fixas,kf)){ temFix=true; break; } }
+    if(temFix){
+      /* Mesma caminhada semana a semana, só que em unidade de QUANTIDADE em vez de
+       * semanas-de-trabalho — é o que deixa a semana lançada entrar pelo valor exato. */
+      var posF=startPos, restF=qty, perF={}, gF=0;
+      while(restF>1e-9&&gF++<20000){
+        var wF=Math.floor(posF+1e-9)+1;
+        if(fixas[wF]!=null){
+          var alvo=Math.max(0,Math.min(restF,+fixas[wF]||0));
+          perF[wF]=(perF[wF]||0)+alvo; restF-=alvo; posF=wF;   // a semana lançada vai inteira
+          continue;
+        }
+        var fF=weekFactor(wF,periods,cache,svcId);
+        if(fF<=0){ posF=wF; continue; }
+        var capF=(wF-posF)*fF*prod;
+        if(capF>=restF-1e-9){ perF[wF]=(perF[wF]||0)+restF; posF+=(restF/prod)/fF; restF=0; }
+        else { perF[wF]=(perF[wF]||0)+capF; restF-=capF; posF=wF; }
+      }
+      var iniF=Math.floor(startPos+1e-9)+1, fimF=Math.max(iniF,Math.ceil(posF-1e-9));
+      var wqF=[]; for(var wwF=iniF;wwF<=fimF;wwF++)wqF.push(perF[wwF]||0);
+      return {start:iniF,end:fimF,duration:fimF-iniF+1,endPos:posF,wq:wqF};
     }
     var pos=startPos, remaining=weeksNeeded, perWeek={}, guard=0;
     while(remaining>1e-9&&guard++<20000){
@@ -11865,7 +11960,7 @@
         if(!pins.length)return;
         pinnedLis[li]=true;
         var qtyEachFallback=QTY[li][si]/pins.length;
-        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:p.qty>0?p.qty:qtyEachFallback,ordem:(p.ordem!=null?p.ordem:1e9)}); });
+        pins.forEach(function(p){ allPins.push({li:li,team:p.team,startWeek:p.startWeek,qty:p.qty>0?p.qty:qtyEachFallback,ordem:(p.ordem!=null?p.ordem:1e9),fix:p.fix||null}); });
       });
       // Agrupa por equipe, ordena por semana de início e processa em sequência (posição
       // contínua, igual o cálculo automático) — assim, se um lote termina no meio de uma
@@ -11893,7 +11988,7 @@
           var startPos=Math.max(p.startWeek-1,tPos,pisoNaoAntes(s,p.li)-1);
           // o aumento vale por lote, entao a produtividade e calculada aqui dentro
           var effProd=prodDaEquipe(s,teamProds,prod,t2,p.li);
-          var packed=packSegment(startPos,p.qty/effProd,effProd,p.qty,periods,wfCache,undefined,s.id);
+          var packed=packSegment(startPos,p.qty/effProd,effProd,p.qty,periods,wfCache,undefined,s.id,p.fix);
           segs.push({li:p.li,si:si,team:t2,teams:teams,start:packed.start,dur:packed.duration,qty:p.qty,wq:packed.wq,
             color:teamColor(hex,t2,Math.max(1,teams)),name:s.n,adjusted:true,pinned:true});
           if(!loteRange[p.li])loteRange[p.li]={min:Infinity,max:-Infinity};
