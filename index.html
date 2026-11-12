@@ -3543,7 +3543,7 @@
       var hex=s.hex||'#64748b';
       var main='<tr data-si="'+si+'">'+
         '<td style="width:56px"><div style="display:flex;gap:2px"><button class="iconbtn" data-svcup="'+si+'" title="subir"'+(si===0?' disabled':'')+'>↑</button><button class="iconbtn" data-svcdown="'+si+'" title="descer"'+(si===SERV.length-1?' disabled':'')+'>↓</button></div></td>'+
-        '<td style="width:34px"><button class="iconbtn" data-exp="'+si+'">'+(si===0?'▾':'▸')+'</button></td>'+
+        '<td style="width:34px"><button class="iconbtn" data-exp="'+si+'" title="'+(SVC_OPEN[si]?'Recolher':'Configurar por equipe')+'">'+(SVC_OPEN[si]?'▾':'▸')+'</button></td>'+
         '<td><input type="color" class="esw" data-field="cor" value="'+hex+'"></td>'+
         '<td>'+sinp('nome',s.n,'180px')+'</td>'+
         '<td>'+smacro(s)+'</td>'+
@@ -3554,7 +3554,7 @@
         '<td>'+naoAntesChips(si)+'</td>'+
         '<td>'+sinp('lag_semanas',s.lag||0,'54px','number')+'</td>'+
         '<td><button class="iconbtn" data-del="'+si+'">✕</button></td></tr>';
-      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="11">'+svcDetail(s,si)+'</td></tr>';
+      var det='<tr class="ed-detail" id="det'+si+'"'+(SVC_OPEN[si]?'':' style="display:none"')+'><td></td><td colspan="11">'+svcDetail(s,si)+'</td></tr>';
       return main+det;
     }).join('');
     return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.'+(Object.keys(SVC_DIRTY).length?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>'+'<button class="btn primary" id="saveServicos"'+(Object.keys(SVC_DIRTY).length?'':' disabled')+'>💾 Salvar alterações</button>')+
@@ -4945,6 +4945,11 @@
   var HEXPAL=['#3E7CB1','#5F9E6E','#C98A2B','#9A6DB0','#C0653F','#4FA3A8'];
   var SVCFIELD2KEY={nome:'n',unidade:'u',teams:'eq',produtividade:'p',lag_semanas:'lag',cor:'hex',macro:'grupo'};
   var SVC_DIRTY={}; // {si: true} — serviços com edição pendente de salvar
+  /* Quais serviços estão com o painel aberto. Antes isso vivia só no DOM (style.display),
+   * então todo redesenho fechava tudo e reabria o primeiro — e, com a página encolhendo de
+   * repente, o navegador não conseguia voltar pra rolagem anterior e jogava tudo pro topo.
+   * Começa vazio: todos fechados. */
+  var SVC_OPEN={};
   function saveServicoField(si,inp){
     var s=SERV[si]; if(!s||!s.id)return;
     var field=inp.getAttribute('data-field'), val=inp.value;
@@ -4992,6 +4997,9 @@
       await sbUpdateServico(a.id,{ordem:target});
       await sbUpdateServico(b.id,{ordem:si});
       var tmp=SERV[si]; SERV[si]=SERV[target]; SERV[target]=tmp;
+      var ab=SVC_OPEN[si], at=SVC_OPEN[target];                 // o painel acompanha a linha
+      if(at)SVC_OPEN[si]=true; else delete SVC_OPEN[si];
+      if(ab)SVC_OPEN[target]=true; else delete SVC_OPEN[target];
       QTY.forEach(function(row){var t=row[si]; row[si]=row[target]; row[target]=t;});
       go('cad-serv'); toast('Serviço reordenado.');
     }catch(e){ alert('Falha ao reordenar: '+((e&&e.message)||e)); }
@@ -5001,7 +5009,7 @@
     if(!confirm('Excluir este serviço e suas quantidades nos lotes?'))return;
     try{
       await sbDeleteServico(s.id);
-      SERV.splice(si,1);
+      SERV.splice(si,1); SVC_OPEN={};   // os índices mudaram; reabrir o errado seria pior
       QTY.forEach(function(row){row.splice(si,1);});
       window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
       go('cad-serv'); toast('Serviço excluído.');
@@ -9835,9 +9843,12 @@
     if(view==='cad-serv'){
       document.querySelectorAll('[data-exp]').forEach(function(b){
         b.addEventListener('click',function(){
-          var d=document.getElementById('det'+b.getAttribute('data-exp'));
+          var si=b.getAttribute('data-exp');
+          var d=document.getElementById('det'+si);
           if(!d)return; var open=d.style.display!=='none';
           d.style.display=open?'none':'table-row'; b.textContent=open?'▸':'▾';
+          b.title=open?'Configurar por equipe':'Recolher';
+          if(open)delete SVC_OPEN[si]; else SVC_OPEN[si]=true;   // sobrevive ao redesenho
         });
       });
       document.querySelectorAll('table.edtbl tbody tr[data-si]').forEach(function(tr){
