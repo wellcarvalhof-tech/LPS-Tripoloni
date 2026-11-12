@@ -1345,7 +1345,7 @@
       ['cad-obra','Obra'],['cad-eap','EAP de serviços'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],
       ['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
-      ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
+      ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cr-gantt','Gantt'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cad-equipes','Equipes'],['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
       ['cr-massas','Distribuição de massas'],['cr-oficina','Oficina (estudo)']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
@@ -1356,7 +1356,7 @@
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
     'cad-obra':['Cadastro','Obra'],'cad-eap':['Cadastro','EAP de serviços'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
-    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gantt'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'cr-prod':['Tempo Caminho','Produtividade'],'cr-massas':['Tempo Caminho','Distribuição de massas'],
     'cr-oficina':['Tempo Caminho','Oficina — montagem manual (estudo)'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-ava':['Acompanhamento','AVA — Análise do Valor Agregado'],
@@ -1565,7 +1565,7 @@
    * Na obra o que se faz é consultar e acompanhar. Então no celular liberamos as telas de
    * consulta/acompanhamento e as de cadastro avisam antes de abrir — não ficam proibidas,
    * só deixam claro que vão ser desconfortáveis. */
-  var MOBILE_OK={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-hist':1,'cr-cenarios':1,'cr-prod':1,
+  var MOBILE_OK={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-gantt':1,'cr-hist':1,'cr-cenarios':1,'cr-prod':1,
     'ac-curvas':1,'ac-med':1,'lp-medio':1,'lp-semana':1,'lp-ppc':1};
   var MOBILE_FORCE={};                                   // telas que o usuário mandou abrir assim mesmo
   var MOBILE_TAB_MATRIZ={tc:1,resumo:1,gantt:1};         // abas da matriz no celular
@@ -9948,7 +9948,7 @@
     }
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:1100px">'+s+'</svg>';
   }
-  function ganttHTML(){
+  function ganttCardHTML(){
     var d=ganttDados();
     var nItens=d.grupos.reduce(function(a,g){ return a+g.itens.length; },0);
     var fonteBtn=function(v,rot,dica){
@@ -9973,27 +9973,36 @@
       (GANTT_FONTE==='lb'?'Uma linha por etapa da Linha de Balanço em cada lote, com a duração em dias.'
                          :'Uma linha por colocação (lote × serviço × equipe), com a duração em semanas.')+
       ' A linha em negrito é o resumo do grupo, como a tarefa-resumo do Project. O tracejado vermelho é a semana de hoje.</div></div>';
+    return gantt;
+  }
+  /** Dentro da matriz, o Gantt vem com o resumo semanal embaixo; na tela propria, nao —
+   *  la o assunto e o cronograma, e a tabela de quantidades ja tem a aba Resumo. */
+  function ganttHTML(){
+    var gantt=ganttCardHTML();
     var wq=weeklyQtyBySvc();
     var th='<th>Serviço</th>'; for(var w=1;w<=wq.tw;w++)th+='<th class="r">S'+w+'</th>';
     var body=SERV.map(function(sv,si){var cells='';for(var w=1;w<=wq.tw;w++){var v=wq.M[si][w]||0;cells+='<td class="r mono"'+(v>0?'':' style="color:var(--muted)"')+'>'+(v>0?fmtBR(v):'·')+'</td>';}return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+sv.u+')</span></td>'+cells+'</tr>';}).join('');
     return gantt+'<div class="card"><div class="eyebrow">Resumo — quantidade por serviço por semana (unidade do tempo-caminho)</div><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div></div>';
   }
+  /** O Gantt vive em duas telas: a sua propria e a aba da matriz. Cada uma se redesenha do
+   *  jeito dela — go() na tela propria, renderCrono() dentro da matriz. */
+  function ganttRedesenha(){ if(current==='cr-gantt')go('cr-gantt'); else renderCrono(); }
   /** Controles do Gantt. Precisa rodar DEPOIS de o conteúdo da matriz existir — ligar no começo
    *  do afterRender não achava os elementos, e o seletor não fazia nada. */
   function ganttWire(){
     document.querySelectorAll('[data-ganttfonte]').forEach(function(b){
-      b.addEventListener('click',function(){ GANTT_FONTE=b.getAttribute('data-ganttfonte'); renderCrono(); });
+      b.addEventListener('click',function(){ GANTT_FONTE=b.getAttribute('data-ganttfonte'); ganttRedesenha(); });
     });
     var g=document.getElementById('ganttGrupo');
     if(g)g.addEventListener('change',function(){
       if(GANTT_FONTE==='lb')GANTT_GRUPO_LB=g.value; else GANTT_GRUPO=g.value;
-      renderCrono();
+      ganttRedesenha();
     });
     var r=document.getElementById('ganttSoResumo');
-    if(r)r.addEventListener('change',function(){ GANTT_SO_RESUMO=r.checked; renderCrono(); });
+    if(r)r.addEventListener('change',function(){ GANTT_SO_RESUMO=r.checked; ganttRedesenha(); });
   }
   /* ---------- charts after render ---------- */
-  var VIEWS_COM_CENARIO={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-hist':1,'cr-cenarios':1,
+  var VIEWS_COM_CENARIO={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-gantt':1,'cr-hist':1,'cr-cenarios':1,
     'ac-curvas':1,'ac-ava':1,'cr-massas':1,'cr-prod':1,'lp-medio':1};
   /** Controles do Gantt (agrupamento e 'só os resumos'). */
   function afterRender(view){
@@ -10013,6 +10022,7 @@
     if(view==='cr-massas'){ massasWire(); massasDraw(); }
     if(view==='torre-rel'){execReportDraw();}
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
+    if(view==='cr-gantt'){ wireCronoTabs(); ganttWire(); }
     if(view==='ac-curvas'){
       renderCurvaS();
       var crBtn=document.getElementById('curvaRefBtn');
@@ -20241,6 +20251,15 @@
     var rec=document.getElementById('logRecarregar');
     if(rec)rec.addEventListener('click',function(){ LOG_LISTA=null; go('cad-log'); renderLog(); });
   }
+  /** Gantt como tela propria, no menu de Tempo Caminho. Mesma barra de abas da matriz,
+   *  pra ir e voltar num clique. */
+  VIEWS['cr-gantt']=function(){
+    if(!LOTS.length||!SERV.length)
+      return head('Gantt','',null)+'<div class="card"><div class="note">Cadastre os servicos e os lotes da obra primeiro (Tempo Caminho &rarr; Servicos / Lotes &amp; Quantidades).</div></div>';
+    return head('Gantt','Cronograma em barras, no formato de cronograma: tarefa, inicio, termino e duracao.','')+
+      '<div class="card" style="margin-bottom:14px"><div class="subtabs" id="cronoTabs">'+cronoTabsHTML('cr-gantt')+'</div></div>'+
+      ganttCardHTML();
+  };
   VIEWS['cr-lb']=function(){
     if(!LOTS.length||!SERV.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os serviços e os lotes da obra primeiro (Tempo Caminho → Serviços / Lotes & Quantidades).</div></div>';
     var root=lbRoot(), c=lbSvc(), si=lbSvcIdx(root.servicoSel), sv=SERV[si];
@@ -20746,7 +20765,7 @@
    *  viewAtual = 'cr-matriz' ou 'cr-lb' (pra marcar a aba ativa certa). */
   function cronoTabsHTML(viewAtual){
     var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['lb','Linha de balanço','cr-lb'],['medio','Médio prazo','lp-medio'],
-      ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt'],['curvas','Curva S','ac-curvas'],
+      ['equipe','Editar por equipe'],['resumo','Resumo'],['gantt','Gantt','cr-gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     return TABS.filter(function(t){
       if(matBloqueada()&&(t[0]==='ajuste'||t[0]==='equipe'))return false;
@@ -20756,6 +20775,7 @@
     }).map(function(t){
       var act='';
       if(t[0]==='lb')act=(viewAtual==='cr-lb')?' active':'';
+      else if(t[0]==='gantt')act=(viewAtual==='cr-gantt')?' active':'';
       else if(!t[2])act=(viewAtual==='cr-matriz'&&t[0]===window._cronoTab)?' active':'';
       return '<button class="subtab'+act+'" data-tab="'+t[0]+'"'+(t[2]?' data-nav="'+t[2]+'"':'')+'>'+t[1]+'</button>';
     }).join('');
