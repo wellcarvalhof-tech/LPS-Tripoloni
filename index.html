@@ -1616,13 +1616,13 @@
      * nao representa. Sem guardar isso, redesenhar joga a tabela de volta pro canto
      * superior esquerdo e quem estava na coluna 12 perde o lugar. */
     var keepWraps=(sameView&&contentEl0)
-      ? Array.prototype.map.call(contentEl0.querySelectorAll('.tbl-wrap,.lot-wrap'),
+      ? Array.prototype.map.call(contentEl0.querySelectorAll('.tbl-wrap,.lot-wrap,.tc-wrap'),
           function(w){ return [w.scrollLeft,w.scrollTop]; })
       : null;
     var repoeWraps=function(){
       if(!keepWraps)return;
       var ce=document.getElementById('content'); if(!ce)return;
-      var ws=ce.querySelectorAll('.tbl-wrap,.lot-wrap');
+      var ws=ce.querySelectorAll('.tbl-wrap,.lot-wrap,.tc-wrap');
       for(var wi=0;wi<ws.length&&wi<keepWraps.length;wi++){
         ws[wi].scrollLeft=keepWraps[wi][0]; ws[wi].scrollTop=keepWraps[wi][1];
       }
@@ -9816,18 +9816,146 @@
       s+='<rect x="'+x1.toFixed(1)+'" y="'+(y+(rowH<22?2:4))+'" width="'+Math.max(4,x2-x1).toFixed(1)+'" height="'+(rowH-(rowH<22?5:10))+'" rx="3" fill="'+svcColor(sv)+'"><title>'+sv.n+': '+rotSem(mondayOf(sp[si].s||1))+' ('+fmtDate(mondayOf(sp[si].s||1))+') – '+rotSem(mondayOf(sp[si].e||1))+'</title></rect>';});
     return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:700px'+(opts.maxH?';max-height:'+opts.maxH:'')+'">'+s+'</svg>';
   }
+  /* ---- Gantt do Tempo-Caminho, estilo Project (mesmo desenho da Linha de Balanço) ----
+   * O antigo era uma linha por serviço com uma barra do primeiro ao último lote: não dizia
+   * quando cada frente entra, nem quanto dura, nem em que lote. Agora é uma linha por
+   * colocação (lote × serviço × equipe), com Início, Término e duração, agrupada como se
+   * quiser ler a obra. A linha de grupo é a barra-resumo, igual à tarefa-resumo do Project. */
+  var GANTT_GRUPO='servico';   // servico | macro | lote | equipe | nenhum
+  var GANTT_SO_RESUMO=false;
+  var GANTT_AGRUPAMENTOS=[['servico','Por serviço'],['macro','Por macro-grupo'],['lote','Por lote'],
+                          ['equipe','Por equipe'],['nenhum','Sem agrupamento']];
+  /** Sexta-feira da semana w — o término que se lê num cronograma é o fim da semana, não a
+   *  segunda-feira dela. */
+  function ganttFimDaSemana(w){ var d=new Date(mondayOf(w).getTime()); d.setDate(d.getDate()+4); return d; }
+  function ganttDados(){
+    var segs=viewSegs(buildSchedule()).filter(function(g){ return g.dur>0; });
+    var tw=1; segs.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
+    var modo=GANTT_GRUPO, grupos=[], idx={};
+    function poe(chave,rotulo,cor,item){
+      var g=idx[chave];
+      if(!g){ g=idx[chave]={rot:rotulo,cor:cor,itens:[],ini:1e9,fim:0}; grupos.push(g); }
+      g.itens.push(item);
+      g.ini=Math.min(g.ini,item.ini); g.fim=Math.max(g.fim,item.fim);
+    }
+    segs.forEach(function(g){
+      var sv=SERV[g.si]; if(!sv)return;
+      var ini=g.start, fim=g.start+g.dur-1, cor=svcColor(sv);
+      var nLotes=LOTS.length;
+      var eq=(sv.eq>1)?(' · '+teamLabel(sv.n,g.team)):'';
+      if(modo==='servico')      poe('s'+g.si, sv.n, cor, {rot:escAttr(LOTS[g.li]||'')+eq, cor:cor, ini:ini, fim:fim});
+      else if(modo==='macro'){
+        var m=macroDe(sv)||'Sem macro-grupo';
+        poe('m'+m, m, cor, {rot:escAttr(sv.n)+' · '+escAttr(LOTS[g.li]||'')+eq, cor:cor, ini:ini, fim:fim});
+      }
+      else if(modo==='lote')    poe('l'+g.li, LOTS[g.li]||'', cor, {rot:escAttr(sv.n)+eq, cor:cor, ini:ini, fim:fim});
+      else if(modo==='equipe')  poe('e'+g.si+'::'+g.team, sv.n+' · '+teamLabel(sv.n,g.team), cor,
+                                    {rot:escAttr(LOTS[g.li]||''), cor:cor, ini:ini, fim:fim});
+      else                      poe('n', '', cor, {rot:escAttr(sv.n)+' · '+escAttr(LOTS[g.li]||'')+eq, cor:cor, ini:ini, fim:fim});
+    });
+    /* Dentro do grupo, quem começa antes fica em cima — é como se lê um cronograma. */
+    grupos.forEach(function(g){ g.itens.sort(function(a,b){ return a.ini-b.ini||a.fim-b.fim||String(a.rot).localeCompare(String(b.rot)); }); });
+    grupos.sort(function(a,b){ return a.ini-b.ini||a.fim-b.fim||String(a.rot).localeCompare(String(b.rot)); });
+    return {grupos:grupos,tw:tw,modo:modo};
+  }
+  function ganttProjSVG(){
+    var d=ganttDados();
+    if(!d.grupos.length)return '<div class="note">Nada colocado no cronograma ainda — o Gantt aparece quando houver serviço com quantidade e lote.</div>';
+    var semGrupo=(d.modo==='nenhum');
+    /* Uma linha por grupo + uma por item. "Só os resumos" existe porque uma obra de 18 serviços
+     * × 40 lotes passa de 700 linhas: ler a obra inteira começa pelos resumos. */
+    var linhas=[];
+    d.grupos.forEach(function(g){
+      if(!semGrupo)linhas.push({tipo:'g',rot:g.rot,cor:g.cor,ini:g.ini,fim:g.fim,n:g.itens.length});
+      if(!GANTT_SO_RESUMO||semGrupo)g.itens.forEach(function(it){ linhas.push({tipo:'i',rot:it.rot,cor:it.cor,ini:it.ini,fim:it.fim}); });
+    });
+    var tw=d.tw;
+    var colT=330, colD=78;
+    var W=1320, pl=colT+colD*2+56, pr=16, pt=38, pb=40;
+    var rowH=Math.max(14,Math.min(26,Math.floor(620/Math.max(1,linhas.length))));
+    var ih=linhas.length*rowH, H=pt+ih+pb, iw=W-pl-pr;
+    var xIni=colT+8, xFim=xIni+colD, xDur=xFim+colD;
+    var xx=function(w){ return pl+iw*(w-1)/Math.max(1,tw); };
+    var s='';
+    s+='<text class="axm" x="8" y="'+(pt-12)+'" style="font-weight:700;font-size:10px">Tarefa</text>'+
+      '<text class="axm" x="'+xIni+'" y="'+(pt-12)+'" style="font-weight:700;font-size:10px">Início</text>'+
+      '<text class="axm" x="'+xFim+'" y="'+(pt-12)+'" style="font-weight:700;font-size:10px">Término</text>'+
+      '<text class="axm" x="'+(xDur+16)+'" y="'+(pt-12)+'" text-anchor="end" style="font-weight:700;font-size:10px">Sem.</text>'+
+      '<line x1="0" y1="'+(pt-8)+'" x2="'+(W-pr)+'" y2="'+(pt-8)+'" stroke="var(--line-2)"/>'+
+      '<line x1="'+(pl-8)+'" y1="'+(pt-8)+'" x2="'+(pl-8)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>';
+    var passo=Math.max(1,Math.ceil(tw/26));
+    for(var k=1;k<=tw+1;k+=passo){
+      var x=xx(k);
+      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>'+
+        '<text class="axm" x="'+x.toFixed(1)+'" y="'+(pt+ih+14)+'" text-anchor="middle">'+rotSem(mondayOf(k))+
+        '<title>'+fmtDate(mondayOf(k))+'</title></text>';
+    }
+    linhas.forEach(function(L,i){
+      var y=pt+i*rowH, ehG=(L.tipo==='g');
+      if(ehG)s+='<rect x="0" y="'+y+'" width="'+(W-pr)+'" height="'+rowH+'" fill="var(--elev)" opacity=".85"/>';
+      else if(i%2===0)s+='<rect x="0" y="'+y+'" width="'+(W-pr)+'" height="'+rowH+'" fill="var(--elev)" opacity=".4"/>';
+      var fs=rowH<17?8:9.5;
+      var yT=y+rowH/2+fs*0.36;
+      s+='<text class="axm" x="'+(xIni)+'" y="'+yT+'" style="font-size:'+fs+'px">'+fmtDate(mondayOf(L.ini))+'</text>'+
+        '<text class="axm" x="'+(xFim)+'" y="'+yT+'" style="font-size:'+fs+'px">'+fmtDate(ganttFimDaSemana(L.fim))+'</text>'+
+        '<text class="axm" x="'+(xDur+16)+'" y="'+yT+'" text-anchor="end" style="font-size:'+fs+'px">'+(L.fim-L.ini+1)+'</text>';
+      s+='<text class="axm" x="'+(ehG?6:20)+'" y="'+yT+'" style="font-size:'+fs+'px'+(ehG?';fill:var(--ink);font-weight:700':'')+'">'+
+        (ehG?escAttr(L.rot)+' <tspan style="fill:var(--muted);font-weight:400">('+L.n+')</tspan>':L.rot)+'</text>';
+      var x1=xx(L.ini), x2=xx(L.fim+1), larg=Math.max(2,x2-x1);
+      var dica=escAttr(String(L.rot).replace(/<[^>]*>/g,''))+' · '+rotSem(mondayOf(L.ini))+' → '+rotSem(mondayOf(L.fim))+
+        ' · '+(L.fim-L.ini+1)+' semana(s)';
+      if(ehG){
+        /* Barra-resumo: fina e com as pontas pra baixo, como a tarefa-resumo do Project —
+         * assim não se confunde com o trabalho de verdade das linhas de baixo. */
+        var yb=y+rowH*0.34, hb=Math.max(3,rowH*0.22);
+        s+='<rect x="'+x1.toFixed(1)+'" y="'+yb.toFixed(1)+'" width="'+larg.toFixed(1)+'" height="'+hb.toFixed(1)+'" fill="var(--ink-2)"><title>'+dica+'</title></rect>'+
+          '<path d="M'+x1.toFixed(1)+' '+yb.toFixed(1)+' l0 '+(hb*2.1).toFixed(1)+' l'+(hb*1.1).toFixed(1)+' -'+(hb*1.1).toFixed(1)+' z" fill="var(--ink-2)"/>'+
+          '<path d="M'+x2.toFixed(1)+' '+yb.toFixed(1)+' l0 '+(hb*2.1).toFixed(1)+' l-'+(hb*1.1).toFixed(1)+' -'+(hb*1.1).toFixed(1)+' z" fill="var(--ink-2)"/>';
+      } else {
+        s+='<rect x="'+x1.toFixed(1)+'" y="'+(y+rowH*0.18).toFixed(1)+'" width="'+larg.toFixed(1)+'" height="'+(rowH*0.64).toFixed(1)+
+          '" rx="3" fill="'+L.cor+'"><title>'+dica+'</title></rect>';
+      }
+    });
+    var hw=hojeWeekNumber(tw);
+    if(hw>0){
+      var xh=xx(hw);
+      s+='<line x1="'+xh.toFixed(1)+'" y1="'+pt+'" x2="'+xh.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--crit)" stroke-width="1.5" stroke-dasharray="4 3"><title>Semana de hoje · '+rotSem(mondayOf(hw))+'</title></line>';
+    }
+    return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:1100px">'+s+'</svg>';
+  }
   function ganttHTML(){
-    var gantt='<div class="card" style="margin-bottom:14px"><div class="eyebrow">Gantt dos serviços</div><div class="tc-wrap">'+ganttSVG()+'</div></div>';
+    var d=ganttDados();
+    var nItens=d.grupos.reduce(function(a,g){ return a+g.itens.length; },0);
+    var ctl='<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'+
+      '<label style="display:flex;gap:6px;align-items:center"><span class="note" style="margin:0">Agrupar por</span>'+
+        '<select class="esel" id="ganttGrupo">'+GANTT_AGRUPAMENTOS.map(function(o){
+          return '<option value="'+o[0]+'"'+(GANTT_GRUPO===o[0]?' selected':'')+'>'+o[1]+'</option>';
+        }).join('')+'</select></label>'+
+      (GANTT_GRUPO==='nenhum'?'':'<label class="lotchip'+(GANTT_SO_RESUMO?' on':' other')+'" style="cursor:pointer">'+
+        '<input type="checkbox" id="ganttSoResumo"'+(GANTT_SO_RESUMO?' checked':'')+'>Só os resumos</label>')+
+      '<span class="note" style="margin:0">'+d.grupos.length+' grupo(s) · '+nItens+' colocação(ões)</span>'+
+      '</div>';
+    var gantt='<div class="card" style="margin-bottom:14px"><div class="eyebrow">Gantt dos serviços</div>'+ctl+
+      '<div class="tc-wrap">'+ganttProjSVG()+'</div>'+
+      '<div class="note" style="margin-top:8px">Uma linha por colocação (lote × serviço × equipe), com início, término e duração — a linha em negrito é o resumo do grupo, como a tarefa-resumo do Project. '+
+      'O tracejado vermelho é a semana de hoje.</div></div>';
     var wq=weeklyQtyBySvc();
     var th='<th>Serviço</th>'; for(var w=1;w<=wq.tw;w++)th+='<th class="r">S'+w+'</th>';
     var body=SERV.map(function(sv,si){var cells='';for(var w=1;w<=wq.tw;w++){var v=wq.M[si][w]||0;cells+='<td class="r mono"'+(v>0?'':' style="color:var(--muted)"')+'>'+(v>0?fmtBR(v):'·')+'</td>';}return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+' <span class="note">('+sv.u+')</span></td>'+cells+'</tr>';}).join('');
     return gantt+'<div class="card"><div class="eyebrow">Resumo — quantidade por serviço por semana (unidade do tempo-caminho)</div><div class="tbl-wrap"><table class="edtbl"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div></div>';
   }
-
   /* ---------- charts after render ---------- */
   var VIEWS_COM_CENARIO={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-hist':1,'cr-cenarios':1,
     'ac-curvas':1,'ac-ava':1,'cr-massas':1,'cr-prod':1,'lp-medio':1};
+  /** Controles do Gantt (agrupamento e 'só os resumos'). */
+  function ganttWire(){
+    var g=document.getElementById('ganttGrupo');
+    if(g)g.addEventListener('change',function(){ GANTT_GRUPO=g.value; go(current); });
+    var r=document.getElementById('ganttSoResumo');
+    if(r)r.addEventListener('change',function(){ GANTT_SO_RESUMO=r.checked; go(current); });
+  }
   function afterRender(view){
+    ganttWire();
     if(CENARIO_VISTA&&VIEWS_COM_CENARIO[view]){
       var c=document.getElementById('content');
       if(c&&!document.getElementById('cnSair')){
