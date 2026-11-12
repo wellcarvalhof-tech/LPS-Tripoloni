@@ -3546,6 +3546,7 @@
         '<td style="width:34px"><button class="iconbtn" data-exp="'+si+'">'+(si===0?'▾':'▸')+'</button></td>'+
         '<td><input type="color" class="esw" data-field="cor" value="'+hex+'"></td>'+
         '<td>'+sinp('nome',s.n,'180px')+'</td>'+
+        '<td>'+smacro(s)+'</td>'+
         '<td>'+sinp('unidade',s.u,'54px')+'</td>'+
         '<td>'+sinp('teams',s.eq,'54px','number')+'</td>'+
         '<td>'+sinp('produtividade',pnum(s.p),'90px','number')+'</td>'+
@@ -3553,12 +3554,13 @@
         '<td>'+naoAntesChips(si)+'</td>'+
         '<td>'+sinp('lag_semanas',s.lag||0,'54px','number')+'</td>'+
         '<td><button class="iconbtn" data-del="'+si+'">✕</button></td></tr>';
-      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="10">'+svcDetail(s,si)+'</td></tr>';
+      var det='<tr class="ed-detail" id="det'+si+'"'+(si===0?'':' style="display:none"')+'><td></td><td colspan="11">'+svcDetail(s,si)+'</td></tr>';
       return main+det;
     }).join('');
     return head('Serviços','Atividades-tipo da obra: cor, unidade, equipes, produtividade, predecessores e defasagem.'+(Object.keys(SVC_DIRTY).length?' Há alterações não salvas.':''),impBtn()+'<button class="btn primary" id="addServico">+ Adicionar</button>'+'<button class="btn primary" id="saveServicos"'+(Object.keys(SVC_DIRTY).length?'':' disabled')+'>💾 Salvar alterações</button>')+
-    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th></th><th>Cor</th><th>Nome</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th title="Trava dura: nem o ajuste manual coloca este serviço antes">Não pode antes de</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-    '<div class="note" style="margin-top:10px"><b>Predecessores</b> montam a cadeia e definem quando o serviço pode começar no cálculo automático. '+
+    '<div class="card"><div class="tbl-wrap"><table class="edtbl"><thead><tr><th></th><th></th><th>Cor</th><th>Nome</th><th title="Agrupa o serviço nos relatórios: Duplicação, Restauração, OAE ou Serviços diversos">Macro-grupo</th><th>Unid.</th><th>Equipes</th><th>Prod./sem</th><th>Predecessores</th><th title="Trava dura: nem o ajuste manual coloca este serviço antes">Não pode antes de</th><th>Lag (sem)</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<div class="note" style="margin-top:10px"><b>Macro-grupo</b> é só classificação — não muda cálculo nenhum. Serve pra somar e separar os serviços nos relatórios (ele já sai na coluna <i>Grupo</i> da exportação em Excel). '+
+    '<b>Predecessores</b> montam a cadeia e definem quando o serviço pode começar no cálculo automático. '+
     '<b>Não pode antes de</b> é uma trava dura: o serviço nunca começa, naquele lote, antes do outro terminar ali — e isso vale também pro <b>ajuste manual</b>, que a predecessora sozinha não segura. '+
     'Use quando uma frente arrastada à mão puder passar na frente de algo que fisicamente não dá, como CBUQ antes da base.</div>'+
     '<div class="note" style="margin-top:6px">Clique em <b>▸</b> para configurar por equipe: lote inicial, produtividade, aumentos e regras (paralelo, fila dinâmica, sem paralisação, semana-alvo). '+(SERV.length?'':'Nenhum serviço cadastrado ainda.')+'</div></div>';
@@ -4923,8 +4925,25 @@
   /* ---- Editores de cadastro (fiéis ao app) ---- */
   function tinp(v,w,type){return '<input class="einp" type="'+(type||'text')+'" value="'+(v===''||v==null?'':v)+'"'+(w?' style="width:'+w+'"':'')+'>';}
   function sinp(field,v,w,type){return '<input class="einp" data-field="'+field+'" type="'+(type||'text')+'" value="'+(v===''||v==null?'':escAttr(v))+'"'+(w?' style="width:'+w+'"':'')+'>';}
+  /* Macro-grupo do serviço. Mora em servicos.grupo, que a migração 29 já criou com esse
+   * propósito ("macro-item") e que os relatórios em Excel já exportam numa coluna Grupo —
+   * só faltava tela pra preencher. */
+  var MACROS=['Duplicação','Restauração','OAE','Serviços diversos'];
+  function smacro(s){
+    var v=(s&&s.grupo)?String(s.grupo):'';
+    var lista=MACROS.slice();
+    /* Valor que veio de importação e não está na lista não pode sumir sem ninguém ver:
+     * entra como opção própria, marcada, pra a pessoa decidir se troca. */
+    if(v&&lista.indexOf(v)<0)lista.push(v);
+    return '<select class="esel" data-field="macro" style="width:150px">'+
+      '<option value=""'+(v?'':' selected')+'>—</option>'+
+      lista.map(function(m){
+        var fora=MACROS.indexOf(m)<0;
+        return '<option value="'+escAttr(m)+'"'+(v===m?' selected':'')+'>'+escAttr(m)+(fora?' (fora da lista)':'')+'</option>';
+      }).join('')+'</select>';
+  }
   var HEXPAL=['#3E7CB1','#5F9E6E','#C98A2B','#9A6DB0','#C0653F','#4FA3A8'];
-  var SVCFIELD2KEY={nome:'n',unidade:'u',teams:'eq',produtividade:'p',lag_semanas:'lag',cor:'hex'};
+  var SVCFIELD2KEY={nome:'n',unidade:'u',teams:'eq',produtividade:'p',lag_semanas:'lag',cor:'hex',macro:'grupo'};
   var SVC_DIRTY={}; // {si: true} — serviços com edição pendente de salvar
   function saveServicoField(si,inp){
     var s=SERV[si]; if(!s||!s.id)return;
@@ -4934,18 +4953,31 @@
     else if(field==='teams'){ val=Math.max(1,parseInt(val,10)||1); }
     else if(field==='produtividade'){ val=pnum(val); }
     else if(field==='lag_semanas'){ val=parseInt(val,10)||0; }
+    else if(field==='macro'){ val=(val||'').trim(); }
     else if(field!=='cor'){ return; }
     s[SVCFIELD2KEY[field]]=(field==='produtividade')?String(val):val;
     SVC_DIRTY[si]=true;
     go('cad-serv');
   }
   async function saveServicosAll(){
-    if(ACTIVE_CENARIO){ await saveIntoActiveCenario(); return; }
+    if(ACTIVE_CENARIO){
+      /* O snapshot do cenário guarda os parâmetros de cálculo, não o cadastro. O
+       * macro-grupo é do serviço na obra — sem isto ele se perderia em silêncio
+       * sempre que houvesse um cenário aberto. */
+      try{
+        var ks=Object.keys(SVC_DIRTY).map(Number);
+        for(var gi=0;gi<ks.length;gi++){
+          var sg=SERV[ks[gi]];
+          if(sg&&sg.id)await sbUpdateServico(sg.id,{grupo:sg.grupo||null});
+        }
+      }catch(e){ console.warn('macro-grupo não salvo:',e&&e.message); }
+      await saveIntoActiveCenario(); return;
+    }
     var idxs=Object.keys(SVC_DIRTY).map(Number); if(!idxs.length)return;
     try{
       for(var i=0;i<idxs.length;i++){
         var s=SERV[idxs[i]]; if(!s)continue;
-        await sbUpdateServico(s.id,{nome:s.n,unidade:s.u,cor:s.hex,teams:s.eq,produtividade:pnum(s.p),lag_semanas:s.lag,config:s.cfg||{}});
+        await sbUpdateServico(s.id,{nome:s.n,unidade:s.u,cor:s.hex,teams:s.eq,produtividade:pnum(s.p),lag_semanas:s.lag,config:s.cfg||{},grupo:s.grupo||null});
       }
       SVC_DIRTY={};
       go('cad-serv'); toast('Serviços salvos.');
