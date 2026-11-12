@@ -5055,8 +5055,8 @@
       '<div class="note" style="margin-top:4px;font-size:10px">Marque nos chips acima quais curvas aparecem. A contratual e a executiva da planilha são ponderadas por venda; as daqui, pelos pesos cadastrados (ou pela quantidade). A linha vertical marca o período escolhido ao lado — o mesmo dos cartões.</div>'+
     '</div>'+
     '<div class="grid g2" style="gap:14px">'+
-      '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">Previsto × realizado por semana (±3 semanas de hoje)</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
-      '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
+      '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px" id="cvBarsTit">Previsto × realizado por semana</div><svg class="chart" id="cvBars" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
+      '<div class="card" style="padding:10px 14px;display:flex;flex-direction:column"><div class="eyebrow" style="margin-bottom:2px" id="cvIdpTit">IDP — Índice de Desempenho de Prazo por semana</div><svg class="chart" id="cvIdp" viewBox="0 0 480 180" style="max-height:34vh;flex:1"></svg></div>'+
     '</div></div>';
   };
 
@@ -11497,19 +11497,25 @@
       });
     }
     sCurve('scv2',data,sel,wSel);
-    renderCvBars(data,sel);
-    renderCvIdp(data,sel);
+    renderCvBars(data,sel,wSel);
+    renderCvIdp(data,sel,wSel);
   }
   function weeklyDelta(series,w){
     if(!series||w<1||w>=series.length)return null;
     var prev=series[w-1]!=null?series[w-1]:0, cur=series[w]!=null?series[w]:prev;
     return cur-prev;
   }
-  function renderCvBars(data,sel){
+  function renderCvBars(data,sel,wSel){
     var el=document.getElementById('cvBars'); if(!el)return;
     var hojeW=data.hojeW>0?data.hojeW:1;
+    /* Ancora na semana ESCOLHIDA no alto da tela, nao em hoje: o seletor serve justamente
+     * pra olhar outra semana, e deixar estes dois presos em hoje fazia a tela mostrar duas
+     * semanas diferentes ao mesmo tempo. Hoje continua marcado quando cai na janela. */
+    var wC=(wSel>0&&wSel<=data.tw)?wSel:hojeW;
     var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
-    var weeks=[]; for(var w=hojeW-3;w<=hojeW+3;w++)weeks.push(w);
+    var weeks=[]; for(var w=wC-3;w<=wC+3;w++)weeks.push(w);
+    var tit=document.getElementById('cvBarsTit');
+    if(tit)tit.textContent='Previsto × realizado por semana (±3 semanas de '+rotSem(mondayOf(wC))+')';
     var vals=weeks.map(function(w){
       if(w<1||w>data.tw)return {w:w,p:null,r:null,e:null};
       return {w:w,p:weeklyDelta(cCliente,w),r:weeklyDelta(cReal,w)||0,e:weeklyDelta(cExec,w)||0};
@@ -11521,8 +11527,11 @@
     var s='';
     for(var g=0;g<=3;g++){var val=maxV*g/3; s+='<line x1="'+pl+'" y1="'+yy(val)+'" x2="'+(W-pr)+'" y2="'+yy(val)+'" stroke="var(--line)"/><text x="'+(pl-4)+'" y="'+(yy(val)+2.5)+'" text-anchor="end" font-size="7" fill="var(--muted)">'+val.toFixed(0)+'</text>';}
     vals.forEach(function(v,i){
-      var x0=xx(i), wLbl=v.w>=1?(rotSem(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
-      s+='<text x="'+(x0+grpW/2)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      var x0=xx(i), wLbl=v.w>=1?(rotSem(mondayOf(v.w))):'—';
+      var ehSel=v.w===wC, ehHoje=v.w===hojeW;
+      var cor=ehSel?'var(--crit)':(ehHoje?'var(--accent)':'var(--muted)');
+      s+='<text x="'+(x0+grpW/2)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+cor+'"'+(ehSel?' font-weight="700"':'')+'>'+wLbl+
+        (ehSel||ehHoje?('<title>'+(ehSel?'Semana selecionada':'')+(ehSel&&ehHoje?' · ':'')+(ehHoje?'Semana de hoje':'')+'</title>'):'')+'</text>';
       if(v.w<1||v.w>data.tw)return;
       function bar(idx,val,color,label){
         if(val==null||val<=0)return;
@@ -11536,11 +11545,14 @@
     });
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
   }
-  function renderCvIdp(data,sel){
+  function renderCvIdp(data,sel,wSel){
     var el=document.getElementById('cvIdp'); if(!el)return;
     var hojeW=data.hojeW>0?data.hojeW:1;
+    var wC=(wSel>0&&wSel<=data.tw)?wSel:hojeW;   // a escolhida fecha a serie, na direita
     var cCliente=curveSeries(data.cliente,sel), cExec=curveSeries(data.executivo,sel), cReal=curveSeries(data.real,sel);
-    var weeks=[]; for(var w=hojeW-5;w<=hojeW;w++)weeks.push(w);
+    var weeks=[]; for(var w=wC-5;w<=wC;w++)weeks.push(w);
+    var titI=document.getElementById('cvIdpTit');
+    if(titI)titI.textContent='IDP — Índice de Desempenho de Prazo por semana (até '+rotSem(mondayOf(wC))+')';
     var vals=weeks.map(function(w){
       if(w<1||w>data.tw)return {w:w,cli:null,exe:null};
       var r=(cReal&&cReal[w]!=null)?cReal[w]:0;
@@ -11564,8 +11576,11 @@
     s+='<path d="'+path('cli')+'" fill="none" stroke="var(--ink)" stroke-width="1.6"/>';
     s+='<path d="'+path('exe')+'" fill="none" stroke="var(--crit)" stroke-width="1.6"/>';
     vals.forEach(function(v,i){
-      var wLbl=v.w>=1?(rotSem(mondayOf(v.w))):'—', isHoje=v.w===hojeW;
-      s+='<text x="'+xx(i)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+(isHoje?'var(--crit)':'var(--muted)')+'"'+(isHoje?' font-weight="700"':'')+'>'+wLbl+'</text>';
+      var wLbl=v.w>=1?(rotSem(mondayOf(v.w))):'—';
+      var ehSelI=v.w===wC, ehHojeI=v.w===hojeW;
+      var corI=ehSelI?'var(--crit)':(ehHojeI?'var(--accent)':'var(--muted)');
+      s+='<text x="'+xx(i)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="'+corI+'"'+(ehSelI?' font-weight="700"':'')+'>'+wLbl+
+        (ehSelI||ehHojeI?('<title>'+(ehSelI?'Semana selecionada':'')+(ehSelI&&ehHojeI?' · ':'')+(ehHojeI?'Semana de hoje':'')+'</title>'):'')+'</text>';
       if(v.cli!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.cli)+'" r="2.2" fill="var(--ink)"/><text x="'+xx(i)+'" y="'+(yy(v.cli)-4)+'" text-anchor="middle" font-size="6.5" fill="var(--ink)">'+v.cli.toFixed(2)+'</text>';
       if(v.exe!=null)s+='<circle cx="'+xx(i)+'" cy="'+yy(v.exe)+'" r="2.2" fill="var(--crit)"/><text x="'+xx(i)+'" y="'+(yy(v.exe)+9)+'" text-anchor="middle" font-size="6.5" fill="var(--crit)">'+v.exe.toFixed(2)+'</text>';
     });
