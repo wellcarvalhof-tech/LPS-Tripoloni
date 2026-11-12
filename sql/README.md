@@ -40,6 +40,8 @@ Rodar em ordem, uma vez cada, no SQL Editor do Supabase (projeto `vmseakjzavkqrk
 | `34_cadastro_so_por_convite.sql` | Criar conta só com o e-mail convidado — a trava fica no banco (trigger em `auth.users`), então vale também pra quem chamar a API direto | ⚠️ novo — rodar pra fechar o cadastro aberto |
 | `35_add_historico_obra.sql` | Coluna `obras.historico` — o que a obra já tinha executado ANTES do plano desta plataforma (contrato e executado por serviço, com data de corte); sem ela as curvas medem o avanço contra o saldo, como se a obra começasse do zero na semana 1 | ⚠️ novo — rodar pra importar o histórico da obra |
 
+| `36_equipe_macro.sql` | Coluna `obras.equipe_macro` — equipe típica dimensionada por macro-grupo (Duplicação, Restauração, OAE, Serviços diversos): a equipe responde por todos os serviços do grupo e permanece do início do primeiro ao fim do último | ⚠️ novo — rodar pra dimensionar equipe por macro-grupo |
+
 Pra saber **o que já rodou neste banco**, cole `CHECK_migracoes.sql` no SQL Editor do Supabase: ele lista cada migração com rodou/falta, sem alterar nada.
 
 Novos arquivos de migração devem ser salvos aqui (não em Downloads), numerados em sequência.

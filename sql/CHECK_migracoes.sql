@@ -33,6 +33,7 @@ select * from (
   ('33_eap_servicos',              (select count(*)>0 from c where table_name='obras' and column_name='eap')),
   ('34_cadastro_so_por_convite',   (select count(*)>0 from pg_trigger where tgname='trg_cadastro_so_por_convite' and not tgisinternal)),
   ('35_add_historico_obra',        (select count(*)>0 from c where table_name='obras' and column_name='historico')),
+  ('36_equipe_macro',             (select count(*)>0 from c where table_name='obras' and column_name='equipe_macro')),
   ('25_fix_views_security_invoker', (select coalesce(bool_and(array_to_string(cl.reloptions,',') like '%security_invoker=%'),false)
                                        from pg_class cl join pg_namespace n on n.oid=cl.relnamespace
                                       where n.nspname='public' and cl.relname in ('vw_ppc_semanal','vw_curva_s')))

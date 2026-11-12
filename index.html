@@ -1182,7 +1182,7 @@
    * montam o app pelo mesmo código. */
   async function sbFetchCadastro(obraId){
     var res=await Promise.all([
-      SB.from('obras').select('nome,codigo,rodovia,data_inicio,data_fim_prevista,feriados,ajustes_manuais,cliente,valor_contrato,aditivos,linha_balanco,orcamento,eap,historico').eq('id',obraId).single(),
+      SB.from('obras').select('*').eq('id',obraId).single(),
       SB.from('servicos').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       SB.from('lotes').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       sbTudo(function(){return SB.from('lote_servico').select('lote_id,servico_id,quantidade').eq('obra_id',obraId).order('id',{ascending:true});}),
@@ -1215,6 +1215,11 @@
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
+    /* Equipe por macro-grupo (migração 36). Coluna ausente = recurso ainda não disponível;
+     * a tela avisa na hora de salvar em vez de quebrar a carga da obra. */
+    EQUIPE_MACRO=(obra&&obra.equipe_macro&&typeof obra.equipe_macro==='object')?obra.equipe_macro:{};
+    SEM_COL_EQMACRO=!!(obra&&!('equipe_macro' in obra));
+    EQMACRO_DIRTY=false;
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
     ORC=(obra.orcamento&&typeof obra.orcamento==='object'&&obra.orcamento.itens)?obra.orcamento:null;
@@ -1663,7 +1668,7 @@
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
       Object.keys(QTY_DIRTY||{}).length>0 || Object.keys(LOT_PACOTE_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY ||
       Object.keys(REC_DIRTY||{}).length>0 || Object.keys(REALIZADO_DIRTY||{}).length>0 || Object.keys(ESTACA_QTY_DIRTY||{}).length>0 ||
-      Object.keys(APOIO_DIRTY||{}).length>0 || !!LB_DIRTY;
+      Object.keys(APOIO_DIRTY||{}).length>0 || !!LB_DIRTY || !!EQMACRO_DIRTY;
   }
   function refreshTopSaveBtn(){
     var b=document.getElementById('topSaveBtn'); if(!b)return;
@@ -1691,6 +1696,7 @@
       if(Object.keys(REC_DIRTY).length)await saveRecursosAll();
       if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
       if(LB_DIRTY)await lbSalvar();
+      if(EQMACRO_DIRTY)await saveEquipeMacro();   // equipe por macro-grupo é da obra, não do cenário
       if(Object.keys(ESTACA_QTY_DIRTY).length)await saveEstacaQtdAll();
       if(Object.keys(APOIO_DIRTY).length)await saveApoioAll();
       toast('Tudo salvo.');
@@ -3857,6 +3863,7 @@
   };
 
   var HIST_FILTER='todos', HIST_SVC=null;
+  var HIST_MACRO=null;   // macro-grupo aberto no cadastro de equipe típica
   var HIST_ORIGEM='todos'; // 'todos'|'direto'|'indireto' — filtro do gráfico por origem (serviço × apoio administrativo)
   /* Como contar a equipe entre dois segmentos do mesmo serviço:
    *   'execucao' — só as semanas com serviço acontecendo. É o custo de quem só paga quem trabalha.
@@ -3903,6 +3910,90 @@
   var HIST_CLASSE='todas';   // mão de obra: todas|direto|indireto|terceirizado|sem
   // Equipamentos: qual PARCELA do realizado mostrar (o previsto é sempre o geral).
   var HIST_CLASSE_EQ='todos'; // todos (total) | proprio | terceiro
+  /* ---------------- Equipe típica por MACRO-GRUPO ----------------
+   * A equipe típica do serviço acompanha as equipes ativas semana a semana. Em frentes como OAE
+   * isso não descreve a obra: a mesma equipe responde por TODOS os serviços do grupo e fica
+   * mobilizada do início do primeiro ao término do último. Ligando o macro-grupo, os serviços
+   * dele param de contar equipe própria — senão a mesma gente seria contada duas vezes. */
+  var EQUIPE_MACRO={};        // {grupo: {ativo:bool, crew:[{resourceId,qty,mob,demob}]}}
+  var EQMACRO_DIRTY=false;
+  var SEM_COL_EQMACRO=false;  // true quando a migração 36 ainda não rodou
+  function macroDe(s){ return (s&&s.grupo)?String(s.grupo).trim():''; }
+  /** Macro-grupos que existem de fato: os quatro da lista mais qualquer um já gravado nos
+   *  serviços (um valor vindo de importação não pode ficar sem onde ser configurado). */
+  function macrosEmUso(){
+    var vistos={}, out=[];
+    MACROS.forEach(function(m){ vistos[m]=true; out.push(m); });
+    SERV.forEach(function(s){ var m=macroDe(s); if(m&&!vistos[m]){ vistos[m]=true; out.push(m); } });
+    return out;
+  }
+  function macroCfg(m){
+    var c=EQUIPE_MACRO[m];
+    if(!c||typeof c!=='object')c=EQUIPE_MACRO[m]={ativo:false,crew:[]};
+    if(!Array.isArray(c.crew))c.crew=[];
+    return c;
+  }
+  function macroAtivo(m){ var c=EQUIPE_MACRO[m]; return !!(c&&c.ativo&&Array.isArray(c.crew)); }
+  /** O serviço está sob um macro-grupo ligado? Então a equipe típica dele não conta. */
+  function servicoSobMacro(s){ var m=macroDe(s); return m&&macroAtivo(m)?m:''; }
+  function macroDirty(){ EQMACRO_DIRTY=true; refreshTopSaveBtn(); }
+  async function saveEquipeMacro(){
+    if(!selectedObra||!EQMACRO_DIRTY)return;
+    /* Grupo sem recurso nenhum e desligado não precisa ocupar espaço no banco. */
+    var limpo={};
+    Object.keys(EQUIPE_MACRO).forEach(function(m){
+      var c=EQUIPE_MACRO[m];
+      if(c&&(c.ativo||(c.crew&&c.crew.length)))limpo[m]={ativo:!!c.ativo,crew:(c.crew||[]).slice()};
+    });
+    try{
+      await sbUpdateObra(selectedObra.id,{equipe_macro:limpo});
+      window._OBRA=Object.assign({},window._OBRA,{equipe_macro:limpo});
+      EQMACRO_DIRTY=false; SEM_COL_EQMACRO=false;
+    }catch(e){
+      var msg=String((e&&e.message)||e);
+      if(/equipe_macro/.test(msg)){
+        SEM_COL_EQMACRO=true;
+        throw new Error('A coluna equipe_macro ainda não existe no banco. Rode sql/36_equipe_macro.sql no Supabase e salve de novo.');
+      }
+      throw e;
+    }
+  }
+
+  /* ---------------- Mobilização / desmobilização por recurso ----------------
+   * A regra continua sendo a automática. mob/demob só CORTAM as pontas: antes da mobilização e
+   * depois da desmobilização o recurso não conta, e no meio nada muda. Cada uma é opcional —
+   * dá pra marcar só a entrada, só a saída, ou as duas. */
+  function janelaItem(item,tw){
+    var mob=(+((item&&item.mob)||0)>0)?+item.mob:1;
+    var dem=(+((item&&item.demob)||0)>0)?+item.demob:tw;
+    if(dem<mob){ var t=mob; mob=dem; dem=t; }   // invertido é erro de digitação, não intenção
+    return {ini:Math.max(1,mob),fim:Math.min(tw,dem)};
+  }
+  function temJanela(item){ return !!(item&&((+item.mob>0)||(+item.demob>0))); }
+  /** Rótulo curto da janela, pra tabela e para o aviso. */
+  function janelaTxt(item){
+    if(!temJanela(item))return '';
+    var a=(+item.mob>0)?rotSem(mondayOf(+item.mob)):'início';
+    var b=(+item.demob>0)?rotSem(mondayOf(+item.demob)):'fim';
+    return a+' → '+b;
+  }
+  /** Lista de semanas pra escolher mobilização/desmobilização. Vazio = regra automática. */
+  function semOpts(sel,tw){
+    var o='<option value="">—</option>';
+    for(var w=1;w<=tw;w++)
+      o+='<option value="'+w+'"'+((+sel===w)?' selected':'')+'>'+rotSem(mondayOf(w))+'</option>';
+    return o;
+  }
+  /** As duas colunas de janela, iguais nas três tabelas (serviço, macro-grupo e apoio). */
+  function janelaTds(attr,id,item,tw){
+    return '<td><select class="esel" data-'+attr+'="'+id+'" data-jcampo="mob" style="width:104px">'+semOpts(item&&item.mob,tw)+'</select></td>'+
+           '<td><select class="esel" data-'+attr+'="'+id+'" data-jcampo="demob" style="width:104px">'+semOpts(item&&item.demob,tw)+'</select></td>';
+  }
+  var JANELA_TH='<th title="Antes desta semana o recurso não conta. Vazio = segue a regra automática.">Mobilização</th>'+
+                '<th title="Depois desta semana o recurso não conta. Vazio = segue a regra automática.">Desmobilização</th>';
+  var JANELA_NOTA='<div class="note" style="margin-top:8px"><b>Mobilização</b> e <b>desmobilização</b> são opcionais e só cortam as pontas: '+
+    'a conta continua sendo a automática, mas o recurso não aparece antes da primeira nem depois da segunda. '+
+    'Deixe em branco pra manter só a regra automática.</div>';
   /* 'todos' ou o id de UM recurso: o grafico passa a mostrar so ele. Quando tem um recurso
    * escolhido, Tipo e Mao de obra nao se aplicam — o recurso ja e a escolha mais especifica,
    * e cruzar os dois so produzia grafico vazio sem explicar por que. */
@@ -4582,53 +4673,130 @@
       nEquip?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+equipRows+'</tbody></table></div>'+classePorCatEq:'<div class="note">Nenhum equipamento cadastrado ainda.</div>'
     );
 
-    var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+    /* O seletor serve pros dois dimensionamentos: por serviço (equipe acompanha as equipes
+     * ativas) e por macro-grupo (equipe fica o período inteiro do grupo). Um select só, com os
+     * grupos em cima, deixa claro que é uma escolha entre dois caminhos pro mesmo cadastro. */
+    var eqMacro=(HIST_MACRO&&macrosEmUso().indexOf(HIST_MACRO)>=0)?HIST_MACRO:null;
+    var svcSel=eqMacro?null:(HIST_SVC==null?(SERV.length?0:null):HIST_SVC);
     var svc=svcSel!=null?SERV[svcSel]:null;
-    var crew=svc?((svc.cfg&&svc.cfg.crew)||[]):[];
-    var crewRows=crew.map(function(item){
-      var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return '';
-      return '<tr><td>'+r.n+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
-        '<td><input class="einp" type="number" step="0.5" min="0" data-crewres="'+r.id+'" value="'+(item.qtyPerTeam||0)+'" style="width:80px"></td>'+
-        '<td class="r mono">'+fmtBR((item.qtyPerTeam||0)*(svc.eq||0))+'</td>'+
-        '<td><button class="iconbtn" data-crewdel="'+r.id+'">✕</button></td></tr>';
-    }).join('');
-    var crewOptionsFuncao=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!crew.some(function(c){return c.resourceId===r.id;});})
-      .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
-    var crewOptionsEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!crew.some(function(c){return c.resourceId===r.id;});})
-      .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
-    var equipeSel='<select class="esel" id="histSvcSel">'+SERV.map(function(s,si){return '<option value="'+si+'"'+(si===svcSel?' selected':'')+'>'+s.n+'</option>';}).join('')+'</select>';
-    // Duas buscas separadas — uma só entre funções, outra só entre equipamentos — em vez de uma
-    // busca única misturando os dois tipos.
-    var addCrewCtl=(svc&&RECURSOS.length)?(
-      '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
-          '<span class="note" style="margin:0;font-weight:600;min-width:82px">+ Função</span>'+
-          '<input class="einp" id="crewAddInputFuncao" list="crewDatalistFuncao" placeholder="Buscar função..." style="width:200px">'+
-          '<datalist id="crewDatalistFuncao">'+crewOptionsFuncao+'</datalist>'+
-          '<input class="einp" id="crewAddQtyFuncao" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Qtd. por equipe">'+
-          '<button class="btn primary" id="crewAddBtnFuncao">+ Adicionar</button>'+
+    var twEq=hist.tw||1;
+    var equipeSel='<select class="esel" id="histSvcSel" style="max-width:300px">'+
+      '<optgroup label="Macro-grupo (equipe fica o período todo)">'+
+        macrosEmUso().map(function(m){
+          var n=SERV.filter(function(s){return macroDe(s)===m;}).length;
+          return '<option value="m::'+escAttr(m)+'"'+(eqMacro===m?' selected':'')+'>'+escAttr(m)+
+            ' ('+n+' serviço'+(n===1?'':'s')+')'+(macroAtivo(m)?' · ligado':'')+'</option>';
+        }).join('')+
+      '</optgroup>'+
+      '<optgroup label="Serviço (equipe acompanha as equipes ativas)">'+
+        SERV.map(function(s,si){
+          var sob=servicoSobMacro(s);
+          return '<option value="s::'+si+'"'+(si===svcSel?' selected':'')+'>'+escAttr(s.n)+(sob?(' · sob '+escAttr(sob)):'')+'</option>';
+        }).join('')+
+      '</optgroup></select>';
+
+    var corpoEquipe;
+    if(eqMacro){
+      var mc=macroCfg(eqMacro), mCrew=mc.crew||[];
+      var svcsDoMacro=SERV.filter(function(s){ return macroDe(s)===eqMacro; });
+      var jan=(hist.janelaMacro||{})[eqMacro];
+      var mRows=mCrew.map(function(item){
+        var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return '';
+        return '<tr><td>'+escAttr(r.n)+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
+          '<td><input class="einp" type="number" step="0.5" min="0" data-mcrewres="'+escAttr(r.id)+'" value="'+(+item.qty||0)+'" style="width:80px"></td>'+
+          janelaTds('mcrewjan',r.id,item,twEq)+
+          '<td><button class="iconbtn" data-mcrewdel="'+escAttr(r.id)+'">✕</button></td></tr>';
+      }).join('');
+      var mOptF=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!mCrew.some(function(c){return c.resourceId===r.id;});})
+        .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+      var mOptE=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!mCrew.some(function(c){return c.resourceId===r.id;});})
+        .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+      corpoEquipe=
+        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+equipeSel+
+          '<label class="lotchip'+(mc.ativo?' on':' other')+'" style="cursor:pointer">'+
+            '<input type="checkbox" id="macroAtivo"'+(mc.ativo?' checked':'')+'>Dimensionar '+escAttr(eqMacro)+' por macro-grupo</label>'+
+          '<span class="note">'+svcsDoMacro.length+' serviço(s) no grupo · total mobilizado: <b style="color:var(--ink)">'+
+            fmtBR((hist.totalByMacro||{})[eqMacro]||0)+'</b></span>'+
         '</div>'+
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
-          '<span class="note" style="margin:0;font-weight:600;min-width:104px">+ Equipamento</span>'+
-          '<input class="einp" id="crewAddInputEquip" list="crewDatalistEquip" placeholder="Buscar equipamento..." style="width:200px">'+
-          '<datalist id="crewDatalistEquip">'+crewOptionsEquip+'</datalist>'+
-          '<input class="einp" id="crewAddQtyEquip" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Qtd. por equipe">'+
-          '<button class="btn primary" id="crewAddBtnEquip">+ Adicionar</button>'+
-        '</div>'+
-      '</div>'
-    ):'';
-    var equipe=sectionCard('equipe','Equipe típica do serviço',null,
+        (SEM_COL_EQMACRO?'<div class="banner" style="margin-bottom:8px;border-color:var(--crit)">A coluna <b>equipe_macro</b> ainda não existe no banco. Rode <b>sql/36_equipe_macro.sql</b> no Supabase pra poder salvar.</div>':'')+
+        (!svcsDoMacro.length
+          ? '<div class="banner" style="margin-bottom:8px"><div>Nenhum serviço está classificado como <b>'+escAttr(eqMacro)+'</b>. '+
+            'Marque o macro-grupo dos serviços em <b>Tempo Caminho → Serviços</b> — sem isso o grupo não tem período nem o que executar.</div></div>'
+          : (mc.ativo
+            ? ('<div class="note" style="margin-bottom:8px">A equipe abaixo responde por <b>'+svcsDoMacro.map(function(s){return escAttr(s.n);}).join(', ')+'</b>'+
+               (jan?(' e fica mobilizada de <b>'+rotSem(mondayOf(jan.ini))+'</b> a <b>'+rotSem(mondayOf(jan.fim))+'</b>'):'')+
+               '. A equipe típica desses serviços <b>deixou de contar</b> — o que estiver cadastrada lá continua guardado, só não entra no histograma enquanto isto estiver ligado.</div>')
+            : '<div class="note" style="margin-bottom:8px">Ligue a chave acima pra esta equipe entrar no histograma. Enquanto estiver desligada, cada serviço do grupo continua contando a equipe típica dele.</div>'))+
+        (!mCrew.length?'<div class="note">Nenhum recurso nesta equipe de macro-grupo ainda. Busque abaixo pra adicionar.</div>':
+          '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Quantidade</th>'+JANELA_TH+'<th></th></tr></thead><tbody>'+mRows+'</tbody></table></div>')+
+        (RECURSOS.length?(
+          '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+              '<span class="note" style="margin:0;font-weight:600;min-width:82px">+ Função</span>'+
+              '<input class="einp" id="mcrewAddInputFuncao" list="mcrewDatalistFuncao" placeholder="Buscar função..." style="width:200px">'+
+              '<datalist id="mcrewDatalistFuncao">'+mOptF+'</datalist>'+
+              '<input class="einp" id="mcrewAddQtyFuncao" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Quantidade no grupo">'+
+              '<button class="btn primary" id="mcrewAddBtnFuncao">+ Adicionar</button>'+
+            '</div>'+
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+              '<span class="note" style="margin:0;font-weight:600;min-width:104px">+ Equipamento</span>'+
+              '<input class="einp" id="mcrewAddInputEquip" list="mcrewDatalistEquip" placeholder="Buscar equipamento..." style="width:200px">'+
+              '<datalist id="mcrewDatalistEquip">'+mOptE+'</datalist>'+
+              '<input class="einp" id="mcrewAddQtyEquip" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Quantidade no grupo">'+
+              '<button class="btn primary" id="mcrewAddBtnEquip">+ Adicionar</button>'+
+            '</div>'+
+          '</div>'):'')+
+        JANELA_NOTA;
+    } else {
+      var crew=svc?((svc.cfg&&svc.cfg.crew)||[]):[];
+      var sobMacro=svc?servicoSobMacro(svc):'';
+      var crewRows=crew.map(function(item){
+        var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return '';
+        return '<tr><td>'+escAttr(r.n)+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
+          '<td><input class="einp" type="number" step="0.5" min="0" data-crewres="'+escAttr(r.id)+'" value="'+(item.qtyPerTeam||0)+'" style="width:80px"></td>'+
+          '<td class="r mono">'+fmtBR((item.qtyPerTeam||0)*(svc.eq||0))+'</td>'+
+          janelaTds('crewjan',r.id,item,twEq)+
+          '<td><button class="iconbtn" data-crewdel="'+escAttr(r.id)+'">✕</button></td></tr>';
+      }).join('');
+      var crewOptionsFuncao=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!crew.some(function(c){return c.resourceId===r.id;});})
+        .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+      var crewOptionsEquip=RECURSOS.filter(function(r){return r.tipo==='equipamento'&&!crew.some(function(c){return c.resourceId===r.id;});})
+        .map(function(r){return '<option value="'+escAttr(r.n)+'">';}).join('');
+      var addCrewCtl=(svc&&RECURSOS.length)?(
+        '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+            '<span class="note" style="margin:0;font-weight:600;min-width:82px">+ Função</span>'+
+            '<input class="einp" id="crewAddInputFuncao" list="crewDatalistFuncao" placeholder="Buscar função..." style="width:200px">'+
+            '<datalist id="crewDatalistFuncao">'+crewOptionsFuncao+'</datalist>'+
+            '<input class="einp" id="crewAddQtyFuncao" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Qtd. por equipe">'+
+            '<button class="btn primary" id="crewAddBtnFuncao">+ Adicionar</button>'+
+          '</div>'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+            '<span class="note" style="margin:0;font-weight:600;min-width:104px">+ Equipamento</span>'+
+            '<input class="einp" id="crewAddInputEquip" list="crewDatalistEquip" placeholder="Buscar equipamento..." style="width:200px">'+
+            '<datalist id="crewDatalistEquip">'+crewOptionsEquip+'</datalist>'+
+            '<input class="einp" id="crewAddQtyEquip" type="number" step="0.5" min="0.5" value="1" style="width:64px" title="Qtd. por equipe">'+
+            '<button class="btn primary" id="crewAddBtnEquip">+ Adicionar</button>'+
+          '</div>'+
+        '</div>'
+      ):'';
+      corpoEquipe=
+        (SERV.length?'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+equipeSel+
+          (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+'</div>':'')+
+        (sobMacro?('<div class="banner" style="margin-bottom:8px;background:var(--accent-soft);border-color:var(--accent)"><div>'+
+          'Este serviço está em <b>'+escAttr(sobMacro)+'</b>, que está dimensionado por macro-grupo — então a equipe abaixo <b>não entra no histograma</b>. '+
+          'Ela fica guardada e volta a valer se o macro-grupo for desligado.</div></div>'):'')+
+        (!svc?'<div class="note">Cadastre um serviço pra montar a equipe típica.</div>':
+          (!crew.length?'<div class="note">Nenhum recurso na equipe deste serviço ainda. Busque abaixo pra adicionar.</div>':
+          '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th>'+JANELA_TH+'<th></th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')
+          +addCrewCtl+JANELA_NOTA);
+    }
+    var equipe=sectionCard('equipe','Equipe típica',null,
       '<button class="btn" id="histModeloEquipes">Modelo equipes</button>'+
       '<button class="btn" id="histImportarEquipes">↥ Importar equipes</button>'+
       '<button class="btn" id="histExportarEquipes">↧ Exportar equipes</button>',
-      (SERV.length?'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+equipeSel+
-        (svc?'<span class="note">'+svc.eq+' equipe(s) — total mobilizado: <b style="color:var(--ink)">'+fmtBR(hist.totalByService[svcSel]||0)+'</b></span>':'')+'</div>':'')+
-      (!svc?'<div class="note">Cadastre um serviço pra montar a equipe típica.</div>':
-        (!crew.length?'<div class="note">Nenhum recurso na equipe deste serviço ainda. Busque abaixo pra adicionar.</div>':
-        '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Recurso</th><th>Tipo</th><th>Qtd. por equipe</th><th class="r">Total ('+svc.eq+' equipe'+(svc.eq>1?'s':'')+')</th><th></th></tr></thead><tbody>'+crewRows+'</tbody></table></div>')
-        +addCrewCtl)
+      corpoEquipe
     );
-
     // Mesma lógica da "Equipe típica do serviço" acima, só que selecionando um item de Nível 3
     // do Apoio Administrativo em vez de um serviço — pra cada item, monta a composição de
     // funções/equipamentos igual se faz pra equipe de um serviço.
@@ -4640,6 +4808,7 @@
       var r=RECURSOS.filter(function(x){return x.id===item.resourceId;})[0]; if(!r)return '';
       return '<tr><td>'+r.n+'</td><td class="note">'+(r.tipo==='funcao'?'Função':'Equipamento')+'</td>'+
         '<td><input class="einp" type="number" step="0.5" min="0" data-apoiocrewres="'+r.id+'" value="'+(item.qtyPerTeam||0)+'" style="width:80px"></td>'+
+        janelaTds('apoiocrewjan',r.id,item,(hist.tw||1))+
         '<td><button class="iconbtn" data-apoiocrewdel="'+r.id+'">✕</button></td></tr>';
     }).join('');
     var apoCrewOptionsFuncao=RECURSOS.filter(function(r){return r.tipo==='funcao'&&!apoCrew.some(function(c){return c.resourceId===r.id;});})
@@ -5358,8 +5527,15 @@
    * SERV[si].cfg.crew. Fica pendente em APOIO_DIRTY até "Salvar alterações". */
   function saveApoioCrewQty(ai,resourceId,qty){
     var a=APOIO[ai]; if(!a)return;
-    var crew=((a.cfg&&a.cfg.crew)||[]).filter(function(c){return c.resourceId!==resourceId;});
-    if(qty>0)crew.push({resourceId:resourceId,qtyPerTeam:qty});
+    var todosA=(a.cfg&&a.cfg.crew)||[];
+    var antigoA=todosA.filter(function(c){return c.resourceId===resourceId;})[0];
+    var crew=todosA.filter(function(c){return c.resourceId!==resourceId;});
+    if(qty>0){
+      var novoA={resourceId:resourceId,qtyPerTeam:qty};
+      if(antigoA&&+antigoA.mob>0)novoA.mob=+antigoA.mob;
+      if(antigoA&&+antigoA.demob>0)novoA.demob=+antigoA.demob;
+      crew.push(novoA);
+    }
     a.cfg=Object.assign({},a.cfg,{crew:crew});
     APOIO_DIRTY[ai]=true;
     go('cr-hist');
@@ -10095,7 +10271,60 @@
       var exp=document.getElementById('histExportar');
       if(exp)exp.addEventListener('click',exportHistogramWorkbook);
       var svcSelEl=document.getElementById('histSvcSel');
-      if(svcSelEl)svcSelEl.addEventListener('change',function(){HIST_SVC=+svcSelEl.value; go('cr-hist');});
+      if(svcSelEl)svcSelEl.addEventListener('change',function(){
+        var v=String(svcSelEl.value||'');
+        if(v.indexOf('m::')===0){ HIST_MACRO=v.slice(3); }
+        else { HIST_MACRO=null; HIST_SVC=+v.slice(3); }
+        go('cr-hist');
+      });
+      var mAtivo=document.getElementById('macroAtivo');
+      if(mAtivo)mAtivo.addEventListener('change',function(){
+        if(!HIST_MACRO)return;
+        macroCfg(HIST_MACRO).ativo=mAtivo.checked;
+        macroDirty(); go('cr-hist');
+      });
+      document.querySelectorAll('[data-mcrewres]').forEach(function(inp){
+        inp.addEventListener('change',function(){
+          saveMacroCrewQty(HIST_MACRO,inp.getAttribute('data-mcrewres'),Math.max(0,parseFloat(inp.value)||0));
+        });
+      });
+      document.querySelectorAll('[data-mcrewdel]').forEach(function(b){
+        b.addEventListener('click',function(){ saveMacroCrewQty(HIST_MACRO,b.getAttribute('data-mcrewdel'),0); });
+      });
+      document.querySelectorAll('[data-mcrewjan]').forEach(function(sel){
+        sel.addEventListener('change',function(){
+          saveJanela('macro',HIST_MACRO,sel.getAttribute('data-mcrewjan'),sel.getAttribute('data-jcampo'),sel.value);
+        });
+      });
+      document.querySelectorAll('[data-crewjan]').forEach(function(sel){
+        sel.addEventListener('change',function(){
+          var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
+          if(svcSel==null)return;
+          saveJanela('servico',svcSel,sel.getAttribute('data-crewjan'),sel.getAttribute('data-jcampo'),sel.value);
+        });
+      });
+      document.querySelectorAll('[data-apoiocrewjan]').forEach(function(sel){
+        sel.addEventListener('change',function(){
+          var apoSel=window._histApoioSel==null?(APOIO.length?0:null):window._histApoioSel;
+          if(apoSel==null)return;
+          saveJanela('apoio',apoSel,sel.getAttribute('data-apoiocrewjan'),sel.getAttribute('data-jcampo'),sel.value);
+        });
+      });
+      function wireMacroAdd(tipo,inputId,qtyId,btnId){
+        var btn=document.getElementById(btnId);
+        if(btn)btn.addEventListener('click',function(){
+          if(!HIST_MACRO)return;
+          var inp=document.getElementById(inputId), qtyInp=document.getElementById(qtyId);
+          var name=(inp.value||'').trim(); if(!name)return;
+          var r=RECURSOS.filter(function(x){return x.tipo===tipo&&x.n.trim().toLowerCase()===name.toLowerCase();})[0];
+          if(!r){alert((tipo==='funcao'?'Função':'Equipamento')+' não encontrado(a). Selecione um item da lista de sugestões.');return;}
+          saveMacroCrewQty(HIST_MACRO,r.id,Math.max(0.01,parseFloat(qtyInp.value)||1));
+        });
+        var inp2=document.getElementById(inputId);
+        if(inp2)inp2.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();if(btn)btn.click();}});
+      }
+      wireMacroAdd('funcao','mcrewAddInputFuncao','mcrewAddQtyFuncao','mcrewAddBtnFuncao');
+      wireMacroAdd('equipamento','mcrewAddInputEquip','mcrewAddQtyEquip','mcrewAddBtnEquip');
       document.querySelectorAll('[data-crewres]').forEach(function(inp){
         inp.addEventListener('change',function(){
           var svcSel=HIST_SVC==null?(SERV.length?0:null):HIST_SVC;
@@ -12683,6 +12912,9 @@
     });
     var totalByService={}, totalByServiceResource={}, grandTotal=0;
     SERV.forEach(function(s,si){
+      /* Serviço sob macro-grupo ligado não conta equipe própria: quem responde por ele é a
+       * equipe do grupo. Contar os dois seria contar a mesma gente duas vezes. */
+      if(servicoSobMacro(s)){ totalByServiceResource[si]={}; totalByService[si]=0; return; }
       var crew=(s.cfg&&s.cfg.crew)||[], svcTotal=0, perRes={};
       crew.forEach(function(item){
         if(!byResource[item.resourceId])return;
@@ -12690,9 +12922,45 @@
         perRes[item.resourceId]=(perRes[item.resourceId]||0)+mobilized;
         svcTotal+=mobilized;
         var arr=byResource[item.resourceId], arrD=byResourceDireto[item.resourceId], teams=teamsByService[si]||[];
-        for(var i=0;i<arr.length;i++){ var v=(teams[i]||0)*(item.qtyPerTeam||0); arr[i]+=v; arrD[i]+=v; }
+        var j=janelaItem(item,tw);
+        for(var i=0;i<arr.length;i++){
+          if(i+1<j.ini||i+1>j.fim)continue;        // fora da janela de mobilização
+          var v=(teams[i]||0)*(item.qtyPerTeam||0);
+          arr[i]+=v; arrD[i]+=v;
+        }
       });
       totalByServiceResource[si]=perRes; totalByService[si]=svcTotal; grandTotal+=svcTotal;
+    });
+    /* Macro-grupo: permanência do início do PRIMEIRO serviço do grupo ao término do ÚLTIMO.
+     * Não é semana a semana — um vão entre dois serviços do grupo não desmobiliza a equipe,
+     * que é justamente o motivo de dimensionar por grupo em vez de por serviço. */
+    var totalByMacro={}, totalByMacroResource={}, janelaMacro={};
+    macrosEmUso().forEach(function(m){
+      if(!macroAtivo(m))return;
+      var ini=-1, fim=-1;
+      SERV.forEach(function(s,si){
+        if(macroDe(s)!==m)return;
+        var teams=teamsByService[si]||[];
+        for(var i=0;i<teams.length;i++){
+          if(!(teams[i]>0))continue;
+          if(ini<0||i<ini)ini=i;
+          if(i>fim)fim=i;
+        }
+      });
+      janelaMacro[m]=(ini<0)?null:{ini:ini+1,fim:fim+1};
+      if(ini<0)return;   // nenhum serviço do grupo no cronograma: não há período pra ocupar
+      var cfg=macroCfg(m), mTotal=0, perRes={};
+      cfg.crew.forEach(function(item){
+        if(!byResource[item.resourceId])return;
+        var qty=+item.qty||0;                    // total do grupo, não por equipe
+        perRes[item.resourceId]=(perRes[item.resourceId]||0)+qty;
+        mTotal+=qty;
+        var j=janelaItem(item,tw);
+        var de=Math.max(ini+1,j.ini), ate=Math.min(fim+1,j.fim);
+        var arr=byResource[item.resourceId], arrD=byResourceDireto[item.resourceId];
+        for(var i=de;i<=ate&&i<=arr.length;i++){ arr[i-1]+=qty; arrD[i-1]+=qty; }
+      });
+      totalByMacroResource[m]=perRes; totalByMacro[m]=mTotal; grandTotal+=mTotal;
     });
     /* O apoio administrativo é da obra inteira, não de um lote — mas ele existe enquanto existe
      * obra pra apoiar. Sem este corte, filtrar lotes deixava o apoio mobilizado por semanas em
@@ -12719,7 +12987,9 @@
         perRes[item.resourceId]=(perRes[item.resourceId]||0)+qty;
         apoTotal+=qty;
         var arr=byResource[item.resourceId], arrI=byResourceIndireto[item.resourceId];
-        for(var i=apoIni;i<=apoFim&&i<arr.length;i++){ arr[i]+=qty; arrI[i]+=qty; }
+        var j=janelaItem(item,tw);
+        var de=Math.max(apoIni+1,j.ini), ate=Math.min(apoFim+1,j.fim);
+        for(var i=de;i<=ate&&i<=arr.length;i++){ arr[i-1]+=qty; arrI[i-1]+=qty; }
       });
       totalByApoioResource[a.id]=perRes; totalByApoio[a.id]=apoTotal; grandTotalIndireto+=apoTotal;
     });
@@ -12728,6 +12998,7 @@
     return {isHoliday:isHoliday,byResource:byResource,byResourceDireto:byResourceDireto,byResourceIndireto:byResourceIndireto,
       totalByService:totalByService,totalByServiceResource:totalByServiceResource,
       totalByApoio:totalByApoio,totalByApoioResource:totalByApoioResource,
+      totalByMacro:totalByMacro,totalByMacroResource:totalByMacroResource,janelaMacro:janelaMacro,
       peakByResource:peakByResource,grandTotal:grandTotal+grandTotalIndireto,grandTotalDireto:grandTotal,grandTotalIndireto:grandTotalIndireto,tw:tw};
   }
   function saveRecursoField(ri,inp){
@@ -12772,10 +13043,48 @@
       go('cr-hist'); toast('Recurso excluído.');
     }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
   }
+  function saveMacroCrewQty(m,resourceId,qty){
+    if(!m)return;
+    var c=macroCfg(m);
+    var antigo=c.crew.filter(function(x){return x.resourceId===resourceId;})[0];
+    c.crew=c.crew.filter(function(x){return x.resourceId!==resourceId;});
+    if(qty>0){
+      /* Mantém a janela já definida: mudar a quantidade não é motivo pra perder a data de
+       * mobilização que alguém escolheu antes. */
+      var novo={resourceId:resourceId,qty:qty};
+      if(antigo&&+antigo.mob>0)novo.mob=+antigo.mob;
+      if(antigo&&+antigo.demob>0)novo.demob=+antigo.demob;
+      c.crew.push(novo);
+    }
+    macroDirty(); go('cr-hist');
+  }
+  /** Grava mobilização/desmobilização de um recurso. onde = 'servico' | 'macro' | 'apoio'. */
+  function saveJanela(onde,alvo,resourceId,campo,valor){
+    if(campo!=='mob'&&campo!=='demob')return;
+    var v=parseInt(valor,10); if(!(v>0))v=0;
+    var crew=null;
+    if(onde==='macro'){ if(!alvo)return; crew=macroCfg(alvo).crew; }
+    else if(onde==='servico'){ var s=SERV[alvo]; if(!s)return; crew=(s.cfg&&s.cfg.crew)||[]; }
+    else { var a=APOIO[alvo]; if(!a)return; crew=(a.cfg&&a.cfg.crew)||[]; }
+    var item=crew.filter(function(x){return x.resourceId===resourceId;})[0];
+    if(!item)return;
+    if(v>0)item[campo]=v; else delete item[campo];
+    if(onde==='macro')macroDirty();
+    else if(onde==='servico'){ SERV[alvo].cfg=Object.assign({},SERV[alvo].cfg,{crew:crew}); SVC_DIRTY[alvo]=true; }
+    else { APOIO[alvo].cfg=Object.assign({},APOIO[alvo].cfg,{crew:crew}); APOIO_DIRTY[alvo]=true; }
+    go('cr-hist');
+  }
   function saveCrewQty(si,resourceId,qty){
     var s=SERV[si]; if(!s)return;
-    var crew=((s.cfg&&s.cfg.crew)||[]).filter(function(c){return c.resourceId!==resourceId;});
-    if(qty>0)crew.push({resourceId:resourceId,qtyPerTeam:qty});
+    var todos=(s.cfg&&s.cfg.crew)||[];
+    var antigo=todos.filter(function(c){return c.resourceId===resourceId;})[0];
+    var crew=todos.filter(function(c){return c.resourceId!==resourceId;});
+    if(qty>0){
+      var novo={resourceId:resourceId,qtyPerTeam:qty};   // mexer na quantidade não apaga a janela
+      if(antigo&&+antigo.mob>0)novo.mob=+antigo.mob;
+      if(antigo&&+antigo.demob>0)novo.demob=+antigo.demob;
+      crew.push(novo);
+    }
     s.cfg=Object.assign({},s.cfg,{crew:crew});
     SVC_DIRTY[si]=true;
     go('cr-hist');
