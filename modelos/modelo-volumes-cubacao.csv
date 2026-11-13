@@ -1,0 +1,7 @@
+﻿Trecho;Estaca;Local;Demolição Pavimento;Corte 1ª Cat.;Corte 2ª Cat.;Corte 3ª Cat.;Troca de Solo em corte 1ª cat. (60 cm);Recomposição Troca de Solo;Troca de Solo c/ Reforço na CFT (e=Var.);Recomposição Troca de Solo c/ Reforço;Troca de Solo c/ Reforço Granular na CFT (e=Var.);Recomposição Troca de Solo c/ Reforço Granular;Rebaixo em corte 1ª cat. e 2ª cat. (40 cm);Recomposição Rebaixo;Corpo de Aterro;Camada Final de Aterro;Camada Final de Aterro reforço;Camada Final de Aterro Mat. Drenante;Recomposição Rebaixo com Mat. Drenante;Material Vegetal;Compensação Lateral 1ª Cat. + 2ª Cat.;Compensação Lateral 2ª Cat.
+;;;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³;m³
+LG-PE;164+720,000;LG-PE_PISTA SUL;0;0;0;0;0;0;0;0;0;0;20.1;29.16;7.75;41.21;0;0;0;12.3;0;0
+LG-PE;164+740,000;LG-PE_PISTA SUL;0;0.15;0;0;0;0;0;0;0;0;21.3;41.25;0;41.21;0;0;0;23.7;7.75;0
+LG-PE;164+760,000;LG-PE_PISTA SUL;0;249.08;27.1;0;0;0;0;0;0;0;15.3;49.08;0;0.39;0;0;0;50.9;7.63;0
+LG-PD;164+760,000;LG-PD_PISTA NORTE;0;180.5;0;0;0;0;0;0;0;0;0;0;312.4;88.1;0;0;0;44.2;0;0
+INT_km168,67_R100;0+020,000;INT_km168,67_R100;0;12.4;0;0;0;0;0;0;0;0;0;0;33.8;9.2;0;0;0;5.1;0;0
