@@ -1672,7 +1672,7 @@
     return Object.keys(SVC_DIRTY||{}).length>0 || Object.keys(LOT_NAME_DIRTY||{}).length>0 ||
       Object.keys(QTY_DIRTY||{}).length>0 || Object.keys(LOT_PACOTE_DIRTY||{}).length>0 || !!CAL_DIRTY || !!ADJ_DIRTY ||
       Object.keys(REC_DIRTY||{}).length>0 || Object.keys(REALIZADO_DIRTY||{}).length>0 || Object.keys(ESTACA_QTY_DIRTY||{}).length>0 ||
-      Object.keys(APOIO_DIRTY||{}).length>0 || !!LB_DIRTY || !!EQMACRO_DIRTY;
+      Object.keys(APOIO_DIRTY||{}).length>0 || !!LB_DIRTY || !!EQMACRO_DIRTY || !!RSEM_DIRTY;
   }
   function refreshTopSaveBtn(){
     var b=document.getElementById('topSaveBtn'); if(!b)return;
@@ -1701,6 +1701,7 @@
       if(Object.keys(REALIZADO_DIRTY).length)await saveRealizadoAll();
       if(LB_DIRTY)await lbSalvar();
       if(EQMACRO_DIRTY)await saveEquipeMacro();   // equipe por macro-grupo é da obra, não do cenário
+      if(RSEM_DIRTY)await rsemSalvar();           // realizado semanal da curva: idem
       if(Object.keys(ESTACA_QTY_DIRTY).length)await saveEstacaQtdAll();
       if(Object.keys(APOIO_DIRTY).length)await saveApoioAll();
       toast('Tudo salvo.');
@@ -5827,6 +5828,14 @@
   };
 
   VIEWS['ac-curvas']=function(){
+    /* Duas abas: o desenho e o apontamento. O realizado semanal e a mesma curva vista de
+     * perto, semana por semana — por isso mora aqui dentro e nao numa tela propria. */
+    var cvAba=(window._curvaSTab==='realizado')?'realizado':'graficos';
+    var cvTabs='<div class="subtabs" id="cvTabs" style="margin:0 0 12px">'+
+      '<button class="subtab'+(cvAba==='graficos'?' active':'')+'" data-cvtab="graficos">Gráficos</button>'+
+      '<button class="subtab'+(cvAba==='realizado'?' active':'')+'" data-cvtab="realizado">Realizado semanal</button>'+
+    '</div>';
+    if(cvAba==='realizado')return '<div class="cv-compact" id="cvRoot">'+cvTabs+rsemHTML()+'</div>';
     var pacotesSet={}; LOTE_PACOTE.forEach(function(p){if(p)pacotesSet[p]=true;});
     var pacotes=Object.keys(pacotesSet);
     var data=curvaSData();
@@ -5859,7 +5868,7 @@
       }
       weekSel='<select class="esel" id="cvWeekSel" style="height:28px">'+opts+'</select>';
     }
-    return '<div class="cv-compact" id="cvRoot">'+
+    return '<div class="cv-compact" id="cvRoot">'+cvTabs+
     histCartaoHTML(window._curvaSPacote||'')+
     '<div class="cv-cardgrid" id="cvCards" style="margin-bottom:12px"></div>'+
     '<div class="card" style="padding:12px 15px;margin-bottom:14px">'+
@@ -9605,10 +9614,16 @@
     });
     return out;
   }
-  /** Modelo em branco da Curva S, no MESMO leiaute que o importador lê: uma aba por curva,
-   *  com a linha ANO, a linha SEMANA e a linha RESUMO GERAL com o acumulado de cada semana.
-   *  As semanas já saem prontas e começam ANTES da largada do plano — é justamente ali que
-   *  mora o avanço que o app não tem como calcular, e sem coluna não tem onde escrever. */
+  /** Modelo da Curva S no estilo da planilha que a obra já usa: coluna A com o número da
+   *  linha, coluna B com o rótulo e uma coluna por semana a partir da C; em cima, Ano, Semana
+   *  e Meses; embaixo, "Resumo: Não" com a curva da obra e uma linha "Pacotes:" por serviço.
+   *
+   *  As três linhas que o app lê — Ano, Semana e Resumo — são exatamente as da planilha da
+   *  obra. Por isso o arquivo dela importa direto, sem passar por aqui: este modelo é a versão
+   *  ENXUTA dela, só com as semanas desta obra e sem os blocos repetidos por macro e por local.
+   *
+   *  O bloco de baixo, em dinheiro, é o que alimenta os PESOS da curva — mesma planilha, mesma
+   *  régua, que é o motivo de ele vir no mesmo arquivo e não em outro. */
   function curvaBaixaModelo(){
     if(typeof XLSX==='undefined'){ alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.'); return; }
     var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
@@ -9617,72 +9632,72 @@
     var ANTES=26, w1=mondayOf(1), cols=[];
     for(var k=ANTES;k>=1;k--){
       var da=new Date(w1.getTime()); da.setDate(da.getDate()-7*k);
-      cols.push({ano:isoAno(da),sem:isoWeek(da),iso:da.toISOString().slice(0,10),plano:false});
+      cols.push({ano:isoAno(da),sem:isoWeek(da),iso:da.toISOString().slice(0,10),mes:da.getMonth(),plano:false});
     }
     for(var w=1;w<=tw;w++){
       var dp=mondayOf(w);
-      cols.push({ano:isoAno(dp),sem:isoWeek(dp),iso:dp.toISOString().slice(0,10),plano:true});
+      cols.push({ano:isoAno(dp),sem:isoWeek(dp),iso:dp.toISOString().slice(0,10),mes:dp.getMonth(),plano:true});
     }
-    var EX=[0.004,0.013,0.028,0.049,0.077,0.112];
+    var MESES=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    var serv=(typeof SERV!=='undefined'?SERV:[]);
     var wb=XLSX.utils.book_new();
-    [['CONTRATUAL','Previsto do contrato — a linha de base vendida'],
-     ['EXECUTIVA','Previsto replanejado — o que a obra se comprometeu a fazer'],
-     ['REALIZADO','Avanço medido, semana a semana']].forEach(function(ab){
-      var linhas=[
-        ['CURVA S — '+ab[0],ab[1]],
-        ['Preencha a linha RESUMO GERAL: o acumulado da obra em cada semana, de 0% a 100%.'],
-        [],
-        ['ANO'].concat(cols.map(function(c){ return c.ano; })),
-        ['SEMANA'].concat(cols.map(function(c){ return c.sem; })),
-        ['SEGUNDA-FEIRA'].concat(cols.map(function(c){ return brDate(c.iso); })),
-        ['PLANO DO APP'].concat(cols.map(function(c){ return c.plano?'sim':'antes do plano'; })),
-        ['RESUMO GERAL'].concat(cols.map(function(){ return 0; })),
-        [],
-        ['EXEMPLO — esta linha não é lida'].concat(cols.map(function(c,i){ return i<EX.length?EX[i]:null; }))
-      ];
-      var ws=XLSX.utils.aoa_to_sheet(linhas);
+    [['CContratual','CONTRATUAL — previsto do contrato (linha de base vendida)'],
+     ['CExecutivo','EXECUTIVO — previsto replanejado'],
+     ['CRealizado','REALIZADO — avanço medido']].forEach(function(ab){
+      var lin=[], n=0, iResumo=0, iPac=0;
+      var L=function(rot,vals){ n++; lin.push([n,rot].concat(vals||[])); return lin.length-1; };
+      L('Ano',cols.map(function(c){ return c.ano; }));
+      L('Semana',cols.map(function(c){ return c.sem; }));
+      /* Mês só na virada, como na planilha da obra: repetir "Novembro" doze vezes não informa
+       * nada e atrapalha quem procura onde o mês começa. */
+      L('Meses',cols.map(function(c,i){ return (i===0||cols[i-1].mes!==c.mes)?MESES[c.mes]:null; }));
+      L('Segunda-feira',cols.map(function(c){ return brDate(c.iso); }));
+      L('Plano do app',cols.map(function(c){ return c.plano?'plano':'antes'; }));
+      L('Nome da Tarefa',[]);
+      iResumo=L('Resumo: Não',cols.map(function(){ return 0; }));
+      iPac=lin.length;
+      serv.forEach(function(sv){ L('   Pacotes: '+sv.n,cols.map(function(){ return null; })); });
+      lin.push([]);
+      n++; lin.push([n,'Nome da Tarefa','Custo total (R$)']);
+      n++; lin.push([n,'Resumo: Não',0]);
+      serv.forEach(function(sv){ n++; lin.push([n,'   Pacotes: '+sv.n,0]); });
+      var ws=XLSX.utils.aoa_to_sheet(lin);
       /* Célula formatada como porcentagem é o que evita o erro mais caro aqui: digitar 35 e o
-       * app entender 3500%. Em porcentagem o Excel guarda 0,35 e a leitura sai certa. */
+       * app entender 3.500%. Em porcentagem o Excel guarda 0,35 e a leitura sai certa. */
       cols.forEach(function(c,i){
-        [7,9].forEach(function(r){
-          var ad=XLSX.utils.encode_cell({r:r,c:i+1});
-          if(ws[ad])ws[ad].z='0.0%';
-        });
+        for(var r=iResumo;r<iPac+serv.length;r++){
+          var ad=XLSX.utils.encode_cell({r:r,c:i+2});
+          if(ws[ad])ws[ad].z='0.00%';
+        }
       });
-      ws['!cols']=[{wch:32}].concat(cols.map(function(){ return {wch:10}; }));
+      ws['!cols']=[{wch:5},{wch:34}].concat(cols.map(function(){ return {wch:9}; }));
+      ws['!freeze']={xSplit:2,ySplit:6};
       XLSX.utils.book_append_sheet(wb,ws,ab[0]);
     });
-    /* Os pesos da curva saem do MESMO arquivo, por isso a aba vai junto: sem eles a curva do
-     * app soma m³ com m² e com metro, e quem tem número grande manda na curva. */
-    var pes=[['PESOS DA CURVA — custo de cada pacote'],
-      ['A coluna da direita é o custo total do pacote, em reais. É dele que sai o peso.'],
-      ['Deixe o rotulo comecando com Pacotes: — e assim que o app acha o bloco.'],[],
-      ['Pacote','Custo total (R$)']];
-    (typeof SERV!=='undefined'?SERV:[]).forEach(function(sv){ pes.push(['Pacotes: '+sv.n,0]); });
-    pes.push(['RESUMO',0]);
-    var wsp=XLSX.utils.aoa_to_sheet(pes); wsp['!cols']=[{wch:44},{wch:18}];
-    XLSX.utils.book_append_sheet(wb,wsp,'PESOS');
-    var inst=[['MODELO PADRÃO — IMPORTAÇÃO DA CURVA S DA OBRA'],[],
-      ['1','Uma aba por curva: CONTRATUAL, EXECUTIVA e REALIZADO.'],
-      ['','Pode apagar a aba de uma curva que a obra não tem — as outras entram do mesmo jeito.'],
-      ['2','O app acha a curva por três linhas, e só por elas:'],
-      ['','ANO, SEMANA e RESUMO GERAL. Não renomeie essas três.'],
-      ['','As linhas SEGUNDA-FEIRA, PLANO DO APP e EXEMPLO são só pra sua conferência.'],
-      ['3','ANO e SEMANA são semana ISO: a semana 1 é a que contém 4 de janeiro.'],
-      ['','Já vêm preenchidas. Pode acrescentar colunas à direita ou à esquerda.'],
-      ['4','RESUMO GERAL é ACUMULADO: não desce de uma semana pra outra.'],
+    var inst=[['MODELO DA CURVA S — no estilo da planilha da obra'],[],
+      ['1','Uma aba por curva: CContratual, CExecutivo e CRealizado.'],
+      ['','Pode apagar a aba de uma curva que a obra não tem — as outras entram igual.'],
+      ['2','Dentro de cada aba, o app lê TRÊS linhas e só elas:'],
+      ['','Ano, Semana e Resumo: Não (a curva acumulada da obra).'],
+      ['','Segunda-feira, Meses, Plano do app e as linhas Pacotes: são pra sua conferência.'],
+      ['3','O rótulo fica na coluna B e as semanas começam na coluna C — como na planilha da obra.'],
+      ['4','Resumo é ACUMULADO: não desce de uma semana pra outra.'],
       ['','Quando o valor cai, o app entende que acabou o dado e para de ler ali.'],
       ['5','As células já estão formatadas como porcentagem.'],
       ['','Digite 35% (ou 0,35). Digitar 35 em célula de número vira 3.500%.'],
-      ['6','As 26 primeiras colunas são ANTES da largada do plano.'],
+      ['6','As 26 primeiras colunas são ANTES da largada do plano (coluna "Plano do app" = antes).'],
       ['','É onde entra o avanço que a plataforma não tem como calcular — o motivo desta importação.'],
-      ['7','Zero no fim não incomoda: o app corta o rabo de zeros depois do último dado.'],[],
+      ['7','O bloco de baixo, em dinheiro, é o que vira PESO de cada serviço na curva.'],
+      ['','Sem ele a curva soma m³ com m² e com metro, e quem tem número grande manda na curva.'],[],
+      ['A planilha Curva S da obra importa direto, sem este modelo:'],
+      ['','as abas dela (CContratual / CRealizado / CExecutivo) e as linhas Ano, Semana e'],
+      ['','Resumo: Não são as mesmas. Este arquivo é só a versão enxuta, com as semanas desta obra.'],[],
       ['Na importação você ainda escolhe:'],
       ['','a semana em que o previsto do app emenda no realizado desta planilha;'],
       ['','se o cadastro do app cobre a obra inteira ou só o saldo que falta;'],
       ['','e, se os saldos mudaram, o % de partida corrigido.'],[],
-      ['Estas curvas são ponderadas por PREÇO DE VENDA e as do app por QUANTIDADE FÍSICA.'],
-      ['São duas réguas diferentes: elas entram como referência, ao lado, e não substituem o cálculo do app.']];
+      ['O realizado semanal também pode ser digitado direto no app:'],
+      ['','Acompanhamento > Curva S > aba "Realizado semanal".']];
     var wsi=XLSX.utils.aoa_to_sheet(inst); wsi['!cols']=[{wch:4},{wch:96}];
     XLSX.utils.book_append_sheet(wb,wsi,'INSTRUÇÕES');
     XLSX.writeFile(wb,'modelo-curva-s.xlsx');
@@ -10983,7 +10998,14 @@
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
     if(view==='cr-gantt'){ wireCronoTabs(); ganttWire(); }
     if(view==='ac-curvas'){
-      renderCurvaS();
+      document.querySelectorAll('#cvTabs .subtab').forEach(function(b){
+        b.addEventListener('click',function(){
+          window._curvaSTab=b.getAttribute('data-cvtab');
+          go('ac-curvas');
+        });
+      });
+      rsemWire();        // nao faz nada quando a aba do realizado nao esta aberta
+      renderCurvaS();    // sai fora sozinho quando os graficos nao estao na tela
       var crBtn=document.getElementById('curvaRefBtn');
       if(crBtn)crBtn.addEventListener('click',importarCurvaRefArquivo);
       var cmBtn=document.getElementById('curvaModBtn');
@@ -12021,6 +12043,207 @@
     });
     pinta();
   }
+  /* ---------------- Realizado semanal da curva, digitado na tela ----------------
+   *
+   * O realizado da curva vem da planilha da obra, mas nem toda semana tem planilha nova — e
+   * reimportar o arquivo todo pra corrigir um número de uma semana é caro. Esta aba lê e grava
+   * o MESMO lugar da importação (historico.curva.pontos[].r), então os dois caminhos contam a
+   * mesma história: quem importa sobrescreve, quem digita ajusta.
+   *
+   * O que se DIGITA é o semanal, que é como a obra apura. O que fica GRAVADO é o acumulado,
+   * que é o que a curva desenha e o que a emenda com o plano usa. Uma coisa é a derivada da
+   * outra, e a tela mantém as duas na mão, as duas editáveis.
+   */
+  var RSEM=null, RSEM_DIRTY=false;
+  function rsemNum(t){
+    var s=String(t==null?'':t).trim().replace('%','').replace(/\s/g,'');
+    if(!s)return null;
+    if(s.indexOf(',')>=0)s=s.replace(/\./g,'').replace(',','.');
+    var f=parseFloat(s);
+    return isFinite(f)?f:null;
+  }
+  function rsemFmt(v){ return v==null?'':(+v).toFixed(2).replace('.',','); }
+  /** A janela de semanas da tela: do mais antigo entre a curva importada e 26 semanas antes da
+   *  largada, até o mais novo entre o fim do plano, o fim da curva e hoje. Semana de calendário
+   *  corrida — e não mondayOf(), que pula semana de feriado e deixaria buraco no apontamento. */
+  function rsemJanela(){
+    var c=histCurva();
+    var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
+    var w1=mondayOf(1), antes=new Date(w1.getTime()); antes.setDate(antes.getDate()-7*26);
+    var pIni=w1.toISOString().slice(0,10), pFim=mondayOf(tw).toISOString().slice(0,10);
+    var ini=antes.toISOString().slice(0,10), fim=pFim;
+    if(c&&c.pontos.length){
+      if(c.pontos[0].iso<ini)ini=c.pontos[0].iso;
+      var u=c.pontos[c.pontos.length-1].iso;
+      if(u>fim)fim=u;
+    }
+    var hoje=mondayOfIso(new Date().toISOString().slice(0,10));
+    if(hoje>fim)fim=hoje;
+    return {ini:ini,fim:fim,planoIni:pIni,planoFim:pFim};
+  }
+  function rsemMonta(){
+    var j=rsemJanela(), c=histCurva(), por={};
+    if(c)c.pontos.forEach(function(p){ if(p&&p.iso)por[p.iso]=p; });
+    var linhas=[], d=new Date(j.ini+'T00:00:00'), guard=0;
+    while(guard++<1500){
+      var iso=d.toISOString().slice(0,10), p=por[iso]||{};
+      linhas.push({iso:iso,rot:rotSem(d),
+        c:(p.c==null?null:100*p.c), e:(p.e==null?null:100*p.e),
+        ac:(p.r==null?null:100*p.r), sem:null,
+        plano:(iso>=j.planoIni&&iso<=j.planoFim)});
+      if(iso>=j.fim)break;
+      d=new Date(d.getTime()); d.setDate(d.getDate()+7);
+    }
+    rsemRecalcSem(linhas);
+    RSEM={linhas:linhas,janela:j,obra:(selectedObra&&selectedObra.id)||null};
+    return RSEM;
+  }
+  /** Semanal = diferença do acumulado. Semana sem acumulado não tem semanal: pôr zero ali diria
+   *  "não produziu nada", quando o que houve foi ninguém ter apontado. */
+  function rsemRecalcSem(linhas){
+    var ant=null;
+    linhas.forEach(function(L){
+      if(L.ac==null){ L.sem=null; return; }
+      var dif=L.ac-(ant==null?0:ant);
+      /* Curva importada tem ruido de float: diferenca de 1e-12 viraria "-0,00" na tela. */
+      L.sem=(Math.abs(dif)<1e-4)?0:+dif.toFixed(4);
+      ant=L.ac;
+    });
+  }
+  /** Acumulado = soma dos semanais. Semana vazia NO MEIO repete o acumulado anterior (ninguém
+   *  produziu, mas o que já estava feito não desfez); depois da última semana apontada volta a
+   *  ser vazio — prolongar ali viraria promessa de avanço que ninguém mediu. */
+  function rsemRecalcAc(linhas){
+    var ult=-1;
+    linhas.forEach(function(L,i){ if(L.sem!=null)ult=i; });
+    var ac=null;
+    linhas.forEach(function(L,i){
+      if(i>ult){ L.ac=null; return; }
+      if(L.sem==null){ L.ac=ac; return; }
+      ac=(ac==null?0:ac)+L.sem;
+      L.ac=+ac.toFixed(4);
+    });
+  }
+  function rsemHTML(){
+    if(!RSEM||RSEM.obra!==((selectedObra&&selectedObra.id)||null)||!RSEM_DIRTY)rsemMonta();
+    var L=RSEM.linhas, ro=isReadOnly(), temImp=!!histCurva();
+    var hojeIso=mondayOfIso(new Date().toISOString().slice(0,10));
+    var corpo=L.map(function(x,i){
+      var ehHoje=(x.iso===hojeIso);
+      return '<tr'+(ehHoje?' style="background:var(--elev)"':'')+'>'+
+        '<td class="lk lk0" style="color:var(--muted);font-size:10px;text-align:right">'+(i+1)+'</td>'+
+        '<td class="lk lk1 mono">'+x.rot+(ehHoje?' ·hoje':'')+'</td>'+
+        '<td class="lk lk2 mono">'+brDate(x.iso)+'</td>'+
+        '<td style="text-align:right"><input class="einp rs-i" data-k="sem" data-i="'+i+'" value="'+rsemFmt(x.sem)+'"'+(ro?' disabled':'')+' style="width:72px;text-align:right"></td>'+
+        '<td style="text-align:right"><input class="einp rs-i" data-k="ac" data-i="'+i+'" value="'+rsemFmt(x.ac)+'"'+(ro?' disabled':'')+' style="width:78px;text-align:right"></td>'+
+        '<td class="mono" style="text-align:right;color:var(--muted)">'+rsemFmt(x.c)+'</td>'+
+        '<td class="mono" style="text-align:right;color:var(--muted)">'+rsemFmt(x.e)+'</td>'+
+        '<td style="color:var(--muted);font-size:11px">'+(x.plano?'plano':'antes do plano')+'</td>'+
+      '</tr>';
+    }).join('');
+    return '<div id="rsemRoot">'+
+    '<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
+        '<div><div class="eyebrow"><span class="ajuda" tabindex="0">Realizado semanal da curva'+
+          '<span class="ajuda-ico" aria-hidden="true">?</span><span class="ajuda-bolha" role="tooltip">'+
+          'Digite o avanço de cada semana em % da obra. O acumulado é a soma, e é ele que a curva desenha e a emenda com o plano usa — as duas colunas são editáveis e uma recalcula a outra.'+
+          '<br><br>É o mesmo lugar que a importação da planilha grava: importar sobrescreve, digitar ajusta. '+
+          'As semanas antes da largada do plano estão aqui de propósito — é o avanço que a plataforma não tem como calcular.'+
+          (temImp?'':'<br><br>Nenhuma Curva S importada ainda: as colunas Contratual e Executiva ficam vazias até você importar a planilha.')+
+          '</span></span></div>'+
+        '<div class="note" style="margin:4px 0 0" id="rsemResumo"></div></div>'+
+        (ro?'':'<button class="btn primary" id="rsemSave" disabled>💾 Salvar realizado</button>')+
+      '</div>'+
+    '</div>'+
+    '<div class="lot-wrap"><table class="lot-tbl">'+
+      '<thead><tr>'+
+        '<th class="lk lk0"></th><th class="lk lk1">Semana</th><th class="lk lk2">Segunda</th>'+
+        '<th style="text-align:right">Realizado<br>semanal %</th>'+
+        '<th style="text-align:right">Realizado<br>acum. %</th>'+
+        '<th style="text-align:right">Contratual<br>acum. %</th>'+
+        '<th style="text-align:right">Executiva<br>acum. %</th>'+
+        '<th>Período</th>'+
+      '</tr></thead><tbody>'+corpo+'</tbody></table></div></div>';
+  }
+  function rsemPintaResumo(){
+    var el=document.getElementById('rsemResumo'); if(!el||!RSEM)return;
+    var n=0, ult=null;
+    RSEM.linhas.forEach(function(x){ if(x.sem!=null){ n++; ult=x; } });
+    el.innerHTML=n?('<b>'+n+'</b> semana(s) apontada(s) · último acumulado <b>'+rsemFmt(ult.ac)+'%</b> em '+brDate(ult.iso)+' ('+ult.rot+')')
+                  :'nenhuma semana apontada ainda — digite na coluna do semanal';
+  }
+  /** Redesenha os números das linhas de baixo sem tocar na célula que está sendo digitada.
+   *  Linha de cima nunca muda: mexer na semana 30 não reescreve a 29. */
+  function rsemPinta(iEdit,kEdit){
+    var L=RSEM.linhas;
+    document.querySelectorAll('#rsemRoot .rs-i').forEach(function(inp){
+      var i=+inp.getAttribute('data-i'), k=inp.getAttribute('data-k');
+      if(i<iEdit||(i===iEdit&&k===kEdit))return;
+      inp.value=rsemFmt(k==='ac'?L[i].ac:L[i].sem);
+    });
+  }
+  function rsemWire(){
+    var root=document.getElementById('rsemRoot'); if(!root)return;
+    rsemPintaResumo();
+    root.querySelectorAll('.rs-i').forEach(function(inp){
+      inp.addEventListener('input',function(){
+        if(!RSEM)return;
+        var i=+inp.getAttribute('data-i'), k=inp.getAttribute('data-k');
+        var L=RSEM.linhas, x=L[i], v=rsemNum(inp.value);
+        if(k==='sem'){ x.sem=v; rsemRecalcAc(L); }
+        else if(v==null){ x.ac=null; x.sem=null; rsemRecalcAc(L); }
+        else{
+          var ant=null;
+          for(var j=i-1;j>=0;j--){ if(L[j].ac!=null){ ant=L[j].ac; break; } }
+          x.sem=+(v-(ant==null?0:ant)).toFixed(4);
+          rsemRecalcAc(L);
+        }
+        RSEM_DIRTY=true;
+        rsemPinta(i,k);
+        rsemPintaResumo();
+        refreshTopSaveBtn();
+        var b=document.getElementById('rsemSave'); if(b)b.disabled=false;
+      });
+    });
+    var bs=document.getElementById('rsemSave');
+    if(bs)bs.addEventListener('click',async function(){
+      bs.disabled=true; bs.textContent='Salvando…';
+      try{
+        await rsemSalvar();
+        toast('Realizado salvo.');
+        go('ac-curvas');
+      }catch(e){
+        alert('Falha ao salvar: '+((e&&e.message)||e)+
+          '\n\nSe a mensagem fala em coluna que não existe, falta rodar sql/35_add_historico_obra.sql no Supabase.');
+        bs.disabled=false; bs.textContent='💾 Salvar realizado';
+      }
+    });
+  }
+  /** Grava o acumulado nos mesmos pontos da curva importada, preservando o contratual e o
+   *  executivo de cada semana — e a âncora, o escopo e o % de partida, que são da emenda e não
+   *  têm nada a ver com o apontamento. */
+  async function rsemSalvar(){
+    if(!selectedObra)throw new Error('Nenhuma obra aberta.');
+    if(isReadOnly())throw new Error('Seu perfil é só de visualização.');
+    var L=(RSEM&&RSEM.linhas)||[], c=histCurva(), por={};
+    if(c)c.pontos.forEach(function(p){ if(p&&p.iso)por[p.iso]=Object.assign({},p); });
+    L.forEach(function(x){
+      var p=por[x.iso]||(por[x.iso]={iso:x.iso});
+      if(x.ac==null)delete p.r; else p.r=+(x.ac/100).toFixed(8);
+    });
+    var pontos=Object.keys(por).sort().map(function(iso){ return por[iso]; })
+      .filter(function(p){ return p.c!=null||p.e!=null||p.r!=null; });
+    var h=Object.assign({},histObra()||{});
+    var base=(h.curva&&typeof h.curva==='object')?h.curva:{};
+    h.curva=Object.assign({},base,{pontos:pontos,
+      fonte:base.fonte||'digitado na tela',
+      editado_em:new Date().toISOString()});
+    await salvarHistorico(h);
+    /* Nao zerar RSEM aqui: quando o salvamento vem do botao do topo a tela continua
+     * montada e os inputs continuam ligados neste objeto. rsemHTML() remonta sozinho na
+     * proxima pintura, que e quando faz sentido reler o banco. */
+    RSEM_DIRTY=false;
+  }
   /** Cartão da Curva S: a referência importada, a âncora e os pesos. */
   function histCartaoHTML(pacote){
     var c=histCurva(), pesos=curvaPesosBrutos();
@@ -12464,6 +12687,9 @@
     return null;
   }
   function renderCurvaS(){
+    /* A tela de Curva S tem duas abas; com a do realizado aberta os svg nem existem.
+     * Desenhar no vazio nao quebra, mas calcular a curva toda pra jogar fora, sim. */
+    if(!document.getElementById('scv2'))return;
     var data=curvaSData();
     var sel=window._curvaSSel==null?'total':window._curvaSSel;
     var wSel=(window._curvaSWeek!=null&&window._curvaSWeek<=data.tw)?window._curvaSWeek:data.hojeW;
