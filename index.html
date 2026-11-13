@@ -13878,6 +13878,22 @@
       return r;
     };
   }
+  /** As segundas-feiras das semanas do PLANO, numa passada só. Índice = número da semana.
+   *  Mesma regra de mondayOf (pula semana de recesso), sem pagar a varredura dela a cada
+   *  semana. Existe porque semana do plano e semana de calendário NÃO são a mesma coisa:
+   *  com uma paralisação no meio, a semana 5 do plano cai 7 dias depois da 5ª segunda do
+   *  calendário — e é a do plano que manda em tudo que sai do cronograma. */
+  function mondaysDoPlano(maxW){
+    var out=[null], d=new Date(TC_START()+'T00:00:00');
+    var dia=d.getDay(); d.setDate(d.getDate()+(dia===0?-6:1-dia));
+    var fer={}; calHolidays().forEach(function(f){ fer[mondayOfIso(f)]=true; });
+    var guard=0;
+    while(out.length<=(maxW||520)&&guard++<4000){
+      if(!fer[d.toISOString().slice(0,10)])out.push(new Date(d.getTime()));
+      d.setDate(d.getDate()+7);
+    }
+    return out;
+  }
   function realizadoPorSemana(){
     var m={}, idxS={};
     SERV.forEach(function(sv,i){ idxS[sv.id]=i; });
@@ -16906,9 +16922,12 @@
     if(!tw)return null;
     var V=avaRsPorServico();
     // meses do cronograma, mais os do orçamento, pra poder comparar as duas curvas no mesmo eixo
-    var mesSet={}, mesDaSem=[];
+    /* O mês de cada semana sai de mondayOf, que é o calendário do cronograma — o mesmo do
+     * relatório do Tempo-Caminho. Com calWeekDate, cada paralisação jogava uma semana de
+     * produção pro mês anterior e as duas exportações davam números diferentes. */
+    var mesSet={}, mesDaSem=[], monsAva=mondaysDoPlano(tw);
     for(var w=1;w<=tw;w++){
-      var k=orcMesKey(calWeekDate(w));
+      var k=orcMesKey(monsAva[w]||calWeekDate(w));
       mesDaSem[w]=k; mesSet[k]=1;
     }
     var O=orcAtual();
@@ -17410,8 +17429,10 @@
     var V=fifiValorPorServico(), O=orcAtual();
 
     // eixo: meses do cronograma + do orçamento + dos apontamentos, pra tudo caber no mesmo
-    var mesSet={}, mesDaSem=[];
-    for(var w=1;w<=tw;w++){ var k=orcMesKey(calWeekDate(w)); mesDaSem[w]=k; mesSet[k]=1; }
+    /* Mesmo calendário do cronograma que a AVA usa — as duas telas distribuem a mesma
+     * produção e não podem discordar de mês. */
+    var mesSet={}, mesDaSem=[], monsFifi=mondaysDoPlano(tw);
+    for(var w=1;w<=tw;w++){ var k=orcMesKey(monsFifi[w]||calWeekDate(w)); mesDaSem[w]=k; mesSet[k]=1; }
     (O.meses||[]).forEach(function(k2){ mesSet[k2]=1; });
     var lotIds=window._LOTIDS||[];
     (window.PROD_LIST||[]).forEach(function(r){
@@ -18862,9 +18883,13 @@
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
     if(!SERV.length||!LOTS.length){ alert('Cadastre serviços, lotes e quantidades antes de exportar o relatório.'); return; }
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
-    var segs=buildSchedule();
+    /* Os lotes em exibição valem aqui também. A aba Meta sempre disse quais lotes o
+     * relatório cobre, mas as abas de dados vinham com a obra inteira — o arquivo
+     * contradizia o próprio cabeçalho e não batia com a AVA nem com o Financeiro, que
+     * respeitam o filtro. */
+    var segs=viewSegs(buildSchedule());
     var base=activeBaseline();
-    var segsLB=base?scheduleWithSnapshot(base.snap):null;
+    var segsLB=base?viewSegs(scheduleWithSnapshot(base.snap)):null;
     var lotIdxs=viewLotIdxs();
     var tw=1; segs.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
     if(segsLB)segsLB.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
