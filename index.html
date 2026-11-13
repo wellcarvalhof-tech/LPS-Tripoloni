@@ -6543,7 +6543,9 @@
   }
   function boostAdd(si){
     var arr=boostsDe(si), ids=window._LOTIDS||[];
-    arr.push({team:1,loteId:ids[0]||'',prod:pnum(SERV[si]&&SERV[si].p)||0});
+    /* Nasce em "todas as equipes": na prática é o que se quer quase sempre — este lote roda
+     * nesta produtividade, seja quem for que pegue ele. */
+    arr.push({team:0,loteId:ids[0]||'',prod:pnum(SERV[si]&&SERV[si].p)||0});
     boostsGrava(si,arr);
   }
   function boostDel(si,bi){
@@ -6556,7 +6558,7 @@
     var arr=boostsDe(si);
     if(bi<0||bi>=arr.length)return;
     var it=Object.assign({},arr[bi]);
-    if(campo==='team')it.team=+valor||1;
+    if(campo==='team')it.team=Math.max(0,+valor||0);   // 0 = todas as equipes
     else if(campo==='lote')it.loteId=String(valor||'');
     else if(campo==='prod')it.prod=pnum(valor)||0;
     arr[bi]=it;
@@ -6579,21 +6581,31 @@
     SVC_DIRTY[si]=true;
     go(current);
   }
-  /** Produtividade da equipe NESTE lote: a base dela, trocada pelo aumento mais a frente que
-   *  ja tenha comecado. "A partir do lote X" conta na ordem da lista de lotes — o lote X e
-   *  todos depois dele. */
+  /** Produtividade da equipe NESTE lote: a base dela, trocada pelo aumento cadastrado PARA
+   *  ESTE LOTE.
+   *
+   *  Duas coisas mudaram aqui, e as duas pelo mesmo motivo — o aumento acertava um lote que
+   *  ninguém tinha escolhido:
+   *
+   *  1) Vale SÓ no lote escolhido. Antes valia "daquele lote em diante", então escolher o
+   *     primeiro lote da lista mudava a obra inteira.
+   *  2) team 0 = vale pra qualquer equipe. Quem decide qual equipe pega qual lote é o app;
+   *     amarrar o aumento numa equipe fazia ele errar o alvo toda vez que o lote caía pra
+   *     outra. Item com equipe escolhida continua valendo só pra ela, e manda no "todas"
+   *     quando os dois existem pro mesmo lote. */
   function prodDaEquipe(s,teamProds,prodBase,team,li){
     var base=(teamProds&&teamProds[team-1]>0)?Number(teamProds[team-1]):prodBase;
     var bs=(s.cfg&&Array.isArray(s.cfg.teamBoosts))?s.cfg.teamBoosts:[];
     if(!bs.length)return base;
-    var ids=window._LOTIDS||[], melhor=-1, val=0;
+    var ids=window._LOTIDS||[], daEquipe=0, deTodas=0;
     bs.forEach(function(b){
-      if((+b.team||0)!==team)return;
-      var fi=ids.indexOf(b.loteId);
-      if(fi<0||fi>li)return;
-      if(fi>melhor){ melhor=fi; val=pnum(b.prod)||0; }
+      if(ids.indexOf(b.loteId)!==li)return;      // -1 nunca casa com li, que começa em 0
+      var p=pnum(b.prod)||0; if(!(p>0))return;
+      var bt=+b.team||0;
+      if(bt===team)daEquipe=p;
+      else if(bt===0)deTodas=p;
     });
-    return val>0?val:base;
+    return daEquipe>0?daEquipe:(deTodas>0?deTodas:base);
   }
   function togglePredecessor(si,predId){
     var s=SERV[si]; if(!s)return;
@@ -6627,17 +6639,19 @@
     var lotIds=window._LOTIDS||[];
     var boosts=(s.cfg&&Array.isArray(s.cfg.teamBoosts))?s.cfg.teamBoosts:[];
     var boost=boosts.map(function(b,bi){
+      var btm=+b.team||0;
       var tsel='<select class="esel" data-bst="team" data-si="'+si+'" data-bi="'+bi+'">'+
-        teams.map(function(t){ return '<option value="'+t+'"'+(+b.team===t?' selected':'')+'>Equipe '+t+'</option>'; }).join('')+'</select>';
+        '<option value="0"'+(btm?'':' selected')+'>Todas</option>'+
+        teams.map(function(t){ return '<option value="'+t+'"'+(btm===t?' selected':'')+'>Equipe '+t+'</option>'; }).join('')+'</select>';
       var lsel='<select class="esel" data-bst="lote" data-si="'+si+'" data-bi="'+bi+'">'+
         LOTS.map(function(l,li){
           var id=lotIds[li]||'';
           return '<option value="'+escAttr(id)+'"'+(b.loteId===id?' selected':'')+'>'+escAttr(l)+'</option>';
         }).join('')+'</select>';
-      return '<span class="ed-team"><em>Equipe:</em>'+tsel+'<em>A partir do lote:</em>'+lsel+
+      return '<span class="ed-team"><em>Equipe:</em>'+tsel+'<em>No lote:</em>'+lsel+
         '<em>Nova prod.:</em><input class="einp" type="number" min="0" data-bst="prod" data-si="'+si+'" data-bi="'+bi+'" value="'+(pnum(b.prod)||'')+'" style="width:82px">'+
         '<em>'+s.u+'/sem</em><button class="iconbtn" data-bstdel="'+bi+'" data-si="'+si+'" title="Remover">✕</button></span>';
-    }).join('')||'<span class="note" style="margin:0">Nenhum aumento cadastrado. A equipe usa a produtividade base dela em todos os lotes.</span>';
+    }).join('')||'<span class="note" style="margin:0">Nenhum aumento cadastrado. Todos os lotes usam a produtividade base da equipe.</span>';
     var cfg=s.cfg||{};
     var queueOn=!!cfg.pullFromQueue;
     var minStartVal=cfg.minStartWeek>0?rotSem(mondayOf(cfg.minStartWeek)):'';
@@ -6653,9 +6667,11 @@
     }
     return '<div class="ed-sec"><span class="lab">Lote inicial de cada equipe</span>'+startLots+'</div>'+
       '<div class="ed-sec"><span class="lab">Produtividade base por equipe ('+s.u+'/sem)</span>'+prods+'</div>'+
-      '<div class="ed-sec"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="lab" style="margin:0">Aumentos de produtividade (a partir de um lote)</span>'+
+      '<div class="ed-sec"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="lab" style="margin:0">Aumentos de produtividade (por lote)</span>'+
         '<button class="btn" style="padding:4px 9px" data-bstadd="'+si+'">+ Adicionar</button></div>'+boost+
-        (boosts.length?'<div class="note" style="margin-top:6px">Vale <b>daquele lote em diante</b>, na ordem da lista de lotes: a equipe usa a nova produtividade no lote escolhido e em todos depois dele.</div>':'')+'</div>'+
+        (boosts.length?'<div class="note" style="margin-top:6px">Vale <b>só no lote escolhido</b> — os outros seguem com a produtividade base. '+
+          'Com <b>Todas</b>, o lote roda nessa produtividade seja qual for a equipe que pegar ele; escolhendo uma equipe, vale só quando for ela. '+
+          'Quem decide a equipe de cada lote é o app, então <b>Todas</b> é o que costuma acertar.</div>':'')+'</div>'+
       '<div class="ed-checks">'+
         '<label><input type="checkbox" data-cfgbool="parallelWithPredecessor" data-si="'+si+'"'+(cfg.parallelWithPredecessor?' checked':'')+'>Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
         '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
