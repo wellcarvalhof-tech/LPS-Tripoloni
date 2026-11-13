@@ -16829,8 +16829,16 @@
       '</div>';
 
     var periodo=O.meses.length>1?(orcMesLabel(O.meses[0])+' a '+orcMesLabel(O.meses[O.meses.length-1])+' · '+O.meses.length+' meses'):'sem cronograma mensal importado';
+    /* De onde este orçamento veio. O app sempre gravou isso em cfg.arquivo, mas só mostrava no
+     * diálogo da importação — depois de importar, não havia como saber qual planilha tinha
+     * virado o cadastro, e essa é uma pergunta que volta sempre. */
+    var deOnde='';
+    if(O.cfg&&(O.cfg.arquivo||O.cfg.importadoEm)){
+      var qdo=O.cfg.importadoEm?(' em '+brDate(String(O.cfg.importadoEm).slice(0,10))):'';
+      deOnde='<div class="note" style="margin:2px 0 0">Importado de <b class="mono">'+escAttr(O.cfg.arquivo||'arquivo sem nome')+'</b>'+qdo+'.</div>';
+    }
     var tabela='<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:8px">'+
-      '<div><div class="eyebrow" style="margin:0">EAP e pesos</div>'+
+      '<div><div class="eyebrow" style="margin:0">EAP e pesos</div>'+deOnde+
       '<div class="note">Cronograma de custo: '+periodo+'. O peso de cada nó é a soma das composições abaixo dele. '+
       'Vincular um grupo a um serviço do app aplica o vínculo a <b>todos os itens dentro dele</b> — é assim que o realizado da obra alimenta a AVA. '+
       'Pra tratar um item à parte, abra o grupo e troque só a linha dele: o grupo passa a mostrar <b>— vários —</b> e a AVA usa a média dos filhos, ponderada pelo custo de cada um.</div></div>'+
