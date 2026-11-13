@@ -16515,6 +16515,7 @@
      * quando vem vazia de propósito. Quem importa precisa saber disso pra não deixar o
      * vínculo antigo passar por cima do que está escrito na planilha. */
     novo._temColunaSvc=(col.svc>=0);
+    novo._recalc={custo:0,venda:0};   // o arquivo do próprio app já vem fechado
     novo._vinculosDoArquivo=novo.itens.filter(function(i){ return !!i.svc; }).length;
     return novo;
   }
@@ -16570,6 +16571,26 @@
       novo.itens.push(it);
     });
     if(!novo.itens.length)throw new Error('A aba "PLANILHA SALDO" não trouxe nenhum item reconhecível.');
+
+    /* O total da planilha nem sempre fecha com quantidade × unitário, e quando não fecha
+     * quem está errado é o total: o unitário é o número que a própria planilha usa pra
+     * calcular a margem do item. Visto em obra: a coluna de faturamento total vinha
+     * multiplicada pelo CUSTO total em vez da quantidade, em 503 das 504 composições, e
+     * importar do jeito que estava dava R$ 89 bilhões de faturamento num contrato de R$ 74
+     * milhões. Linha sem quantidade (verba, serviço por mês) não tem como ser conferida e
+     * fica com o total da planilha. */
+    novo._recalc={custo:0,venda:0};
+    novo.itens.forEach(function(it){
+      var q=orcNum(it.qtd); if(!(q>0))return;
+      [['cu','custo','custo'],['vu','venda','venda']].forEach(function(p){
+        var un=orcNum(it[p[0]]), tot=orcNum(it[p[1]]);
+        if(!(un>0))return;
+        var esperado=q*un;
+        if(Math.abs(tot-esperado)>Math.max(0.01,0.01*esperado)){
+          it[p[1]]=esperado; novo._recalc[p[2]]++;
+        }
+      });
+    });
 
     // ---- cronograma de custo por mês: a linha de base da COTA, já pronta na planilha ----
     var crono=orcAbaPorNome(wb,/crono\s*custo\s*direto/)||orcAbaPorNome(wb,/crono\s*venda/);
@@ -16711,16 +16732,49 @@
       }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
     });
   }
-  /** Mostra o que foi encontrado antes de trocar o orçamento — importação é substituição. */
+  /** O que a planilha lida tem pra oferecer. Vira a lista de caixas do diálogo: só entra
+   *  o que o arquivo realmente traz — oferecer "importar faturamento" num arquivo sem
+   *  faturamento é prometer o que não existe. */
+  function orcDisponivel(novo){
+    var tem=function(f){ return novo.itens.some(function(i){ return orcNum(i[f])>0; }); };
+    return {
+      estrutura:novo.itens.length>0,
+      qtd:tem('qtd'),
+      custo:tem('custo')||tem('cu'),
+      venda:tem('venda')||tem('vu'),
+      crono:novo.meses.length>1||novo.itens.some(function(i){ return Object.keys(i.pm||{}).length>0; }),
+      svc:!!novo._temColunaSvc
+    };
+  }
+  /** Mostra o que foi encontrado e deixa escolher o que entra, antes de mexer no orçamento. */
   function orcDialogoImport(novo){
     var antigo=ORC, nAnt=(antigo&&antigo.itens)?antigo.itens.length:0;
     var folhas=novo.itens.filter(function(i){ return i.folha; }).length;
     var tc=0,tv=0,tpm=0;
     novo.itens.forEach(function(i){ if(!i.folha)return; tc+=i.custo; tv+=i.venda; Object.keys(i.pm).forEach(function(m){ tpm+=i.pm[m]; }); });
+    /* As escolhas. Tudo que o arquivo traz vem marcado — é o que se espera de uma
+     * importação —, e desmarcar a estrutura muda o sentido da operação: em vez de trocar o
+     * orçamento, atualiza só os valores dos itens que já existem, casando pelo código. */
+    var disp=orcDisponivel(novo);
+    var cx=function(k,rot,ajuda,ligado){
+      if(!disp[k])return '<label class="lotchip other" style="opacity:.45" title="a planilha não traz isto">'+
+        '<input type="checkbox" disabled>'+rot+'</label>';
+      return '<label class="lotchip'+(ligado?' on':'')+'" title="'+escAttr(ajuda)+'">'+
+        '<input type="checkbox" data-oiopt="'+k+'"'+(ligado?' checked':'')+'>'+rot+'</label>';
+    };
+    var escolhasHTML='<div style="margin-top:14px"><div class="eyebrow" style="margin-bottom:6px">O que importar</div>'+
+      '<div class="tc-svctoggle" style="gap:6px">'+
+        cx('estrutura','Estrutura da EAP','Itens, códigos, descrições e unidades. Desmarcado, o orçamento atual é mantido e só os valores dos itens que já existem são atualizados, casando pelo código.',true)+
+        cx('qtd','Quantidades','A coluna de quantidade de cada composição.',true)+
+        cx('custo','Custo','Custo unitário e custo total.',true)+
+        cx('venda','Faturamento','Faturamento unitário e total.',true)+
+        cx('crono','Cronograma de custo','A distribuição do custo por mês (a COTA).',true)+
+        cx('svc','Vínculo com os serviços','A coluna "Serviço do app" da planilha.',true)+
+      '</div><div class="note" style="margin:6px 0 0" id="oiNota"></div></div>';
     var back=document.createElement('div'); back.className='segmenu-backdrop';
     back.innerHTML='<div class="segmenu-panel card" style="max-width:620px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Importar orçamento</div>'+
-      '<div class="note" style="margin-bottom:12px">Confira antes de gravar: a importação <b>substitui</b> o orçamento atual desta obra.</div>'+
+      '<div class="note" style="margin-bottom:12px">Confira antes de gravar: com a estrutura marcada, a importação <b>substitui</b> o orçamento atual desta obra.</div>'+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><tbody>'+
         '<tr><td>Arquivo</td><td class="r mono">'+escAttr(novo.cfg.arquivo||'—')+'</td></tr>'+
         '<tr><td>Seções</td><td class="r mono">'+novo.secoes.map(function(s){ return escAttr(s.nome); }).join(' · ')+'</td></tr>'+
@@ -16734,6 +16788,12 @@
         (nAnt?('<tr><td style="color:var(--crit)">Orçamento atual</td><td class="r mono" style="color:var(--crit)">'+nAnt+' itens serão substituídos</td></tr>'):'')+
       '</tbody></table></div>'+
       (novo.meses.length<=1?'<div class="note" style="margin-top:10px;color:var(--warn)">Sem a aba <b>CRONO CUSTO DIRETO</b> não há curva prevista: a AVA vai mostrar só o peso de cada item.</div>':'')+
+      ((novo._recalc&&(novo._recalc.custo||novo._recalc.venda))
+        ?('<div class="banner" style="margin-top:10px;color:var(--warn)"><div>Em '+
+          [(novo._recalc.custo?(novo._recalc.custo+' linha(s) de custo'):''),
+           (novo._recalc.venda?(novo._recalc.venda+' linha(s) de faturamento'):'')].filter(Boolean).join(' e ')+
+          ' o <b>valor total da planilha não fecha com quantidade × unitário</b>. Valeu o unitário, que é o número que a planilha usa pra calcular a margem do item.</div></div>'):'')+
+      escolhasHTML+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
         '<button class="btn" id="oiCancel">Cancelar</button>'+
         '<button class="btn primary" id="oiOk">Importar</button></div></div>';
@@ -16741,27 +16801,77 @@
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     back.querySelector('#oiCancel').addEventListener('click',fecha);
+    var leOpt=function(){
+      var o={};
+      back.querySelectorAll('[data-oiopt]').forEach(function(cb){ o[cb.getAttribute('data-oiopt')]=cb.checked; });
+      return o;
+    };
+    var velho={}; if(antigo&&antigo.itens)antigo.itens.forEach(function(i){ velho[i.id]=i; });
+    /* O aviso muda conforme a escolha, porque a operação muda: com estrutura é substituição,
+     * sem estrutura é atualização em cima do que já existe — e aí importa dizer quantos itens
+     * da planilha o orçamento atual reconhece pelo código. */
+    var pintaNota=function(){
+      var el=back.querySelector('#oiNota'); if(!el)return;
+      var o=leOpt();
+      back.querySelectorAll('[data-oiopt]').forEach(function(cb){
+        cb.parentNode.classList.toggle('on',cb.checked);
+      });
+      if(o.estrutura){
+        el.innerHTML='A EAP da planilha <b>substitui</b> a atual. O que você desmarcar fica com o valor que o item já tinha aqui — e zerado se ele é novo.';
+        return;
+      }
+      if(!nAnt){ el.innerHTML='<b style="color:var(--crit)">Não há orçamento nesta obra pra atualizar.</b> Sem a estrutura da planilha, não entra nada.'; return; }
+      var casam=0;
+      novo.itens.forEach(function(i){ if(velho[i.id])casam++; });
+      el.innerHTML='O orçamento atual é mantido e só os valores marcados são atualizados: <b>'+casam+'</b> de '+novo.itens.length+
+        ' itens da planilha batem com o código de um item daqui'+(casam<novo.itens.length?(' — os outros '+(novo.itens.length-casam)+' são ignorados'):'')+'.';
+    };
+    back.querySelectorAll('[data-oiopt]').forEach(function(cb){ cb.addEventListener('change',pintaNota); });
+    pintaNota();
     back.querySelector('#oiOk').addEventListener('click',function(){
+      var o=leOpt();
+      if(!o.estrutura&&!nAnt){ alert('Não há orçamento nesta obra pra atualizar. Marque "Estrutura da EAP" pra criar o orçamento a partir desta planilha.'); return; }
       /* O realizado lançado é preservado sempre, por código do item.
        *
-       * O VÍNCULO com o serviço, não: quando a planilha traz a coluna "Serviço do app", ela
-       * manda. Antes o vínculo antigo era copiado por cima, e quem corrigia os vínculos na
-       * planilha e reimportava via o app ignorar o arquivo e manter o que já estava lá —
-       * inclusive um vínculo errado herdado de "Vincular por nome", que aplica o serviço do
-       * grupo inteiro de uma vez. O vínculo antigo só é aproveitado quando o arquivo não tem
-       * essa coluna (a planilha de composições da obra), que é o caso em que perder o
-       * trabalho de vinculação seria gratuito. */
-      var velho={}; if(antigo&&antigo.itens)antigo.itens.forEach(function(i){ velho[i.id]=i; });
-      novo.itens.forEach(function(i){
-        var v=velho[i.id]; if(!v)return;
-        if(v.svc&&!novo._temColunaSvc)i.svc=v.svc;
-        if(v.rm&&Object.keys(v.rm).length)i.rm=v.rm;
-      });
-      if(antigo&&antigo.custos)novo.custos=antigo.custos;
-      if(antigo&&antigo.cfg){ novo.cfg.base=antigo.cfg.base||novo.cfg.base; novo.cfg.bac=antigo.cfg.bac||0;
-        novo.cfg.limiarAtencao=antigo.cfg.limiarAtencao||0.95; novo.cfg.limiarCritico=antigo.cfg.limiarCritico||0.9; }
-      ORC=novo; orcSujo(); fecha(); go('cad-orc');
-      toast(novo.itens.length+' itens importados. Salve pra gravar na obra.');
+       * O VÍNCULO com o serviço: quando a planilha traz a coluna "Serviço do app" e a caixa
+       * está marcada, ela manda. Antes o vínculo antigo era copiado por cima, e quem corrigia
+       * os vínculos na planilha e reimportava via o app ignorar o arquivo — inclusive quando o
+       * que estava lá era um vínculo errado herdado de "Vincular por nome". */
+      var alvo;
+      if(o.estrutura){
+        novo.itens.forEach(function(i){
+          var v=velho[i.id];
+          if(!o.qtd)  i.qtd=v?v.qtd:0;
+          if(!o.custo){ i.cu=v?v.cu:0; i.custo=v?v.custo:0; }
+          if(!o.venda){ i.vu=v?v.vu:0; i.venda=v?v.venda:0; }
+          if(!o.crono)i.pm=(v&&v.pm)?v.pm:{};
+          if(!(o.svc&&novo._temColunaSvc))i.svc=v?(v.svc||null):null;
+          if(v&&v.rm&&Object.keys(v.rm).length)i.rm=v.rm;
+        });
+        if(!o.crono&&antigo&&antigo.meses&&antigo.meses.length)novo.meses=antigo.meses.slice();
+        alvo=novo;
+      }else{
+        /* Atualização em cima do orçamento atual: a EAP daqui não é tocada, e item da planilha
+         * que não existe aqui é ignorado — criar item solto faria uma EAP que ninguém montou. */
+        alvo=JSON.parse(JSON.stringify(antigo));
+        var porId={}; novo.itens.forEach(function(i){ porId[i.id]=i; });
+        alvo.itens.forEach(function(it){
+          var n=porId[it.id]; if(!n)return;
+          if(o.qtd)it.qtd=n.qtd;
+          if(o.custo){ it.cu=n.cu; it.custo=n.custo; }
+          if(o.venda){ it.vu=n.vu; it.venda=n.venda; }
+          if(o.crono)it.pm=n.pm;
+          if(o.svc&&novo._temColunaSvc)it.svc=n.svc;
+        });
+        if(o.crono&&novo.meses.length)alvo.meses=novo.meses.slice();
+        alvo.cfg=Object.assign({},alvo.cfg,{arquivo:novo.cfg.arquivo,importadoEm:novo.cfg.importadoEm});
+      }
+      if(antigo&&antigo.custos)alvo.custos=antigo.custos;
+      if(antigo&&antigo.cfg){ alvo.cfg.base=antigo.cfg.base||alvo.cfg.base; alvo.cfg.bac=antigo.cfg.bac||0;
+        alvo.cfg.limiarAtencao=antigo.cfg.limiarAtencao||0.95; alvo.cfg.limiarCritico=antigo.cfg.limiarCritico||0.9; }
+      ORC=alvo; orcSujo(); fecha(); go('cad-orc');
+      toast(o.estrutura?(alvo.itens.length+' itens importados. Salve pra gravar na obra.')
+                      :('Valores atualizados em cima do orçamento atual. Salve pra gravar na obra.'));
     });
   }
   function fmtMoeda(v){
