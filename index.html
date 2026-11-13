@@ -1204,6 +1204,7 @@
     LOTE_PACOTE=lot.map(function(r){return r.pacote_contratual||'';});
     LOTE_COMPR=lot.map(function(r){return r.comprimento_m!=null?Number(r.comprimento_m):null;});
     LOTE_ESPAC=lot.map(function(r){return r.espacamento_estaca_m!=null?Number(r.espacamento_estaca_m):20;});
+    LOTE_KM0=lot.map(function(r){return r.km_inicial!=null?Math.round(Number(r.km_inicial)*1000):null;});
     QTY=lot.map(function(lr){return SERV.map(function(sv){var m=q.find(function(x){return x.lote_id===lr.id&&x.servico_id===sv.id;});return m?Number(m.quantidade):0;});});
     RECURSOS=rec.map(function(r){return {id:r.id,n:r.nome,tipo:r.tipo||'funcao',u:r.unidade||'un',cat:r.categoria||'',classe:normClasse(r.classe,r.tipo||'funcao'),aliases:Array.isArray(r.aliases)?r.aliases:[]};});
     REALIZADO_REC={}; REALIZADO_TERC={};
@@ -1347,7 +1348,7 @@
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cr-gantt','Gantt'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cad-equipes','Equipes'],['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
-      ['cr-massas','Distribuição de massas'],['cr-oficina','Oficina (estudo)']]},
+      ['cr-massas','Distribuição de massas'],['cr-reti','Retigráfico'],['cr-oficina','Oficina (estudo)']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-ava','AVA — Valor Agregado'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
@@ -1356,7 +1357,7 @@
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
     'cad-obra':['Cadastro','Obra'],'cad-eap':['Cadastro','EAP de serviços'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-quant':['Cadastro','Quantidades'],'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
-    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gantt'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gantt'],'cr-reti':['Tempo Caminho','Retigráfico'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'cr-prod':['Tempo Caminho','Produtividade'],'cr-massas':['Tempo Caminho','Distribuição de massas'],
     'cr-oficina':['Tempo Caminho','Oficina — montagem manual (estudo)'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-ava':['Acompanhamento','AVA — Análise do Valor Agregado'],
@@ -1724,6 +1725,10 @@
   var LOTE_PACOTE=[]; // pacote contratual de cada lote (mesmo índice de LOTS) — texto livre, ex: "Lote 1", "Lote 2"
   var LOTE_COMPR=[]; // comprimento do lote em metros (mesmo índice de LOTS) — base pra gerar as estacas
   var LOTE_ESPAC=[]; // espaçamento entre estacas em metros (padrão 20m, editável na tela de Estacas)
+  /* Estaqueamento de projeto: em que metro do traçado o lote começa (lotes.km_inicial, que
+   * ja existia no banco e nunca tinha sido usado). Sem isso o diagrama numerava tudo a partir
+   * de 0+000, e uma obra que comeca na 165+250 aparecia deslocada do projeto inteiro. */
+  var LOTE_KM0=[];
   // Estaqueamento (controle de produção por estaca, dentro do lote — não afeta o cronograma):
   var ESTACAS={}; // {loteId: [{id,numero,dist}]} — carregado sob demanda (sbLoadEstacas), não no boot da obra
   var ESTACA_QTY={}; // {loteId: {"estacaId::servicoId": quantidade}}
@@ -2988,6 +2993,9 @@
     massaInit();
     var lotIds=window._LOTIDS||[], idxs=viewLotIdxs();
     var pts=[], lotes=[], x0=0, carregados=0;
+    /* Com km de projeto cadastrado, o eixo e o do projeto. Sem ele, cai no encadeamento
+     * antigo (um lote depois do outro a partir do zero) pra nao quebrar obra ja montada. */
+    var temKm=LOTE_KM0.some(function(v){ return v!=null; });
     var sidC=(MASSAS.corteSi!=null&&SERV[MASSAS.corteSi])?SERV[MASSAS.corteSi].id:null;
     var sidA=(MASSAS.aterroSi!=null&&SERV[MASSAS.aterroSi])?SERV[MASSAS.aterroSi].id:null;
     idxs.forEach(function(li){
@@ -2996,6 +3004,7 @@
       if(ESTACAS[id])carregados++;
       var vol=ESTACA_VOL[id]||{}, qt=ESTACA_QTY[id]||{};
       var espac=LOTE_ESPAC[li]||20;
+      if(temKm&&LOTE_KM0[li]!=null)x0=LOTE_KM0[li];
       var compr=LOTE_COMPR[li]||(est.length?est[est.length-1].dist+espac:0);
       var sc=0,sr=0,sa=0;
       est.forEach(function(e){
@@ -3014,9 +3023,13 @@
     /* Recorte. Fora da janela a estaca nao entra em nada: nem na curva, nem nos totais, nem
      * nos lacos. Assim o diagrama do trecho e o diagrama daquele trecho, e nao um pedaco da
      * curva da obra com os numeros da obra inteira em cima. */
+    /* Alcance real da obra, medido nas estacas e nao num acumulador: com estaqueamento de
+     * projeto o traçado comeca em 165+250, e um eixo de 0 ate la deixaria o diagrama
+     * quase todo vazio. */
+    var obraIni=pts.length?pts[0].x:0;
+    var obraFim=pts.length?(pts[pts.length-1].x+(pts[pts.length-1].espac||20)):0;
     var jd=(MASSAS.de!=null)?MASSAS.de:-Infinity, ja=(MASSAS.ate!=null)?MASSAS.ate:Infinity;
     var temJanela=(MASSAS.de!=null||MASSAS.ate!=null);
-    var extTotal=x0;
     if(temJanela){
       pts=pts.filter(function(p){ return p.x>=jd&&p.x<=ja; });
       var somaL={};
@@ -3047,12 +3060,11 @@
     });
     /* Com janela, o eixo e a janela; sem ela, a obra toda. extTotal guarda a extensao
      * inteira, pra faixa de visao geral saber onde o recorte esta. */
-    var vIni=temJanela?(pts.length?pts[0].x:(isFinite(jd)?jd:0)):0;
-    var vFim=temJanela?(pts.length?(pts[pts.length-1].x+(pts[pts.length-1].espac||20)):(isFinite(ja)?ja:extTotal))
-                     :Math.max(x0,curva.length?curva[curva.length-1].x:0);
+    var vIni=temJanela?(pts.length?pts[0].x:(isFinite(jd)?jd:obraIni)):obraIni;
+    var vFim=temJanela?(pts.length?(pts[pts.length-1].x+(pts[pts.length-1].espac||20)):(isFinite(ja)?ja:obraFim)):obraFim;
     return {pts:pts,lotes:lotes,curva:curva,fator:fator,totC:totC,totR:totR,totA:totA,
       saldo:acc,extensao:vFim-vIni,x0win:vIni,x1win:vFim,
-      extTotal:extTotal,temJanela:temJanela,
+      extIni:obraIni,extFim:obraFim,extTotal:obraFim-obraIni,temJanela:temJanela,
       carregados:carregados,totalLotes:idxs.length,lacos:massaLacos(curva)};
   }
   /** Laços da curva entre cruzamentos da linha de distribuição (y=0). Para cada um: o volume
@@ -3142,9 +3154,12 @@
     });
     // painel A — barras
     s+='<line x1="'+pl+'" y1="'+yA0+'" x2="'+(W-pr)+'" y2="'+yA0+'" stroke="var(--ink)" stroke-opacity=".35"/>';
-    s+='<text class="axlab" x="'+(pl-6)+'" y="'+(pt+10)+'" text-anchor="end">corte</text>';
-    s+='<text class="axlab" x="'+(pl-6)+'" y="'+(pt+hA-2)+'" text-anchor="end">aterro</text>';
-    s+='<text class="axm" x="'+(pl-6)+'" y="'+(yA(vmax)+4)+'" text-anchor="end">'+fmtBR(vmax)+'</text>';
+    /* As palavras ficam COLADAS na linha do zero e o valor maximo no topo: antes as duas
+     * coisas disputavam o mesmo canto e o numero da escala saia por baixo de "corte". */
+    s+='<text class="axlab" x="'+(pl-6)+'" y="'+(yA0-7).toFixed(1)+'" text-anchor="end">corte</text>';
+    s+='<text class="axlab" x="'+(pl-6)+'" y="'+(yA0+15).toFixed(1)+'" text-anchor="end">aterro</text>';
+    s+='<text class="axm" x="'+(pl-6)+'" y="'+(yA(vmax)+9).toFixed(1)+'" text-anchor="end">'+fmtBR(vmax)+'</text>';
+    s+='<text class="axm" x="'+(pl-6)+'" y="'+(yA(-vmax)-3).toFixed(1)+'" text-anchor="end">'+fmtBR(vmax)+'</text>';
     D.pts.forEach(function(p){
       var bw=Math.max(0.8,xx(p.x+(p.espac||20))-xx(p.x)-0.4);
       var c=p.corte+(MASSAS.rebaixo?p.reb:0), a=p.aterro*D.fator, x=xx(p.x);
@@ -3188,15 +3203,15 @@
 
     /* Faixa de visão geral: a obra inteira em miniatura, com o recorte marcado. Sem ela o zoom
      * tira a noção de onde se está — e aí o número do cartão não diz de que pedaço é. */
-    var ext=Math.max(1,D.extTotal||x1w);
-    var xv=function(m){ return pl+iw*m/ext; };
+    var eIni=(D.extIni!=null)?D.extIni:0, eFim=Math.max(eIni+1,(D.extFim!=null)?D.extFim:x1w);
+    var xv=function(m){ return pl+iw*(m-eIni)/(eFim-eIni); };
     s+='<rect x="'+pl+'" y="'+yV+'" width="'+iw+'" height="'+hV+'" fill="var(--elev)" stroke="var(--line)"/>';
     s+='<text class="axm" x="'+(pl-6)+'" y="'+(yV+14)+'" text-anchor="end">obra</text>';
     s+='<rect id="msBrush" x="'+xv(x0w).toFixed(1)+'" y="'+yV+'" width="'+Math.max(2,xv(x1w)-xv(x0w)).toFixed(1)+'" height="'+hV+
        '" fill="'+cssHex('--accent')+'" fill-opacity=".3" stroke="'+cssHex('--accent')+'"><title>'+
        massaEstaca(x0w)+' a '+massaEstaca(x1w)+'</title></rect>';
-    s+='<text class="axm" x="'+pl+'" y="'+(yV+hV+12)+'">'+massaEstaca(0)+'</text>';
-    s+='<text class="axm" x="'+(W-pr)+'" y="'+(yV+hV+12)+'" text-anchor="end">'+massaEstaca(ext)+'</text>';
+    s+='<text class="axm" x="'+pl+'" y="'+(yV+hV+12)+'">'+massaEstaca(eIni)+'</text>';
+    s+='<text class="axm" x="'+(W-pr)+'" y="'+(yV+hV+12)+'" text-anchor="end">'+massaEstaca(eFim)+'</text>';
 
     /* Camada de arraste: cobre os dois painéis. Fica por último pra receber o ponteiro, e é
      * transparente pra não tapar nada. */
@@ -3258,6 +3273,151 @@
     });
     return o;
   }
+  /* ================= Retigráfico =================
+   * O traçado esticado numa régua: uma faixa por serviço, e em cada posição do estaqueamento a
+   * intensidade do que está previsto ali. É a leitura que o diagrama de massas não dá — ele
+   * responde "quanto sobra/falta", e o retigráfico responde "onde está o serviço".
+   *
+   * O previsto sai da cubação cadastrada por estaca. O realizado ainda não entra: quando o
+   * apontamento por estaca estiver ligado, cada faixa ganha a barra de avanço por cima. */
+  var RETI={passo:'km',de:null,ate:null};   // passo: 'km' | 'estaca'
+  var RETI_FAIXAS=[
+    {id:'corte',  rot:'Corte',   campo:'corte',   cor:'--c1'},
+    {id:'rebaixo',rot:'Rebaixo', campo:'reb',     cor:'--c5'},
+    {id:'aterro', rot:'Aterro',  campo:'aterro',  cor:'--c2'}
+  ];
+  /** Agrupa as estacas em células do tamanho do passo escolhido. */
+  function retiDados(){
+    var D=massasDados();
+    if(!D.pts.length)return {celulas:[],faixas:RETI_FAIXAS,x0:0,x1:1,passoM:1000,vazio:true};
+    var x0=D.x0win, x1=D.x1win;
+    /* No modo estaca a célula é o próprio espaçamento do projeto (20 m, em geral); no modo km
+     * é o quilômetro cheio. Agrupar por km numa obra de 12 km dá 12 colunas legíveis; por
+     * estaca dá 600, que só serve com zoom. */
+    var passoM=(RETI.passo==='estaca')?(D.pts[0].espac||20):1000;
+    var ini=Math.floor(x0/passoM)*passoM;
+    var mapa={};
+    D.pts.forEach(function(p){
+      var k=Math.floor(p.x/passoM)*passoM;
+      var c=mapa[k]||(mapa[k]={x:k,corte:0,reb:0,aterro:0,n:0,lotes:{}});
+      c.corte+=p.corte; c.reb+=p.reb; c.aterro+=p.aterro; c.n++;
+      c.lotes[p.li]=true;
+    });
+    var celulas=[];
+    for(var m=ini;m<x1;m+=passoM){ celulas.push(mapa[m]||{x:m,corte:0,reb:0,aterro:0,n:0,lotes:{}}); }
+    return {celulas:celulas,faixas:RETI_FAIXAS,x0:ini,x1:Math.max(ini+passoM,x1),passoM:passoM,vazio:false};
+  }
+  function retiRotulo(m,passoM){
+    return (passoM>=1000)?('km '+Math.round(m/1000)):massaEstaca(m);
+  }
+  function retiSVG(el,R){
+    if(!el)return;
+    if(R.vazio){ el.setAttribute('viewBox','0 0 1060 80');
+      el.innerHTML='<text class="axm" x="530" y="44" text-anchor="middle">Sem volume cadastrado por estaca — importe a cubação em Cadastro → Quantidades.</text>'; return; }
+    var n=R.celulas.length;
+    var W=1060, pl=92, pr=20, pt=28, hF=30, gapF=8, pb=46;
+    var H=pt+R.faixas.length*(hF+gapF)+pb;
+    var iw=W-pl-pr;
+    el.setAttribute('viewBox','0 0 '+W+' '+H);
+    var bw=iw/Math.max(1,n);
+    var s='';
+    /* Uma escala por faixa: corte e aterro vivem em ordens de grandeza diferentes, e uma escala
+     * comum apagaria a faixa menor. O numero no fim da faixa diz qual e o maximo dela. */
+    R.faixas.forEach(function(F,fi){
+      var y=pt+fi*(hF+gapF);
+      var max=0; R.celulas.forEach(function(c){ max=Math.max(max,c[F.campo]); });
+      var cor=cssHex(F.cor)||'#888';
+      s+='<text class="axlab" x="'+(pl-8)+'" y="'+(y+hF/2+4)+'" text-anchor="end">'+F.rot+'</text>';
+      s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+hF+'" fill="var(--elev)" stroke="var(--line)"/>';
+      R.celulas.forEach(function(c,i){
+        var v=c[F.campo];
+        if(!(v>0))return;
+        var h=Math.max(1.5,hF*v/(max||1));
+        s+='<rect x="'+(pl+i*bw).toFixed(1)+'" y="'+(y+hF-h).toFixed(1)+'" width="'+Math.max(0.6,bw-0.6).toFixed(1)+
+           '" height="'+h.toFixed(1)+'" fill="'+cor+'"><title>'+retiRotulo(c.x,R.passoM)+' · '+F.rot+': '+fmtBR(Math.round(v))+' m³'+
+           (c.n?('\n'+c.n+' estaca(s)'):'')+'</title></rect>';
+      });
+      s+='<text class="axm" x="'+(W-pr+2)+'" y="'+(y+10)+'">'+fmtBR(Math.round(max))+'</text>';
+      s+='<text class="axm" x="'+(W-pr+2)+'" y="'+(y+hF)+'">0</text>';
+    });
+    // eixo: rótulos que couberem, sem encostar
+    var yE=pt+R.faixas.length*(hF+gapF)+4, ultimo=-1e9;
+    R.celulas.forEach(function(c,i){
+      var rot=retiRotulo(c.x,R.passoM), larg=rot.length*5.6+10, cx=pl+i*bw+bw/2;
+      if(cx-larg/2<ultimo+6)return;
+      ultimo=cx+larg/2;
+      s+='<line x1="'+cx.toFixed(1)+'" y1="'+(yE-4)+'" x2="'+cx.toFixed(1)+'" y2="'+(yE)+'" stroke="var(--line)"/>'+
+         '<text class="axm" x="'+cx.toFixed(1)+'" y="'+(yE+12)+'" text-anchor="middle">'+rot+'</text>';
+    });
+    s+='<text class="axm" x="'+pl+'" y="'+(H-6)+'">'+massaEstaca(R.x0)+'</text>';
+    s+='<text class="axm" x="'+(W-pr)+'" y="'+(H-6)+'" text-anchor="end">'+massaEstaca(R.x1)+'</text>';
+    el.innerHTML=s;
+  }
+  function retiHTML(){
+    massaInit();
+    var ids=(window._LOTIDS||[]), carregados=ids.filter(function(id){ return !!ESTACAS[id]; }).length;
+    var btn=function(v,rot,dica){
+      return '<button class="subtab'+(RETI.passo===v?' active':'')+'" data-retipasso="'+v+'" title="'+escAttr(dica)+'">'+rot+'</button>';
+    };
+    var barra='<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">'+
+      '<span class="note" style="margin:0">Agrupar por</span>'+
+      '<div style="display:flex;gap:4px">'+
+        btn('km','Quilômetro','Uma coluna por km — a leitura da obra inteira')+
+        btn('estaca','Estaca','Uma coluna por estaca do projeto — use com o recorte de trecho')+
+      '</div>'+
+      '<div class="field" style="margin:0"><label>Trecho</label>'+
+        '<select class="inp" id="retiTrecho" style="width:200px">'+msTrechoOpts()+'</select></div>'+
+      ((MASSAS.de!=null||MASSAS.ate!=null)?'<button class="btn" id="retiTudo" style="margin-top:14px">↺ Obra inteira</button>':'')+
+      '</div>'+
+      '<div class="note" style="margin-top:8px">O traçado esticado: cada faixa é um serviço, e a altura em cada posição é o volume previsto ali. '+
+      'O previsto sai da cubação cadastrada por estaca (<b>Cadastro → Quantidades</b>). '+
+      'O <b>realizado</b> ainda não entra — vai aparecer como barra de avanço sobre cada faixa quando o apontamento por estaca estiver ligado.</div></div>';
+    if(!ids.length)return head('Retigráfico','',null)+barra+'<div class="card"><div class="note">Cadastre lotes antes.</div></div>';
+    if(!carregados)return head('Retigráfico','',null)+barra+'<div class="card"><div class="note">'+
+      (MASSAS_CARREGANDO?'Carregando as estacas…':'Nenhuma estaca cadastrada ainda. Importe a cubação em <b>Cadastro → Quantidades</b>.')+'</div></div>';
+    var R=retiDados();
+    var D=massasDados();
+    var totais='<div class="kpis" style="margin-bottom:12px">'+
+      kpi('info','Corte',fmtBR(D.totC)+' m³',R.celulas.length+' '+(R.passoM>=1000?'km':'estaca(s)')+' no recorte')+
+      kpi('accent','Aterro',fmtBR(D.totA)+' m³','fator '+D.fator)+
+      kpi('warn','Rebaixo',fmtBR(D.totR)+' m³',MASSAS.rebaixo?'no balanço':'fora do balanço')+
+      '</div>';
+    var tab='<div class="card" style="margin-top:12px"><div class="eyebrow">Por '+(R.passoM>=1000?'quilômetro':'estaca')+'</div>'+
+      '<div class="tbl-wrap" style="max-height:340px"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+      '<th>'+(R.passoM>=1000?'Km':'Estaca')+'</th><th class="r">Corte</th><th class="r">Rebaixo</th><th class="r">Aterro</th><th class="r">Saldo</th><th>Lotes</th></tr></thead><tbody>'+
+      R.celulas.filter(function(c){ return c.corte||c.reb||c.aterro; }).map(function(c){
+        var sal=c.corte+(MASSAS.rebaixo?c.reb:0)-c.aterro*D.fator;
+        var nomes=Object.keys(c.lotes).map(function(li){ return LOTS[li]; }).filter(Boolean);
+        return '<tr><td class="mono">'+retiRotulo(c.x,R.passoM)+'</td>'+
+          '<td class="r mono">'+(c.corte?fmtBR(Math.round(c.corte)):'—')+'</td>'+
+          '<td class="r mono">'+(c.reb?fmtBR(Math.round(c.reb)):'—')+'</td>'+
+          '<td class="r mono">'+(c.aterro?fmtBR(Math.round(c.aterro)):'—')+'</td>'+
+          '<td class="r mono" style="color:var('+(sal>=0?'--good':'--crit')+')">'+(sal>=0?'+':'−')+fmtBR(Math.round(Math.abs(sal)))+'</td>'+
+          '<td class="note">'+escAttr(nomes.join(', '))+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>';
+    return head('Retigráfico','O traçado esticado — onde cada serviço está previsto ao longo do estaqueamento.','')+
+      barra+totais+
+      '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Previsto ao longo do traçado</div>'+
+      '<div class="tc-wrap"><svg class="chart" id="retiChart" style="width:100%;height:auto"></svg></div></div>'+tab;
+  }
+  function retiDraw(){
+    var el=document.getElementById('retiChart');
+    if(el)retiSVG(el,retiDados());
+  }
+  function retiWire(){
+    document.querySelectorAll('[data-retipasso]').forEach(function(b){
+      b.addEventListener('click',function(){ RETI.passo=b.getAttribute('data-retipasso'); go('cr-reti'); });
+    });
+    var tr=document.getElementById('retiTrecho');
+    if(tr)tr.addEventListener('change',function(){
+      if(!tr.value){ MASSAS.de=null; MASSAS.ate=null; }
+      else { var p=tr.value.split('::'); MASSAS.de=+p[0]; MASSAS.ate=+p[1]; }
+      go('cr-reti');
+    });
+    var bt=document.getElementById('retiTudo');
+    if(bt)bt.addEventListener('click',function(){ MASSAS.de=null; MASSAS.ate=null; go('cr-reti'); });
+  }
+  VIEWS['cr-reti']=function(){ return retiHTML(); };
   function massasHTML(){
     massaInit();
     var ids=(window._LOTIDS||[]), carregados=ids.filter(function(id){ return !!ESTACAS[id]; }).length;
@@ -3288,7 +3448,10 @@
       'Os volumes saem da cubação cadastrada por estaca (importação dos <b>Informes de produção</b>); quando a estaca não tem volume, vale a quantidade por estaca dos serviços escolhidos acima.</div></div>';
 
     if(!ids.length)return barra+'<div class="card"><div class="note">Cadastre lotes antes.</div></div>';
-    if(!carregados)return barra+'<div class="card"><div class="note">Nenhum lote carregado ainda. Use <b>Carregar os '+ids.length+' lotes</b> pra montar o diagrama a partir das estacas.</div></div>';
+    if(!carregados)return barra+'<div class="card"><div class="note">'+
+      (MASSAS_CARREGANDO?'Carregando as estacas dos '+ids.length+' lote(s)…'
+                        :'Nenhuma estaca cadastrada ainda. Importe a cubação em <b>Cadastro → Quantidades</b> e gere a distribuição de massas por lá.')+
+      '</div></div>';
 
     var D=massasDados();
     if(!D.pts.length)return barra+'<div class="card"><div class="note">Os lotes carregados não têm volume de corte nem de aterro por estaca. '+
@@ -3357,6 +3520,24 @@
     var c=document.getElementById('content');
     if(!c||current!=='cr-massas')return;
     c.innerHTML=massasHTML(); massasWire(); massasDraw();
+  }
+  /* Volume cadastrado e cadastro: a tela tem que abrir pronta. O botao de carregar continua
+   * la pra recarregar a mao, mas ninguem precisa clicar nele pra ver o diagrama. Roda uma vez
+   * por sessao e so se faltar lote — 40 lotes sao 40 idas ao banco, nao da pra repetir a cada
+   * redesenho. */
+  var MASSAS_AUTO=false;
+  function massasAutoCarga(){
+    if(MASSAS_AUTO||MASSAS_CARREGANDO)return;
+    var ids=(window._LOTIDS||[]);
+    var faltam=ids.filter(function(id){ return !ESTACAS[id]; });
+    if(!ids.length||!faltam.length)return;
+    /* A carga serve as duas telas que leem estaca; cada uma se redesenha do seu jeito. */
+    var repinta=function(){ if(current==='cr-reti')go('cr-reti'); else massasRedesenha(); };
+    MASSAS_AUTO=true; MASSAS_CARREGANDO=true; repinta();
+    comCarga(async function(){
+      for(var i=0;i<faltam.length;i++)await sbLoadEstacas(faltam[i]);
+    }).catch(function(e){ toast('Falha ao carregar as estacas: '+((e&&e.message)||e)); })
+      .then(function(){ MASSAS_CARREGANDO=false; repinta(); });
   }
   function massasWire(){
     var tr=document.getElementById('msTrecho');
@@ -3938,7 +4119,7 @@
         daEstaca[cc.nome]=(daEstaca[cc.nome]||0)+vols[k];
       });
       var off=qimpOffset(estaca);
-      if(off!=null)porEstaca.push({lote:lote,off:off,vols:daEstaca});
+      if(off!=null)porEstaca.push({lote:lote,off:off,estaca:estaca,vols:daEstaca});
     }
     var colunas=lay.cols.map(function(cc){ return cc.nome; }).filter(function(n){ return totCol[n]>0; });
     return {fonte:lay.fonte,aba:nomeAba,linhas:nLinhas,pulos:pulos,colunas:colunas,
@@ -4076,7 +4257,7 @@
   function qimpMassaPrevia(){
     if(!QIMP||!QIMP.porEstaca)return {porLote:{},nLotes:0,nEstacas:0,totC:0,totR:0,totA:0,semLote:0};
     var loteIdx={}; LOTS.forEach(function(l,li){ loteIdx[qimpChave(l)]=li; });
-    var porLote={}, nEst=0, totC=0, totR=0, totA=0, semLote=0;
+    var porLote={}, nEst=0, totC=0, totR=0, totA=0, semLote=0, kmDe={};
     QIMP.porEstaca.forEach(function(e){
       var li=loteIdx[qimpChave(e.lote)];
       if(li==null){ semLote++; return; }
@@ -4089,11 +4270,13 @@
       });
       if(!c&&!r&&!a)return;
       (porLote[li]||(porLote[li]=[])).push({dist:e.off,corte:c,rebaixo:r,aterro:a});
+      var km=qimpKm(e.estaca);
+      if(km!=null&&(kmDe[li]==null||km<kmDe[li]))kmDe[li]=km;
       nEst++; totC+=c; totR+=r; totA+=a;
     });
     Object.keys(porLote).forEach(function(li){ porLote[li].sort(function(x,y){ return x.dist-y.dist; }); });
     return {porLote:porLote,nLotes:Object.keys(porLote).length,nEstacas:nEst,
-            totC:totC,totR:totR,totA:totA,semLote:semLote};
+            totC:totC,totR:totR,totA:totA,semLote:semLote,kmDe:kmDe};
   }
   async function qimpGeraMassas(){
     var p=qimpMassaPrevia();
@@ -4119,6 +4302,15 @@
                   numero:x.dist,distancia_m:x.dist,
                   vol_corte:x.corte||null,vol_rebaixo:x.rebaixo||null,vol_aterro:x.aterro||null};
         });
+        /* Km de projeto do lote: sem ele o diagrama numera tudo a partir de 0+000 e some a
+         * referencia do traçado. Sai do proprio nome do lote, que e de onde o km ja veio. */
+        var kmLote=p.kmDe[li];
+        if(kmLote!=null){
+          var ultima=p.porLote[li][p.porLote[li].length-1];
+          try{ await sbUpdateLote(loteId,{km_inicial:kmLote,km_final:kmLote+(ultima.dist+20)/1000}); }catch(e){}
+          LOTE_KM0[li]=Math.round(kmLote*1000);
+          if(!LOTE_COMPR[li])LOTE_COMPR[li]=ultima.dist+20;
+        }
         for(var k=0;k<linhas.length;k+=400){
           var rr=await SB.from('lote_estacas').upsert(linhas.slice(k,k+400),{onConflict:'id'});
           if(rr.error)throw rr.error;
@@ -10564,7 +10756,7 @@
     if(r)r.addEventListener('change',function(){ GANTT_SO_RESUMO=r.checked; ganttRedesenha(); });
   }
   /* ---------- charts after render ---------- */
-  var VIEWS_COM_CENARIO={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-gantt':1,'cr-hist':1,'cr-cenarios':1,
+  var VIEWS_COM_CENARIO={torre:1,'torre-rel':1,'cr-matriz':1,'cr-lb':1,'cr-gantt':1,'cr-reti':1,'cr-hist':1,'cr-cenarios':1,
     'ac-curvas':1,'ac-ava':1,'cr-massas':1,'cr-prod':1,'lp-medio':1};
   /** Controles do Gantt (agrupamento e 'só os resumos'). */
   function afterRender(view){
@@ -10581,7 +10773,8 @@
     if(view==='cad-eap'){ eapWire(); }
     if(view==='cad-orc'){ orcWire(); }
     if(view==='ac-ava'){ avaWire(); }
-    if(view==='cr-massas'){ massasWire(); massasDraw(); }
+    if(view==='cr-massas'){ massasWire(); massasDraw(); massasAutoCarga(); }
+    if(view==='cr-reti'){ retiWire(); retiDraw(); massasAutoCarga(); }
     if(view==='torre-rel'){execReportDraw();}
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
     if(view==='cr-gantt'){ wireCronoTabs(); ganttWire(); }
