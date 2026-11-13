@@ -9605,6 +9605,89 @@
     });
     return out;
   }
+  /** Modelo em branco da Curva S, no MESMO leiaute que o importador lê: uma aba por curva,
+   *  com a linha ANO, a linha SEMANA e a linha RESUMO GERAL com o acumulado de cada semana.
+   *  As semanas já saem prontas e começam ANTES da largada do plano — é justamente ali que
+   *  mora o avanço que o app não tem como calcular, e sem coluna não tem onde escrever. */
+  function curvaBaixaModelo(){
+    if(typeof XLSX==='undefined'){ alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.'); return; }
+    var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
+    /* mondayOf() só anda pra frente a partir da largada, então as semanas de antes saem de
+     * subtrair 7 dias da primeira — e não de mondayOf(0), que devolve lixo. */
+    var ANTES=26, w1=mondayOf(1), cols=[];
+    for(var k=ANTES;k>=1;k--){
+      var da=new Date(w1.getTime()); da.setDate(da.getDate()-7*k);
+      cols.push({ano:isoAno(da),sem:isoWeek(da),iso:da.toISOString().slice(0,10),plano:false});
+    }
+    for(var w=1;w<=tw;w++){
+      var dp=mondayOf(w);
+      cols.push({ano:isoAno(dp),sem:isoWeek(dp),iso:dp.toISOString().slice(0,10),plano:true});
+    }
+    var EX=[0.004,0.013,0.028,0.049,0.077,0.112];
+    var wb=XLSX.utils.book_new();
+    [['CONTRATUAL','Previsto do contrato — a linha de base vendida'],
+     ['EXECUTIVA','Previsto replanejado — o que a obra se comprometeu a fazer'],
+     ['REALIZADO','Avanço medido, semana a semana']].forEach(function(ab){
+      var linhas=[
+        ['CURVA S — '+ab[0],ab[1]],
+        ['Preencha a linha RESUMO GERAL: o acumulado da obra em cada semana, de 0% a 100%.'],
+        [],
+        ['ANO'].concat(cols.map(function(c){ return c.ano; })),
+        ['SEMANA'].concat(cols.map(function(c){ return c.sem; })),
+        ['SEGUNDA-FEIRA'].concat(cols.map(function(c){ return brDate(c.iso); })),
+        ['PLANO DO APP'].concat(cols.map(function(c){ return c.plano?'sim':'antes do plano'; })),
+        ['RESUMO GERAL'].concat(cols.map(function(){ return 0; })),
+        [],
+        ['EXEMPLO — esta linha não é lida'].concat(cols.map(function(c,i){ return i<EX.length?EX[i]:null; }))
+      ];
+      var ws=XLSX.utils.aoa_to_sheet(linhas);
+      /* Célula formatada como porcentagem é o que evita o erro mais caro aqui: digitar 35 e o
+       * app entender 3500%. Em porcentagem o Excel guarda 0,35 e a leitura sai certa. */
+      cols.forEach(function(c,i){
+        [7,9].forEach(function(r){
+          var ad=XLSX.utils.encode_cell({r:r,c:i+1});
+          if(ws[ad])ws[ad].z='0.0%';
+        });
+      });
+      ws['!cols']=[{wch:32}].concat(cols.map(function(){ return {wch:10}; }));
+      XLSX.utils.book_append_sheet(wb,ws,ab[0]);
+    });
+    /* Os pesos da curva saem do MESMO arquivo, por isso a aba vai junto: sem eles a curva do
+     * app soma m³ com m² e com metro, e quem tem número grande manda na curva. */
+    var pes=[['PESOS DA CURVA — custo de cada pacote'],
+      ['A coluna da direita é o custo total do pacote, em reais. É dele que sai o peso.'],
+      ['Deixe o rotulo comecando com Pacotes: — e assim que o app acha o bloco.'],[],
+      ['Pacote','Custo total (R$)']];
+    (typeof SERV!=='undefined'?SERV:[]).forEach(function(sv){ pes.push(['Pacotes: '+sv.n,0]); });
+    pes.push(['RESUMO',0]);
+    var wsp=XLSX.utils.aoa_to_sheet(pes); wsp['!cols']=[{wch:44},{wch:18}];
+    XLSX.utils.book_append_sheet(wb,wsp,'PESOS');
+    var inst=[['MODELO PADRÃO — IMPORTAÇÃO DA CURVA S DA OBRA'],[],
+      ['1','Uma aba por curva: CONTRATUAL, EXECUTIVA e REALIZADO.'],
+      ['','Pode apagar a aba de uma curva que a obra não tem — as outras entram do mesmo jeito.'],
+      ['2','O app acha a curva por três linhas, e só por elas:'],
+      ['','ANO, SEMANA e RESUMO GERAL. Não renomeie essas três.'],
+      ['','As linhas SEGUNDA-FEIRA, PLANO DO APP e EXEMPLO são só pra sua conferência.'],
+      ['3','ANO e SEMANA são semana ISO: a semana 1 é a que contém 4 de janeiro.'],
+      ['','Já vêm preenchidas. Pode acrescentar colunas à direita ou à esquerda.'],
+      ['4','RESUMO GERAL é ACUMULADO: não desce de uma semana pra outra.'],
+      ['','Quando o valor cai, o app entende que acabou o dado e para de ler ali.'],
+      ['5','As células já estão formatadas como porcentagem.'],
+      ['','Digite 35% (ou 0,35). Digitar 35 em célula de número vira 3.500%.'],
+      ['6','As 26 primeiras colunas são ANTES da largada do plano.'],
+      ['','É onde entra o avanço que a plataforma não tem como calcular — o motivo desta importação.'],
+      ['7','Zero no fim não incomoda: o app corta o rabo de zeros depois do último dado.'],[],
+      ['Na importação você ainda escolhe:'],
+      ['','a semana em que o previsto do app emenda no realizado desta planilha;'],
+      ['','se o cadastro do app cobre a obra inteira ou só o saldo que falta;'],
+      ['','e, se os saldos mudaram, o % de partida corrigido.'],[],
+      ['Estas curvas são ponderadas por PREÇO DE VENDA e as do app por QUANTIDADE FÍSICA.'],
+      ['São duas réguas diferentes: elas entram como referência, ao lado, e não substituem o cálculo do app.']];
+    var wsi=XLSX.utils.aoa_to_sheet(inst); wsi['!cols']=[{wch:4},{wch:96}];
+    XLSX.utils.book_append_sheet(wb,wsi,'INSTRUÇÕES');
+    XLSX.writeFile(wb,'modelo-curva-s.xlsx');
+    toast('Modelo exportado.');
+  }
   function importarCurvaRefArquivo(){
     if(!selectedObra){ alert('Abra uma obra primeiro.'); return; }
     if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
@@ -9768,11 +9851,30 @@
       '</select></label>'+
       '<div class="note" style="margin:6px 0 0">Nessa semana a curva do app passa a valer o realizado da planilha, e o que falta do plano preenche o que falta até 100%. '+
       (ultimoReal?('A planilha tem realizado até '+brDate(ultimoReal)+'.'):'')+'</div>';
+    /* Os saldos variaram ou nao: o % da planilha foi medido contra o contrato de ANTES, e
+     * o plano daqui pode cobrir a obra inteira ou so o que falta. Sao as duas perguntas que
+     * mudam a curva emendada, e nenhuma das duas o app tem como adivinhar. */
+    var escAtual=curvaEscopo(), ajAtual=curvaBaseAjuste();
+    var escHTML='<label style="display:block;margin-top:12px;font-size:12.5px">'+
+      'O cadastro de quantidades do app cobre'+
+      '<select class="einp" id="cfEsc" style="width:100%;margin-top:4px">'+
+        '<option value="mesmo"'+(escAtual==='mesmo'?' selected':'')+'>a obra inteira — inclusive o que já foi executado</option>'+
+        '<option value="saldo"'+(escAtual==='saldo'?' selected':'')+'>só o saldo que falta executar</option>'+
+      '</select></label>'+
+      '<div class="note" style="margin:6px 0 0" id="cfEscNota"></div>'+
+      '<label style="display:block;margin-top:12px;font-size:12.5px;cursor:pointer">'+
+        '<input type="checkbox" id="cfAjOn"'+(ajAtual!=null?' checked':'')+' style="margin-right:6px;vertical-align:-1px">'+
+        'Os saldos mudaram — corrigir o % de partida'+
+      '</label>'+
+      '<div id="cfAjBox" style="margin-top:5px;display:'+(ajAtual!=null?'block':'none')+'">'+
+        '<input class="einp" id="cfAj" type="number" step="0.1" min="0" max="99.9" value="'+(ajAtual!=null?ajAtual:'')+'" placeholder="% já executado na semana da emenda" style="width:100%">'+
+        '<div class="note" style="margin:6px 0 0">O % da planilha foi medido contra o escopo de antes. Se as quantidades mudaram, o mesmo serviço executado vale outra fatia do total novo — digite aqui a fatia certa. Em branco, vale o da planilha.</div>'+
+      '</div>';
     back.innerHTML='<div class="segmenu-panel card" style="max-width:600px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Importar Curva S da obra</div>'+
       '<div class="note" style="margin-bottom:12px">'+escAttr(nomeArq)+'</div>'+
       lin('c')+lin('e')+lin('r')+
-      ancHTML+
+      ancHTML+escHTML+
       '<div class="banner" style="margin-top:12px"><div>Estas curvas entram como <b>referência</b>, desenhadas ao lado das do app — não substituem o cálculo da plataforma. '+
         'Elas são ponderadas por <b>preço de venda</b> e as do app por <b>quantidade física</b>: são duas réguas diferentes no mesmo gráfico, e é por isso que elas não vão coincidir. '+
         'O que elas trazem de único é o avanço de antes de o plano existir.</div></div>'+
@@ -9785,6 +9887,19 @@
     function fecha(){ back.remove(); }
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     back.querySelector('#cfCancel').addEventListener('click',fecha);
+    var escSel=back.querySelector('#cfEsc'), ajOn=back.querySelector('#cfAjOn'),
+        ajBox=back.querySelector('#cfAjBox'), ajInp=back.querySelector('#cfAj');
+    function pintaEsc(){
+      var nota=back.querySelector('#cfEscNota');
+      nota.textContent=(escSel.value==='saldo')
+        ? 'O plano inteiro do app (0% a 100%) é encaixado entre o % já executado e os 100%. Use quando o cadastro foi refeito só com o saldo: o avanço de antes não está nas quantidades daqui.'
+        : 'A partir da semana da emenda o plano é esticado pra sair do % já executado e ainda terminar em 100%. O avanço de antes já está dentro das quantidades do app e não é contado duas vezes.';
+    }
+    escSel.addEventListener('change',pintaEsc); pintaEsc();
+    ajOn.addEventListener('change',function(){
+      ajBox.style.display=ajOn.checked?'block':'none';
+      if(ajOn.checked)ajInp.focus();
+    });
     var rm=back.querySelector('#cfRemove');
     if(rm)rm.addEventListener('click',async function(){
       if(!confirm('Remover a Curva S de referência desta obra?'))return;
@@ -9810,8 +9925,14 @@
       try{
         var h=Object.assign({},histObra()||{});
         var ancSel=back.querySelector('#cfAnc');
+        var aj=null;
+        if(ajOn.checked){
+          var vaj=parseFloat(String(ajInp.value||'').replace(',','.'));
+          if(isFinite(vaj)&&vaj>=0&&vaj<100)aj=vaj;
+        }
         h.curva={fonte:nomeArq,importado_em:new Date().toISOString(),pontos:pontos,
-                 ancora:(ancSel&&ancSel.value)||''};
+                 ancora:(ancSel&&ancSel.value)||'',escopo:escSel.value==='saldo'?'saldo':'mesmo',
+                 baseAjuste:aj};
         await salvarHistorico(h);
         fecha(); go('ac-curvas'); toast(pontos.length+' semanas de referência gravadas.');
       }catch(e){
@@ -10865,6 +10986,8 @@
       renderCurvaS();
       var crBtn=document.getElementById('curvaRefBtn');
       if(crBtn)crBtn.addEventListener('click',importarCurvaRefArquivo);
+      var cmBtn=document.getElementById('curvaModBtn');
+      if(cmBtn)cmBtn.addEventListener('click',curvaBaixaModelo);
       var pzBtn=document.getElementById('pesosBtn');
       if(pzBtn)pzBtn.addEventListener('click',pesosDialogo);
       var curveSelEl=document.getElementById('cvCurveSel');
@@ -11681,6 +11804,25 @@
     var c=histCurva();
     return (c&&c.ancora)||'';
   }
+  /** Como a curva nova encosta na anterior — a resposta pra "os saldos variaram ou não":
+   *   'mesmo' — o cadastro do app cobre a obra inteira, inclusive o que já foi executado. Só
+   *             o pedaço do plano que falta ([a..100]) é esticado pra sair do realizado e
+   *             ainda terminar em 100%.
+   *   'saldo' — o cadastro do app tem SÓ o que falta. Aí o plano inteiro ([0..100]) é que cabe
+   *             entre o realizado de lá e os 100%.
+   *  Tratar um como o outro erra em cima do que já foi feito: com o cadastro refeito só com o
+   *  saldo, 'mesmo' desconta um avanço que o plano não tem, e a curva nasce adiantada. */
+  function curvaEscopo(){
+    var c=histCurva();
+    return (c&&c.escopo==='saldo')?'saldo':'mesmo';
+  }
+  /** % de partida informado à mão. Escopo que mudou muda o DENOMINADOR: 40% de um contrato
+   *  menor não é 40% deste. Quando o saldo variou, o número da planilha já não vale contra o
+   *  total novo, e quem sabe o certo é a obra. Vazio = vale o da planilha. */
+  function curvaBaseAjuste(){
+    var c=histCurva(), v=c?c.baseAjuste:null;
+    return (v==null||v===''||!isFinite(+v))?null:+v;
+  }
   /** A âncora no eixo do plano: em que semana do cronograma ela cai e em que % a curva
    *  importada estava ali. null quando não há âncora, ou quando ela cai fora do plano. */
   function curvaAncoraInfo(tw){
@@ -11695,20 +11837,27 @@
     c.pontos.forEach(function(pt){
       if(pt.iso<=alvo&&pt.r!=null)base=pt.r;
     });
-    if(base==null)return null;
-    return {w:w,base:base*100,iso:alvo};
+    var aj=curvaBaseAjuste();
+    /* Sem realizado na planilha a emenda ainda acontece se o % de partida foi informado:
+     * obra cujo acompanhamento antigo veio em outra régua tem o número, não a curva. */
+    if(base==null&&aj==null)return null;
+    return {w:w,base:(aj!=null?aj:base*100),iso:alvo,escopo:curvaEscopo(),ajustado:aj!=null};
   }
   /** Estica a curva do app pra sair da âncora e ainda terminar em 100%: no ponto da âncora ela
    *  vale o realizado importado, e o que falta do plano preenche o que falta da obra.
    *  Antes da âncora devolve null — ali quem fala é a curva importada, não o plano. */
   function ancoraAplica(src,anc){
     if(!src||!anc)return src;
-    var t=src.totalSeries||[], a=t[anc.w];
+    var t=src.totalSeries||[];
+    /* Com escopo de saldo nao ha o que descontar: o plano INTEIRO e o que falta, entao o
+     * ponto de partida do plano e o zero dele, nao o valor que ele tem na semana da emenda. */
+    var a=(anc.escopo==='saldo')?0:t[anc.w];
     /* Plano ja em 100% na semana da ancora nao tem como ser esticado — nao sobra nada pra
      * preencher. Em vez de emendar errado, a emenda nao acontece. */
     if(a==null||!(a<99.999))return src;
+    if(anc.escopo==='saldo'&&t[anc.w]==null)return src;
     var out=t.map(function(v,i){
-      if(i<anc.w)return null;
+      if(i<anc.w||v==null)return null;
       return anc.base+(100-anc.base)*(v-a)/(100-a);
     });
     return {series:src.series,totalSeries:out,ancorado:true};
@@ -11876,6 +12025,7 @@
   function histCartaoHTML(pacote){
     var c=histCurva(), pesos=curvaPesosBrutos();
     var botoes='<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+      '<button class="btn" id="curvaModBtn" title="Planilha em branco no leiaute que o app lê: uma aba por curva, com as semanas já prontas">⤓ Modelo de planilha</button>'+
       '<button class="btn" id="curvaRefBtn" title="Lê a planilha Curva S da obra (contratual, executiva e realizada, semana a semana)">↥ '+(c?'Reimportar':'Importar')+' Curva S da obra</button>'+
       '<button class="btn" id="pesosBtn" title="Peso de cada serviço na curva geral — os mesmos que a planilha da obra usa">⚖ '+(pesos?'Editar':'Cadastrar')+' pesos da curva</button>'+
     '</div>';
@@ -11905,11 +12055,16 @@
              ultR?('até '+brDate(ultR.iso)):'a planilha não traz realizado')+
         item('Emenda com o plano',anc?rotSem(mondayOf(anc.w)):'—',
              anc?(anc.semEfeito?'o plano já chega a 100% nessa semana — a emenda não tem o que esticar'
-                              :('o previsto daqui parte de '+anc.base.toFixed(1).replace('.',',')+'%'))
+                              :('o previsto daqui parte de '+anc.base.toFixed(1).replace('.',',')+'%'+
+                                 (anc.ajustado?' (informado à mão)':'')+
+                                 (anc.escopo==='saldo'?' · cadastro só com o saldo':' · cadastro com a obra inteira')))
                 :'sem âncora — o previsto começa do zero')+
         item('Pesos',pesos?(Object.keys(pesos).length+' serviço(s)'):'pela quantidade',
              pesos?'curva ponderada como na planilha':'m³, m² e m somados crus')+
       '</div>'+
+      ((anc&&!anc.semEfeito&&anc.escopo==='saldo'&&anc.vPrev>1)
+        ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O cadastro está marcado como <b>só o saldo</b>, mas o plano já acumula '+anc.vPrev.toFixed(1).replace('.',',')+'% até a semana da emenda. Essas semanas ficam de fora e viram um salto na emenda — se o saldo é de hoje, o plano deveria começar na semana da emenda.</div></div>'
+        :'')+
       (pacote||lotViewSet()?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>Com filtro de lotes ou pacote ativo, a curva importada continua sendo a da obra inteira — ela não tem como ser recortada.</div></div>':'')+
     '</div>';
   }
@@ -12090,6 +12245,9 @@
        * aviso errado. */
       var vPrev=executivo&&executivo.totalSeries?executivo.totalSeries[anc.w]:null;
       anc.semEfeito=!(vPrev!=null&&vPrev<99.999);
+      /* Guardado pro cartao poder avisar do salto: com escopo de saldo, plano que comeca
+       * ANTES da emenda tem semanas que ficam de fora da curva. */
+      anc.vPrev=vPrev;
       executivo=ancoraAplica(executivo,anc);
       cliente=ancoraAplica(cliente,anc);
       real=ancoraAplica(real,anc);
