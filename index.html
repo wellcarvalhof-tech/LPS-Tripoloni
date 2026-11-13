@@ -15876,10 +15876,133 @@
     var n=(wb.SheetNames||[]).filter(function(x){ return re.test(chaveNomeServ(x)); })[0];
     return n?{nome:n,aoa:XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null})}:null;
   }
+  /** A planilha que o próprio app exporta: cabeçalho nomeado, uma aba só, e as colunas de COTA
+   *  no fim. Ler por NOME de coluna e não por posição — assim mexer na ordem, ou acrescentar
+   *  coluna, não quebra a importação. Devolve null quando não é esse formato. */
+  function orcLerExportado(wb,nomeArq){
+    var alvo=null;
+    (wb.SheetNames||[]).forEach(function(n){
+      if(alvo)return;
+      var aoa=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null});
+      for(var i=0;i<Math.min(6,aoa.length);i++){
+        var h=(aoa[i]||[]).map(function(v){ return chaveNomeServ(String(v==null?'':v)); });
+        if(h.indexOf('item')>=0&&h.indexOf('descricao')>=0&&
+           (h.indexOf('custo total')>=0||h.indexOf('custo unit')>=0)){
+          alvo={nome:n,aoa:aoa,cab:i,h:h}; break;
+        }
+      }
+    });
+    if(!alvo)return null;
+    var ach=function(){
+      for(var a=0;a<arguments.length;a++){
+        var i=alvo.h.indexOf(arguments[a]);
+        if(i>=0)return i;
+      }
+      return -1;
+    };
+    /* As chaves aqui ja vem NORMALIZADAS (chaveNomeServ tira acento e pontuacao): "Fat. total"
+     * vira "fat total". Procurar por "fat. total" nunca casava, e o faturamento voltava zerado
+     * da reimportacao sem nenhum erro na tela. */
+    var col={
+      sec:ach('secao'), cod:ach('item'), nome:ach('descricao'), un:ach('un','unid'),
+      qtd:ach('quantidade','qtd'), cu:ach('custo unit','custo unitario'),
+      custo:ach('custo total','custo'), vu:ach('fat unit','faturamento unit','faturamento unitario'),
+      venda:ach('fat total','faturamento total','faturamento'), svc:ach('servico do app','servico')
+    };
+    /* Colunas de mês: tudo que começa com COTA e tem um mês legível depois. */
+    var colMes=[];
+    (alvo.aoa[alvo.cab]||[]).forEach(function(v,ci){
+      var t=String(v==null?'':v).trim();
+      var m=/^cota\s+(.+)$/i.exec(t);
+      if(!m)return;
+      var k=orcMesDeRotulo(m[1]);
+      if(k)colMes.push({ci:ci,mes:k});
+    });
+    colMes.sort(function(a,b){ return a.mes<b.mes?-1:1; });
+
+    var novo=orcVazio();
+    novo.cfg.arquivo=nomeArq||''; novo.cfg.importadoEm=new Date().toISOString();
+    novo.meses=colMes.map(function(x){ return x.mes; });
+    var porSec={}, porChave={}, svcPorNome={};
+    SERV.forEach(function(sv){ svcPorNome[chaveNomeServ(sv.n)]=sv.id; });
+    var semServico=[];
+    for(var r=alvo.cab+1;r<alvo.aoa.length;r++){
+      var lin=alvo.aoa[r]||[];
+      var cd=orcCodigo(col.cod>=0?lin[col.cod]:null);
+      if(!cd)continue;
+      var nome=String((col.nome>=0?lin[col.nome]:'')||'').trim();
+      if(!nome||/^total/i.test(nome))continue;
+      var nomeSec=String((col.sec>=0?lin[col.sec]:'')||'').trim()||'Planilha';
+      var sk=porSec[nomeSec];
+      if(!sk){ sk=porSec[nomeSec]='S'+(novo.secoes.length+1); novo.secoes.push({k:sk,nome:nomeSec}); }
+      var chave=sk+'|'+cd.cod;
+      if(porChave[chave])continue;
+      var it={id:chave,sec:sk,cod:cd.cod,nivel:cd.nivel,pai:orcPai(cd.cod),nome:nome,
+        un:String((col.un>=0?lin[col.un]:'')||'').trim(),
+        qtd:col.qtd>=0?orcNum(lin[col.qtd]):0,
+        cu:col.cu>=0?orcNum(lin[col.cu]):0,
+        custo:col.custo>=0?orcNum(lin[col.custo]):0,
+        vu:col.vu>=0?orcNum(lin[col.vu]):0,
+        venda:col.venda>=0?orcNum(lin[col.venda]):0,
+        folha:false,svc:null,pm:{},rm:{}};
+      /* O vínculo com o serviço do app volta pelo NOME, que é como ele foi exportado. Serviço
+       * que não existe mais na obra fica sem vínculo e é avisado — melhor do que amarrar no
+       * serviço errado por semelhança. */
+      if(col.svc>=0){
+        var sn=String(lin[col.svc]==null?'':lin[col.svc]).trim();
+        /* "vários serviços" e o rotulo que a exportacao poe num no cujos filhos apontam pra
+         * servicos diferentes. Nao e nome de servico e nao pode virar aviso de vinculo perdido. */
+        if(sn&&!/^varios/.test(chaveNomeServ(sn))){
+          var sid=svcPorNome[chaveNomeServ(sn)];
+          if(sid)it.svc=sid; else if(semServico.indexOf(sn)<0)semServico.push(sn);
+        }
+      }
+      colMes.forEach(function(x){
+        var v=orcNum(lin[x.ci]); if(v)it.pm[x.mes]=v;
+      });
+      porChave[chave]=it;
+      novo.itens.push(it);
+    }
+    if(!novo.itens.length)return null;
+    /* Pai traz o total somado só pra leitura; quem manda é a folha. Zerar o pai evita que ele
+     * seja contado junto com os filhos se um dia a árvore mudar de regra. */
+    var temFilho={};
+    novo.itens.forEach(function(it){ if(it.pai)temFilho[it.sec+'|'+it.pai]=true; });
+    novo.itens.forEach(function(it){
+      it.folha=!temFilho[it.id];
+      if(!it.folha){ it.custo=0; it.venda=0; it.qtd=0; it.cu=0; it.vu=0; it.pm={}; }
+    });
+    if(!novo.meses.length){
+      var hoje=new Date();
+      novo.meses=[hoje.getFullYear()+'-'+('0'+(hoje.getMonth()+1)).slice(-2)];
+    }
+    novo._semServico=semServico;
+    return novo;
+  }
+  /** "out/26" ou "out/2026" -> "2026-10". O rótulo do mês é o que o próprio app escreve. */
+  function orcMesDeRotulo(t){
+    var MES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    var s=String(t||'').trim().toLowerCase();
+    var m=/^([a-zç]{3})[a-zç]*[\/\-\s](\d{2,4})$/.exec(s);
+    if(m){
+      var i=MES.indexOf(m[1]);
+      if(i>=0){
+        var ano=+m[2];
+        if(ano<100)ano+=2000;
+        return ano+'-'+('0'+(i+1)).slice(-2);
+      }
+    }
+    return orcMesKey(t);
+  }
   /** Lê a planilha de composições inteira e devolve o orçamento pronto (sem gravar). */
   function orcLerWorkbook(wb,nomeArq){
+    /* Dois formatos: a planilha de composições da obra (PLANILHA SALDO) e a que o PRÓPRIO
+     * app exporta. A segunda nao era aceita — exportar e reimportar dava erro, que e o
+     * minimo que um par exportar/importar tem que fazer. */
+    var doApp=orcLerExportado(wb,nomeArq);
+    if(doApp)return doApp;
     var saldo=orcAbaPorNome(wb,/planilha\s*saldo/);
-    if(!saldo)throw new Error('Não achei a aba "PLANILHA SALDO" no arquivo.');
+    if(!saldo)throw new Error('Não reconheci o arquivo. Ele precisa ter a aba "PLANILHA SALDO" (planilha de composições da obra) ou o formato que este app exporta em "↧ Exportar Excel" — com as colunas Item, Descrição e Custo total.');
     var novo=orcVazio();
     novo.cfg.arquivo=nomeArq||''; novo.cfg.importadoEm=new Date().toISOString();
     var sec=null, nSec=0, porChave={};
@@ -16038,6 +16161,13 @@
         var novo;
         try{ novo=orcLerWorkbook(wb,file.name); }
         catch(e){ alert('Não consegui ler a planilha: '+((e&&e.message)||e)); return; }
+        /* Vinculo que veio pelo nome e nao existe mais: avisa antes, senao o item entra sem
+         * vinculo e a AVA deixa de medir aquele avanco sem ninguem perceber. */
+        if(novo._semServico&&novo._semServico.length)
+          alert(novo._semServico.length+' serviço(s) citados na planilha não existem mais nesta obra e os itens ficaram sem vínculo:'+
+            String.fromCharCode(10)+String.fromCharCode(10)+novo._semServico.slice(0,12).join(', ')+
+            (novo._semServico.length>12?(' e mais '+(novo._semServico.length-12)):'')+
+            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra revincular na própria tela depois de importar.');
         orcDialogoImport(novo);
       }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
     });
@@ -16242,6 +16372,23 @@
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
     if(!orcTem()){ alert('Nada pra exportar.'); return; }
     var O=orcAtual(), arv=orcArvore(), wb=new ExcelJS.Workbook();
+    /* Soma custo E venda nas duas pontas. orcArvore so agrega a base escolhida na tela, e
+     * usar ela nas duas colunas escrevia venda debaixo de "Custo total" quando a base era
+     * venda — o arquivo saia com o rotulo errado, e reimportar trazia o numero trocado. */
+    var agreg={};
+    (function(){
+      var filhosDe={};
+      O.itens.forEach(function(it){ if(it.pai)(filhosDe[it.sec+'|'+it.pai]||(filhosDe[it.sec+'|'+it.pai]=[])).push(it); });
+      var soma=function(it){
+        if(agreg[it.id])return agreg[it.id];
+        var f=filhosDe[it.id];
+        var r=f&&f.length
+          ? f.reduce(function(a,x){ var y=soma(x); return {custo:a.custo+y.custo,venda:a.venda+y.venda}; },{custo:0,venda:0})
+          : {custo:orcNum(it.custo),venda:orcNum(it.venda)};
+        return (agreg[it.id]=r);
+      };
+      O.itens.forEach(soma);
+    })();
     wb.creator='LPS Tripoloni'; wb.created=new Date();
     var ws=wb.addWorksheet('Orçamento',{views:[{state:'frozen',ySplit:1}]});
     var cab=['Seção','Item','Nível','Descrição','Un.','Quantidade','Custo unit.','Custo total','Fat. unit.','Fat. total','Serviço do app'];
@@ -16250,8 +16397,9 @@
     O.itens.forEach(function(it){
       var no=arv.mapa[it.id];
       var fonte=no?avaFonteDoNo(no):null;
+      var ag=agreg[it.id]||{custo:orcNum(it.custo),venda:orcNum(it.venda)};
       var lin=[orcSecaoNome(it.sec),it.cod,it.nivel,it.nome,it.un,it.qtd,it.cu,
-        no?no.peso:it.custo,it.vu,it.venda,(fonte&&fonte.tipo!=='manual')?fonte.nome:''];
+        ag.custo,it.vu,ag.venda,(fonte&&fonte.tipo!=='manual')?fonte.nome:''];
       O.meses.forEach(function(m){ lin.push((no&&no.pm[m])||0); });
       var r=ws.addRow(lin); r.font={size:10,bold:it.nivel<=2};
       for(var c=6;c<=10;c++)r.getCell(c).numFmt='#,##0.00';
