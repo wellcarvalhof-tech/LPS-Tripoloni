@@ -5841,9 +5841,18 @@
     var pacotesSet={}; LOTE_PACOTE.forEach(function(p){if(p)pacotesSet[p]=true;});
     var pacotes=Object.keys(pacotesSet);
     var data=curvaSData();
-    var sel=window._curvaSSel==null?'total':window._curvaSSel;
-    var curveOpts='<option value="total"'+(sel==='total'?' selected':'')+'>Curva geral</option>'+
-      SERV.map(function(s,si){return '<option value="'+si+'"'+(sel===si?' selected':'')+'>'+s.n+'</option>';}).join('');
+    var sel=curvaSelAtual();
+    /* Três níveis no mesmo seletor, cada um no seu grupo: geral, grupos do orçamento e
+     * serviços do cronograma. */
+    var gruposCv=curvaGrupos();
+    var curveOpts='<optgroup label="Nível 1 — geral">'+
+        '<option value="total"'+(sel==='total'?' selected':'')+'>Curva geral</option></optgroup>'+
+      (gruposCv.length?('<optgroup label="Nível 2 — grupos do orçamento">'+
+        gruposCv.map(function(g){ return '<option value="'+escAttr(g.k)+'"'+(sel===g.k?' selected':'')+'>'+escAttr(g.nome)+'</option>'; }).join('')+
+        '</optgroup>'):'')+
+      '<optgroup label="Nível 3 — serviços do cronograma">'+
+        SERV.map(function(s,si){return '<option value="'+si+'"'+(sel===si?' selected':'')+'>'+escAttr(s.n)+'</option>';}).join('')+
+      '</optgroup>';
     var pacoteSel=pacotes.length?('<select class="esel" id="cvPacoteSel" style="height:28px" title="Filtrar por pacote contratual"><option value="">Todos os pacotes</option>'+
       pacotes.map(function(p){return '<option value="'+escAttr(p)+'"'+(window._curvaSPacote===p?' selected':'')+'>'+p+'</option>';}).join('')+'</select>'):'';
     /* O seletor de periodo acompanha a escala do eixo: por mes ele lista MESES, e o valor
@@ -11032,7 +11041,10 @@
       if(pzBtn)pzBtn.addEventListener('click',pesosDialogo);
       var curveSelEl=document.getElementById('cvCurveSel');
       if(curveSelEl)curveSelEl.addEventListener('change',function(){
-        window._curvaSSel=curveSelEl.value==='total'?'total':+curveSelEl.value;
+        var vSel=curveSelEl.value;
+        /* 'total' e 'g:<id>' sao texto; serviço é índice. Converter tudo pra número
+         * transformaria a chave do grupo em NaN e a tela voltaria pra curva geral. */
+        window._curvaSSel=(vSel==='total'||vSel.indexOf('g:')===0)?vSel:+vSel;
         renderCurvaS();
       });
       var pacoteSelEl=document.getElementById('cvPacoteSel');
@@ -12507,9 +12519,92 @@
       projetado=cumulativePct(weeklyProj,tw,totalByServ,grandTotal);
       if(anc)projetado=ancoraAplica(projetado,anc);
     }
-    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode,pacote:pacote,ancora:anc};
+    /* As curvas de 2º nível entram aqui, depois da âncora: elas saem das séries por serviço,
+     * que a âncora não mexe (ela estica só a curva geral). */
+    var grupos=curvaGrupos();
+    if(grupos.length){
+      [cliente,executivo,real,projetado].forEach(function(src){
+        if(!src||!src.series)return;
+        grupos.forEach(function(g){
+          var serie=[];
+          for(var i=0;i<=tw;i++){
+            var acc=0, pe=0;
+            for(var sk in g.pesos){
+              if(!Object.prototype.hasOwnProperty.call(g.pesos,sk))continue;
+              var sr=src.series[sk]; if(!sr)continue;
+              var v=sr[i]; if(v==null)continue;
+              acc+=g.pesos[sk]*v; pe+=g.pesos[sk];
+            }
+            serie.push(pe>0?acc/pe:null);
+          }
+          src.series[g.k]=serie;
+        });
+      });
+    }
+    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode,pacote:pacote,ancora:anc,grupos:grupos};
   }
-  /** Extrai a série (array por semana) de uma "curva" (índice de serviço, ou 'total') de uma fonte cliente/executivo/real. */
+  /* ================= Níveis da Curva S =================
+   * 1º nível: a curva geral da obra.
+   * 2º nível: um grupo do orçamento (os itens de 1º nível da EAP — TERRAPLENAGEM,
+   *           PAVIMENTAÇÃO, DRENAGEM…). O grupo não tem avanço próprio: ele é a média do
+   *           avanço dos serviços vinculados lá dentro, PONDERADA pelo custo de cada um
+   *           dentro dele. É a mesma régua da AVA — dinheiro —, e é o que impede um
+   *           serviço de R$ 10 mil de pesar igual a um de R$ 10 milhões no mesmo grupo.
+   * 3º nível: um serviço do cronograma, que é a curva que o app já sabia desenhar.
+   *
+   * As curvas de grupo entram como MAIS UMA SÉRIE em cada fonte (cliente, executivo,
+   * realizado, projetado), com a chave 'g:<id do item>'. Assim tudo que já sabe desenhar
+   * "a curva do serviço X" desenha a do grupo sem precisar saber que grupo existe. */
+  function curvaGrupos(){
+    var O=orcAtual();
+    if(!O||!O.itens||!O.itens.length)return [];
+    var arv=orcArvore(), svcIdx={};
+    SERV.forEach(function(sv,si){ svcIdx[sv.id]=si; });
+    var nSec=(O.secoes||[]).length, out=[];
+    arv.raizes.forEach(function(no){
+      var pesos={}, soma=0;
+      (function anda(n){
+        if(!n.filhos.length){
+          /* Só folha vinculada entra. Folha sem serviço não tem como ter avanço, e contar
+           * ela no denominador seguraria a curva do grupo em menos de 100% pra sempre. */
+          var si=svcIdx[n.it.svc];
+          if(si!=null&&n.peso>0){ pesos[si]=(pesos[si]||0)+n.peso; soma+=n.peso; }
+          return;
+        }
+        n.filhos.forEach(anda);
+      })(no);
+      if(!(soma>0))return;
+      out.push({k:'g:'+no.it.id, soma:soma, pesos:pesos, valor:no.peso,
+        nome:(nSec>1?(orcSecaoNome(no.it.sec)+' · '):'')+no.it.cod+' '+no.it.nome,
+        servicos:Object.keys(pesos).length});
+    });
+    return out;
+  }
+  /** A seleção válida agora. Grupo que sumiu — obra trocada, orçamento reimportado, vínculo
+   *  desfeito — volta pra curva geral: deixar a tela num gráfico vazio sem dizer por quê é pior
+   *  do que voltar pro topo. Vale também pra índice de serviço que não existe mais. */
+  function curvaSelAtual(){
+    var sel=window._curvaSSel==null?'total':window._curvaSSel;
+    if(typeof sel==='string'&&sel!=='total'){
+      if(sel.indexOf('g:')!==0||!curvaGrupoNome(sel)){ window._curvaSSel='total'; return 'total'; }
+      return sel;
+    }
+    if(sel!=='total'&&!SERV[sel]){ window._curvaSSel='total'; return 'total'; }
+    return sel;
+  }
+  function curvaGrupoNome(k){
+    var g=null;
+    curvaGrupos().forEach(function(x){ if(x.k===k)g=x; });
+    return g?g.nome:'';
+  }
+  /** Rótulo do que está selecionado, nos três níveis. */
+  function curvaSelNome(sel){
+    if(sel==='total')return 'Curva geral';
+    if(typeof sel==='string'&&sel.indexOf('g:')===0)return curvaGrupoNome(sel)||'Grupo do orçamento';
+    return SERV[sel]?SERV[sel].n:'';
+  }
+  /** Extrai a série (array por semana) de uma "curva" (índice de serviço, 'total', ou
+   *  'g:<id>' de um grupo do orçamento) de uma fonte cliente/executivo/real. */
   function curveSeries(src,sel){
     if(!src)return null;
     return sel==='total'?src.totalSeries:src.series[sel];
@@ -12709,7 +12804,7 @@
      * Desenhar no vazio nao quebra, mas calcular a curva toda pra jogar fora, sim. */
     if(!document.getElementById('scv2'))return;
     var data=curvaSData();
-    var sel=window._curvaSSel==null?'total':window._curvaSSel;
+    var sel=curvaSelAtual();
     var wSel=(window._curvaSWeek!=null&&window._curvaSWeek<=data.tw)?window._curvaSWeek:data.hojeW;
     var E=curvaEixo(data.tw), S=curvaSeriesNoEixo(data,sel,E.eixo,E.pre);
     var porMes=(window._curvaSEscala==='mes');
@@ -12724,7 +12819,7 @@
         (data.pacote?(' &nbsp;·&nbsp; Pacote: <b>'+data.pacote+'</b>'):'');
     }
     var ptEl=document.getElementById('cvPrintTitle');
-    if(ptEl)ptEl.textContent='Curva S — '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra')+' — '+(sel==='total'?'Curva geral':(SERV[sel]?SERV[sel].n:''))+(data.pacote?(' — '+data.pacote):'');
+    if(ptEl)ptEl.textContent='Curva S — '+((window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra')+' — '+curvaSelNome(sel)+(data.pacote?(' — '+data.pacote):'');
 
     var vContrat=curvaValorNaSemana(S.contratual,E.eixo,E.pre,wSel);
     var vExec   =curvaValorNaSemana(S.execAtual,E.eixo,E.pre,wSel);
