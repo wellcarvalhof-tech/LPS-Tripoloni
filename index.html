@@ -3017,7 +3017,7 @@
       var km0=temKm?kmDoLote(li):null;
       if(km0!=null)x0=km0;
       var compr=LOTE_COMPR[li]||(est.length?est[est.length-1].dist+espac:0);
-      var sc=0,sr=0,sa=0;
+      var sc=0,sr=0,sa=0,nComVol=0;
       est.forEach(function(e){
         var c=massaNum(e.volCorte), r=massaNum(e.volRebaixo), a=massaNum(e.volAterro);
         if(c==null&&sidC){ var vc=vol[e.id+'::'+sidC]; c=(vc&&vc.proj!=null)?vc.proj:(qt[e.id+'::'+sidC]||null); }
@@ -3025,9 +3025,12 @@
         c=c||0; r=r||0; a=a||0;
         if(!c&&!r&&!a)return;                  // estaca sem volume não entra: não é zero, é vazio
         pts.push({x:x0+e.dist,li:li,num:e.numero,corte:c,reb:r,aterro:a,espac:espac});
-        sc+=c; sr+=r; sa+=a;
+        sc+=c; sr+=r; sa+=a; nComVol++;
       });
-      lotes.push({li:li,x0:x0,x1:x0+compr,corte:sc,reb:sr,aterro:sa,nEst:est.length,espac:espac});
+      /* nEstVol separa "lote no filtro" de "lote com cubacao": sem isso a tela dizia
+       * "42 lotes" num diagrama desenhado com 13, e a tabela por lote enchia de zeros. */
+      lotes.push({li:li,x0:x0,x1:x0+compr,corte:sc,reb:sr,aterro:sa,nEst:est.length,
+                  nEstVol:nComVol,espac:espac});
       x0+=compr;
     });
     pts.sort(function(a,b){ return a.x-b.x; });
@@ -3504,7 +3507,7 @@
 
     var porLote='<div class="card"><div class="eyebrow" style="margin-bottom:6px">Por lote</div><div class="tbl-wrap">'+
       '<table class="edtbl" style="font-size:12px"><thead><tr><th>Lote</th><th class="r">Estacas</th><th class="r">Corte</th><th class="r">Rebaixo</th><th class="r">Aterro</th><th class="r">Saldo</th></tr></thead><tbody>'+
-      D.lotes.map(function(L){
+      D.lotes.filter(function(L){ return L.nEstVol>0; }).map(function(L){
         var sal=L.corte+(MASSAS.rebaixo?L.reb:0)-L.aterro*D.fator;
         return '<tr><td>'+escAttr(LOTS[L.li])+'</td><td class="r mono">'+L.nEst+'</td>'+
           '<td class="r mono">'+fmtBR(L.corte)+'</td><td class="r mono">'+(L.reb?fmtBR(L.reb):'—')+'</td>'+
@@ -3515,7 +3518,10 @@
     return barra+kpis+
       '<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="margin-bottom:4px">Diagrama de massas</div>'+
       '<div class="note" style="margin-bottom:8px">Em cima, o volume de cada estaca — corte pra cima, aterro pra baixo. Embaixo, o acumulado: subindo sobra corte, descendo falta. '+
-      'Extensão considerada: '+massaFmtDist(D.extensao)+' em '+D.lotes.length+' lote(s)'+
+      'Extensão considerada: '+massaFmtDist(D.extensao)+' em '+
+      D.lotes.filter(function(L){ return L.nEstVol>0; }).length+' lote(s) com cubação'+
+      (function(){ var v=D.lotes.length-D.lotes.filter(function(L){ return L.nEstVol>0; }).length;
+        return v?(' — outros '+v+' lote(s) do filtro não têm volume por estaca e não entram'):''; })()+
       (D.temJanela?(' — recorte de <b>'+massaEstaca(D.x0win)+'</b> a <b>'+massaEstaca(D.x1win)+'</b>, e os cartões acima são deste trecho'):'')+'. '+
       'Arraste sobre o gráfico pra escolher um trecho; a faixa no pé mostra onde ele está na obra.</div>'+
       '<svg class="chart" id="msChart" style="width:100%;height:auto"></svg></div>'+
