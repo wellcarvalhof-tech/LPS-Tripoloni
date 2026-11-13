@@ -3719,9 +3719,11 @@
         ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote rateia a quantidade com a primeira pela produtividade de cada uma. Pra mover ou remover um bloco pelo clique, solte o pincel antes — arrastar funciona sempre.'
         : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover, arraste-o pra outra célula, ou use o <b>botão direito</b> pra um menu de atalhos. <b>Ctrl+Z</b> desfaz.')+'</div>';
     var pend=ofiPendencias(segs);
-    var listaPend=pend.length?('<div class="ofi-aviso" style="border-left-color:var(--crit)"><b>'+pend.length+' pendência(s)</b> — montar fora de ordem é permitido, mas o que ficou inconsistente aparece aqui:<ul style="margin:6px 0 0 16px;padding:0">'+
-      pend.slice(0,12).map(function(x){ return '<li>'+escAttr(x.txt)+'</li>'; }).join('')+
-      (pend.length>12?('<li>e mais '+(pend.length-12)+'</li>'):'')+'</ul></div>'):'';
+    /* A lista de pendências saiu da tela a pedido: numa obra grande ela enche a página de
+     * aviso e empurra a matriz pra baixo, que é onde se trabalha. As pendências continuam
+     * sendo calculadas — quem usa elas é o botão "Arrumar pendências", que só habilita
+     * quando há o que arrumar. */
+    var listaPend='';
     var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
       (OFI.ovr?('<button class="btn primary" id="tcmSalvar"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"'):'Salvar cronograma')+'</button>'):'')+
       undoBotoesHTML()+
