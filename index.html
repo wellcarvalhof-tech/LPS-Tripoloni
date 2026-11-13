@@ -1342,7 +1342,7 @@
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
-      ['cad-obra','Obra'],['cad-eap','EAP de serviços'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],
+      ['cad-obra','Obra'],['cad-eap','EAP de serviços'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],['cad-quant','Quantidades'],
       ['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cr-gantt','Gantt'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
@@ -1355,7 +1355,7 @@
   ];
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
     'cad-obra':['Cadastro','Obra'],'cad-eap':['Cadastro','EAP de serviços'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
-    'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
+    'cad-quant':['Cadastro','Quantidades'],'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gantt'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'cr-prod':['Tempo Caminho','Produtividade'],'cr-massas':['Tempo Caminho','Distribuição de massas'],
     'cr-oficina':['Tempo Caminho','Oficina — montagem manual (estudo)'],
@@ -3673,6 +3673,312 @@
     var names=perm.map(function(k){var c=CRUMB[k];return c?c[c.length-1]:k;});
     return '<span class="note">'+names.join(', ')+'</span>';
   }
+  /* ================= Cadastro → Quantidades (importação de volumes) =================
+   * Lê o quadro de cubação e devolve quantidade por lote × serviço. Nada é gravado na leitura:
+   * a tela mostra o que entendeu — quantas linhas, que serviços reconheceu, que lotes casaram —
+   * e só grava quando a pessoa manda. Importação que escreve direto é importação que você
+   * descobre que estava errada depois que o cronograma já mudou. */
+  var QIMP=null;   // {linhas, colunas, porLote, pulos, fonte}
+  var QIMP_MAPA={};   // nome da coluna da planilha -> id do serviço cadastrado
+  var QIMP_MODO='substituir';   // substituir | somar
+
+  /** Nome do bloco que vale no relatório do Civil3D. Os blocos anteriores (escavação, aterro
+   *  geométrico, aterro corrigido) são etapas do mesmo cálculo: somariam o volume duas vezes. */
+  var QIMP_BLOCO=/VOLUMES\s+AP[ÓO]S\s+COMPENSA[ÇC][ÃA]O\s+LATERAL/i;
+  var QIMP_FIXAS=['trecho','estaca','local'];
+
+  function qimpNum(v){
+    if(v==null||v==='')return 0;
+    var s=String(v).trim().replace(/\s/g,'');
+    if(s.indexOf(',')>=0&&s.indexOf('.')>=0)s=s.replace(/\./g,'').replace(',','.');
+    else if(s.indexOf(',')>=0)s=s.replace(',','.');
+    var n=parseFloat(s);
+    return isFinite(n)?n:0;
+  }
+  /** Km inteiro a partir da estaca: aceita "164+720,000" e km decimal "164,720". */
+  function qimpKm(est){
+    var s=String(est==null?'':est).trim();
+    if(!s)return null;
+    var m=s.match(/^(\d+)\s*\+/);
+    if(m)return parseInt(m[1],10);
+    var n=qimpNum(s);
+    return n>0?Math.floor(n):null;
+  }
+  /** Lado a partir do trecho/local: LG-PE é pista sul (LE), LG-PD é pista norte (LD). */
+  function qimpLado(txt){
+    var s=String(txt||'').toUpperCase();
+    if(/\bLG-?PE\b|PISTA\s+SUL/.test(s))return 'LE';
+    if(/\bLG-?PD\b|PISTA\s+NORTE/.test(s))return 'LD';
+    return '';
+  }
+  /** Nome de lote deduzido. É palpite com regra explícita — a tela mostra o que casou e o que
+   *  não casou, e o que não casar não entra. */
+  function qimpLote(trecho,estaca,local){
+    var km=qimpKm(estaca), lado=qimpLado(trecho)||qimpLado(local);
+    if(km==null)return '';
+    return lado?(km+' '+lado):String(km);
+  }
+  function qimpChave(s){ return String(s==null?'':s).trim().toLowerCase().replace(/\s+/g,' '); }
+
+  /** Acha onde começam os dados e quais colunas são de serviço. Serve pros dois formatos: o
+   *  modelo padrão (Trecho/Estaca/Local na linha 1) e o relatório do Civil3D (cabeçalho
+   *  espalhado em 4 linhas, com o bloco certo marcado pelo nome). */
+  function qimpLeiaute(aoa){
+    for(var i=0;i<Math.min(6,aoa.length);i++){
+      var linha=(aoa[i]||[]).map(qimpChave);
+      if(linha[0]==='trecho'&&linha[1]==='estaca'&&linha[2]==='local'){
+        var cols=[];
+        (aoa[i]||[]).forEach(function(nome,c){
+          if(c<3)return;
+          var n=String(nome==null?'':nome).trim();
+          if(n)cols.push({c:c,nome:n});
+        });
+        /* linha i+1 só com unidades não é dado */
+        var ini=i+1;
+        var seg=(aoa[ini]||[]).map(qimpChave);
+        if(!seg[0]&&!seg[1]&&!seg[2])ini=i+2;
+        return {fonte:'modelo',iTrecho:0,iEstaca:1,iLocal:2,cols:cols,ini:ini};
+      }
+    }
+    /* Civil3D: acha a coluna onde o bloco começa e lê os nomes na linha de baixo. */
+    for(var r=0;r<Math.min(6,aoa.length);r++){
+      var row=aoa[r]||[];
+      for(var c=0;c<row.length;c++){
+        if(!QIMP_BLOCO.test(String(row[c]==null?'':row[c])))continue;
+        /* o bloco vai do c até a próxima coluna que reabre outro título na mesma linha */
+        var fim=row.length;
+        for(var c2=c+1;c2<row.length;c2++){ if(String(row[c2]==null?'':row[c2]).trim()){ fim=c2; break; } }
+        var nomes=null;
+        for(var rn=r+1;rn<Math.min(r+4,aoa.length);rn++){
+          var cand=(aoa[rn]||[]);
+          var quantos=0;
+          for(var x=c;x<fim;x++)if(String(cand[x]==null?'':cand[x]).trim().length>3)quantos++;
+          if(quantos>=5){ nomes=cand; break; }
+        }
+        if(!nomes)continue;
+        var cols2=[];
+        for(var x2=c;x2<fim;x2++){
+          var n2=String(nomes[x2]==null?'':nomes[x2]).trim();
+          if(n2)cols2.push({c:x2,nome:n2});
+        }
+        /* Estaca/Local: colunas fixas do relatório (1 e 5), confirmadas pelo conteúdo. */
+        var ini2=r+1;
+        for(var rr=r+1;rr<Math.min(r+8,aoa.length);rr++){
+          if(qimpKm((aoa[rr]||[])[1])!=null){ ini2=rr; break; }
+        }
+        return {fonte:'civil3d',iTrecho:0,iEstaca:1,iLocal:5,cols:cols2,ini:ini2};
+      }
+    }
+    return null;
+  }
+
+  function qimpLer(wb){
+    var ws=null, nomeAba='';
+    (wb.SheetNames||[]).forEach(function(n){
+      if(ws)return;
+      var cand=wb.Sheets[n];
+      var aoa=sheetRows(cand);
+      if(qimpLeiaute(aoa)){ ws=cand; nomeAba=n; }
+    });
+    if(!ws)throw new Error('Não achei a tabela de volumes. O arquivo precisa ter, numa das abas, as colunas Trecho / Estaca / Local (modelo padrão) ou o bloco "VOLUMES APÓS COMPENSAÇÃO LATERAL" (relatório do Civil3D).');
+    var aoa=sheetRows(ws), lay=qimpLeiaute(aoa);
+    var porLote={}, totCol={}, pulos={semEstaca:0,semVolume:0,totalOuNota:0}, nLinhas=0;
+    var lotesVistos={};
+    for(var i=lay.ini;i<aoa.length;i++){
+      var row=aoa[i]||[];
+      var estaca=row[lay.iEstaca], trecho=row[lay.iTrecho], local=row[lay.iLocal];
+      var vols=lay.cols.map(function(cc){ return qimpNum(row[cc.c]); });
+      var tem=vols.some(function(v){ return v>0; });
+      if(qimpKm(estaca)==null){
+        /* Linha de total e rodape de notas moram aqui: a de total repete a soma do detalhe e,
+         * somada junto, dobraria a obra inteira. Sem estaca, nao entra. */
+        if(tem)pulos.totalOuNota++; else pulos.semEstaca++;
+        continue;
+      }
+      if(!tem){ pulos.semVolume++; continue; }
+      nLinhas++;
+      var lote=qimpLote(trecho,estaca,local);
+      lotesVistos[lote]=(lotesVistos[lote]||0)+1;
+      var alvo=porLote[lote]||(porLote[lote]={});
+      lay.cols.forEach(function(cc,k){
+        if(!(vols[k]>0))return;
+        alvo[cc.nome]=(alvo[cc.nome]||0)+vols[k];
+        totCol[cc.nome]=(totCol[cc.nome]||0)+vols[k];
+      });
+    }
+    var colunas=lay.cols.map(function(cc){ return cc.nome; }).filter(function(n){ return totCol[n]>0; });
+    return {fonte:lay.fonte,aba:nomeAba,linhas:nLinhas,pulos:pulos,colunas:colunas,
+            total:totCol,porLote:porLote,lotes:lotesVistos};
+  }
+
+  /** Palpite de ligação coluna→serviço: nome igual, senão o serviço cujo nome aparece inteiro
+   *  no da coluna (ex.: "Corte 1ª Cat." casa com o serviço "Corte"). */
+  function qimpSugereMapa(colunas){
+    var mapa={};
+    var porChave={}; SERV.forEach(function(sv){ porChave[qimpChave(sv.n)]=sv.id; });
+    colunas.forEach(function(nome){
+      var k=qimpChave(nome);
+      if(porChave[k]){ mapa[nome]=porChave[k]; return; }
+      /* So sugere quando o nome do servico esta no COMECO da coluna. Procurar a palavra em
+       * qualquer lugar jogava "Rebaixo em corte 1a cat." dentro de "Corte" — serviços
+       * diferentes somados num so, e ninguem perceberia olhando o total. */
+      var melhor=null;
+      SERV.forEach(function(sv){
+        var ks=qimpChave(sv.n);
+        if(ks.length<3)return;
+        if(k!==ks&&k.indexOf(ks+' ')!==0)return;
+        if(!melhor||ks.length>qimpChave(melhor.n).length)melhor=sv;
+      });
+      if(melhor)mapa[nome]=melhor.id;
+    });
+    return mapa;
+  }
+  /** O que seria gravado: [{li, si, valor, atual}] — só o que tem lote e serviço casados. */
+  function qimpPrevia(){
+    if(!QIMP)return {itens:[],semLote:{},semServico:[]};
+    var loteIdx={}; LOTS.forEach(function(l,li){ loteIdx[qimpChave(l)]=li; });
+    var svcIdx={}; SERV.forEach(function(sv,si){ svcIdx[sv.id]=si; });
+    var itens=[], semLote={}, semServico=[];
+    QIMP.colunas.forEach(function(nome){ if(!QIMP_MAPA[nome])semServico.push(nome); });
+    Object.keys(QIMP.porLote).forEach(function(lote){
+      var li=loteIdx[qimpChave(lote)];
+      if(li==null){ semLote[lote]=QIMP.lotes[lote]||0; return; }
+      var porSvc={};
+      Object.keys(QIMP.porLote[lote]).forEach(function(nome){
+        var sid=QIMP_MAPA[nome]; if(!sid)return;
+        var si=svcIdx[sid]; if(si==null)return;
+        porSvc[si]=(porSvc[si]||0)+QIMP.porLote[lote][nome];
+      });
+      Object.keys(porSvc).forEach(function(si){
+        si=+si;
+        itens.push({li:li,si:si,valor:porSvc[si],atual:orcNum((QTY[li]||[])[si])});
+      });
+    });
+    itens.sort(function(a,b){ return a.li-b.li||a.si-b.si; });
+    return {itens:itens,semLote:semLote,semServico:semServico};
+  }
+  function qimpAplicar(){
+    var p=qimpPrevia();
+    if(!p.itens.length){ alert('Nada pra aplicar: nenhuma combinação de lote e serviço foi reconhecida.'); return; }
+    var somar=(QIMP_MODO==='somar');
+    if(!confirm((somar?'SOMAR':'SUBSTITUIR')+' '+p.itens.length+' quantidade(s) em Lotes & Quantidades?'+
+      String.fromCharCode(10)+String.fromCharCode(10)+
+      (somar?'O valor importado será somado ao que já está cadastrado.'
+            :'O valor cadastrado será trocado pelo importado.')+
+      String.fromCharCode(10)+'Nada vai pro banco agora — depois é preciso salvar em Lotes & Quantidades.'))return;
+    p.itens.forEach(function(it){
+      if(!QTY[it.li])QTY[it.li]=[];
+      QTY[it.li][it.si]=somar?(orcNum(QTY[it.li][it.si])+it.valor):it.valor;
+      QTY_DIRTY[it.li+'::'+it.si]=true;
+    });
+    refreshTopSaveBtn();
+    toast(p.itens.length+' quantidade(s) aplicada(s) — revise em Lotes & Quantidades e salve.');
+    go('cad-quant');
+  }
+  /** Modelo em branco, com uma coluna por servico CADASTRADO na obra — assim o nome ja sai
+   *  do jeito que o importador reconhece, sem precisar casar nada depois. */
+  function qimpBaixaModelo(){
+    if(typeof XLSX==='undefined'){ alert('Biblioteca de planilha não carregou. Verifique a internet e recarregue a página.'); return; }
+    var cab=['Trecho','Estaca','Local'].concat(SERV.map(function(sv){ return sv.n; }));
+    var un=['','',''].concat(SERV.map(function(sv){ return sv.u||''; }));
+    var ex1=['LG-PE','164+720,000','LG-PE_PISTA SUL'].concat(SERV.map(function(){ return 0; }));
+    var ex2=['LG-PD','164+740,000','LG-PD_PISTA NORTE'].concat(SERV.map(function(){ return 0; }));
+    var inst=[['MODELO PADRÃO — IMPORTAÇÃO DE VOLUMES (CUBAÇÃO)'],[],
+      ['1','Linha 1 = nome do serviço, linha 2 = unidade. Os dados começam na linha 3.'],
+      ['2','Trecho, Estaca e Local são fixas e obrigatórias, nesta ordem.'],
+      ['','Estaca aceita 164+720,000 ou km decimal (164,720).'],
+      ['3','As colunas de serviço são reconhecidas pelo NOME, não pela posição.'],
+      ['','Pode reordenar e pode remover as que a obra não tem.'],
+      ['4','Número com ponto ou vírgula. Célula vazia conta como zero.'],
+      ['5','Não inclua linha de TOTAL: ela não tem estaca e seria somada em dobro.'],[],
+      ['Do relatório do Civil3D, use o bloco:'],
+      ['','VOLUMES APÓS COMPENSAÇÃO LATERAL (PARA DISTRIBUIÇÃO LONGITUDINAL)'],
+      ['','Escavação / Aterro Geométrico / Aterro Corrigido são etapas do mesmo cálculo'],
+      ['','e somariam o mesmo volume duas vezes.'],[],
+      ['Você também pode importar o relatório do Civil3D sem mexer: o app acha o bloco sozinho.']];
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([cab,un,ex1,ex2]),'VOLUMES');
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(inst),'INSTRUÇÕES');
+    XLSX.writeFile(wb,'modelo-volumes-cubacao.xlsx');
+    toast('Modelo exportado.');
+  }
+  VIEWS['cad-quant']=function(){
+    var cab=head('Quantidades','Importa o quadro de cubação e transforma em quantidade por lote e serviço.',
+      '<button class="btn" id="qimpModelo">Modelo</button>'+
+      '<button class="btn primary" id="qimpImportar">↥ Importar planilha de volumes</button>');
+    if(!LOTS.length||!SERV.length)
+      return cab+'<div class="card"><div class="note">Cadastre os serviços e os lotes da obra antes de importar volumes — é neles que a quantidade vai entrar (Tempo Caminho → Serviços / Lotes &amp; Quantidades).</div></div>';
+    if(!QIMP)
+      return cab+'<div class="card">'+
+        '<div class="note" style="margin-bottom:10px">Aceita dois formatos, reconhecidos sozinho:</div>'+
+        '<div class="note"><b>Modelo padrão</b> — colunas <b>Trecho</b>, <b>Estaca</b> e <b>Local</b>, e uma coluna por serviço. Baixe em "Modelo".</div>'+
+        '<div class="note"><b>Relatório do Civil3D</b> — o arquivo original, sem mexer. O app procura o bloco '+
+          '<b>"VOLUMES APÓS COMPENSAÇÃO LATERAL (PARA DISTRIBUIÇÃO LONGITUDINAL)"</b>, que é o volume que já passou pela compensação. '+
+          'Os blocos de escavação, aterro geométrico e aterro corrigido não entram: são etapas do mesmo cálculo e somariam o volume duas vezes.</div>'+
+        '<div class="note" style="margin-top:10px">Ler não grava nada. Depois de ler, você confere o que o app entendeu e decide se aplica.</div></div>';
+
+    var p=qimpPrevia();
+    var svcOpts=function(sel){
+      return '<option value="">— não importar —</option>'+SERV.map(function(sv){
+        return '<option value="'+escAttr(sv.id)+'"'+(sel===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>';
+      }).join('');
+    };
+    var linhasCol=QIMP.colunas.map(function(nome){
+      return '<tr><td>'+escAttr(nome)+'</td><td class="r mono">'+fmtBR(Math.round(QIMP.total[nome]))+'</td>'+
+        '<td><select class="esel" data-qmap="'+escAttr(nome)+'" style="max-width:220px">'+svcOpts(QIMP_MAPA[nome]||'')+'</select></td></tr>';
+    }).join('');
+
+    var lotesFora=Object.keys(p.semLote);
+    var resumo='<div class="card" style="margin-bottom:14px"><div class="eyebrow">O que foi lido</div>'+
+      '<div class="note">Arquivo no formato <b>'+(QIMP.fonte==='civil3d'?'relatório do Civil3D':'modelo padrão')+'</b>'+
+      (QIMP.aba?(', aba <b>'+escAttr(QIMP.aba)+'</b>'):'')+'. '+
+      '<b>'+fmtBR(QIMP.linhas)+'</b> linha(s) de estaca com volume, em <b>'+Object.keys(QIMP.porLote).length+'</b> trecho(s).</div>'+
+      '<div class="note">Puladas: '+QIMP.pulos.semVolume+' sem volume, '+QIMP.pulos.semEstaca+' sem estaca'+
+      (QIMP.pulos.totalOuNota?(', <b style="color:var(--warn)">'+QIMP.pulos.totalOuNota+' linha(s) de total ou nota</b> (tinham volume mas não tinham estaca — somá-las dobraria a obra)'):'')+'.</div></div>';
+
+    var mapa='<div class="card" style="margin-bottom:14px"><div class="eyebrow">De qual serviço é cada coluna</div>'+
+      '<div class="note" style="margin-bottom:8px">O app chuta pelo nome; confira. Coluna deixada em "não importar" fica de fora.'+
+      (p.semServico.length?(' <b style="color:var(--warn)">'+p.semServico.length+' coluna(s) ainda sem serviço.</b>'):'')+'</div>'+
+      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Coluna da planilha</th><th class="r">Volume total</th><th>Serviço da obra</th></tr></thead><tbody>'+
+      linhasCol+'</tbody></table></div></div>';
+
+    var corpo=p.itens.length
+      ? ('<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Lote</th><th>Serviço</th><th class="r">Cadastrado hoje</th><th class="r">Da planilha</th><th class="r">Diferença</th></tr></thead><tbody>'+
+          p.itens.map(function(it){
+            var sv=SERV[it.si], d=it.valor-it.atual;
+            return '<tr><td>'+escAttr(LOTS[it.li])+'</td>'+
+              '<td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</td>'+
+              '<td class="r mono">'+(it.atual?fmtBR(Math.round(it.atual)):'—')+'</td>'+
+              '<td class="r mono">'+fmtBR(Math.round(it.valor))+'</td>'+
+              '<td class="r mono" style="color:'+(Math.abs(d)<0.5?'var(--muted)':(d>0?'var(--good)':'var(--crit)'))+'">'+
+                (Math.abs(d)<0.5?'—':((d>0?'+':'')+fmtBR(Math.round(d))))+'</td></tr>';
+          }).join('')+'</tbody></table></div>')
+      : '<div class="note">Nenhuma combinação de lote e serviço foi reconhecida ainda. Ligue as colunas aos serviços acima — e confira os lotes abaixo.</div>';
+
+    var fora=lotesFora.length
+      ? ('<div class="banner" style="margin-top:10px;border-color:var(--warn)"><div><b>'+lotesFora.length+' trecho(s) da planilha não bateram com nenhum lote cadastrado</b> e ficam de fora: '+
+          lotesFora.slice(0,14).map(function(l){ return escAttr(l||'(sem lote)')+' ('+p.semLote[l]+' estacas)'; }).join(', ')+
+          (lotesFora.length>14?' e mais '+(lotesFora.length-14):'')+'.<br>'+
+          'O nome do lote é montado como <b>km + lado</b> — a estaca dá o km, e LG-PE/pista sul vira <b>LE</b>, LG-PD/pista norte vira <b>LD</b>. '+
+          'Se na sua obra o lote tem outro nome, renomeie em Lotes &amp; Quantidades ou me diga a regra.</div></div>')
+      : '';
+
+    var modoBtn=function(v,rot,dica){
+      return '<button class="subtab'+(QIMP_MODO===v?' active':'')+'" data-qmodo="'+v+'" title="'+escAttr(dica)+'">'+rot+'</button>';
+    };
+    var acoes='<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:12px">'+
+      '<div style="display:flex;gap:4px">'+
+        modoBtn('substituir','Substituir','Troca a quantidade cadastrada pela da planilha')+
+        modoBtn('somar','Somar','Soma a quantidade da planilha à que já está cadastrada')+
+      '</div>'+
+      '<button class="btn primary" id="qimpAplicar"'+(p.itens.length?'':' disabled')+'>✓ Aplicar '+p.itens.length+' quantidade(s)</button>'+
+      '<button class="btn" id="qimpDescartar">Descartar leitura</button>'+
+      '<span class="note" style="margin:0">Aplicar só mexe na tela — depois é preciso salvar em Lotes &amp; Quantidades.</span>'+
+      '</div>';
+
+    return cab+resumo+mapa+
+      '<div class="card"><div class="eyebrow">O que vai ser gravado</div>'+corpo+fora+acoes+'</div>';
+  };
   VIEWS['cad-acessos']=function(){
     return head('Acessos','Quem pode entrar nesta obra, com qual perfil e em quais abas.','')+
       '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Perfis</div><div class="note">'+
@@ -10328,6 +10634,36 @@
         if(!confirm('Gravar este saldo NA OBRA?\n\nEle passa a valer pro cronograma ao vivo e pra toda linha de base ou cenário que não tenha saldo próprio.\n\nO cenário "'+ACTIVE_CENARIO.nome+'" continua com o saldo dele — pra mudar o dele, use o outro botão.'))return;
         saveLotesAll('obra');
       });
+    }
+    if(view==='cad-quant'){
+      var bi=document.getElementById('qimpImportar');
+      if(bi)bi.addEventListener('click',function(){
+        pickExcelFile(function(file){
+          readWorkbookFile(file).then(function(wb){
+            try{
+              QIMP=qimpLer(wb);
+              QIMP_MAPA=qimpSugereMapa(QIMP.colunas);
+              go('cad-quant');
+            }catch(e){ alert('Não deu pra ler a planilha:'+String.fromCharCode(10)+String.fromCharCode(10)+((e&&e.message)||e)); }
+          }).catch(function(err){ alert('Falha ao abrir o arquivo: '+((err&&err.message)||err)); });
+        });
+      });
+      var bm=document.getElementById('qimpModelo');
+      if(bm)bm.addEventListener('click',qimpBaixaModelo);
+      document.querySelectorAll('[data-qmap]').forEach(function(sel){
+        sel.addEventListener('change',function(){
+          var nome=sel.getAttribute('data-qmap');
+          if(sel.value)QIMP_MAPA[nome]=sel.value; else delete QIMP_MAPA[nome];
+          go('cad-quant');
+        });
+      });
+      document.querySelectorAll('[data-qmodo]').forEach(function(b){
+        b.addEventListener('click',function(){ QIMP_MODO=b.getAttribute('data-qmodo'); go('cad-quant'); });
+      });
+      var ba=document.getElementById('qimpAplicar');
+      if(ba)ba.addEventListener('click',qimpAplicar);
+      var bd=document.getElementById('qimpDescartar');
+      if(bd)bd.addEventListener('click',function(){ QIMP=null; QIMP_MAPA={}; go('cad-quant'); });
     }
     if(view==='cad-apoio'){
       document.querySelectorAll('table.edtbl tbody tr[data-ai]').forEach(function(tr){
