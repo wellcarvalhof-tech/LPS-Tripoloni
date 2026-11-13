@@ -16499,6 +16499,11 @@
       novo.meses=[hoje.getFullYear()+'-'+('0'+(hoje.getMonth()+1)).slice(-2)];
     }
     novo._semServico=semServico;
+    /* Se o arquivo traz a coluna do vínculo, ela é a verdade sobre o vínculo — inclusive
+     * quando vem vazia de propósito. Quem importa precisa saber disso pra não deixar o
+     * vínculo antigo passar por cima do que está escrito na planilha. */
+    novo._temColunaSvc=(col.svc>=0);
+    novo._vinculosDoArquivo=novo.itens.filter(function(i){ return !!i.svc; }).length;
     return novo;
   }
   /** "out/26" ou "out/2026" -> "2026-10". O rótulo do mês é o que o próprio app escreve. */
@@ -16711,6 +16716,9 @@
         '<tr><td>Custo total</td><td class="r mono">'+fmtMoeda(tc)+'</td></tr>'+
         '<tr><td>Faturamento total</td><td class="r mono">'+fmtMoeda(tv)+'</td></tr>'+
         '<tr><td>Cronograma de custo</td><td class="r mono">'+(novo.meses.length>1?(novo.meses.length+' meses · '+orcMesLabel(novo.meses[0])+' a '+orcMesLabel(novo.meses[novo.meses.length-1])+' · '+fmtMoeda(tpm)):'<span style="color:var(--warn)">não encontrado</span>')+'</td></tr>'+
+        '<tr><td>Vínculo com os serviços</td><td class="r mono">'+(novo._temColunaSvc
+          ? ((novo._vinculosDoArquivo||0)+' de '+novo.itens.length+' itens vêm vinculados pela planilha — ela manda')
+          : '<span style="color:var(--warn)">a planilha não traz a coluna — os vínculos atuais são mantidos</span>')+'</td></tr>'+
         (nAnt?('<tr><td style="color:var(--crit)">Orçamento atual</td><td class="r mono" style="color:var(--crit)">'+nAnt+' itens serão substituídos</td></tr>'):'')+
       '</tbody></table></div>'+
       (novo.meses.length<=1?'<div class="note" style="margin-top:10px;color:var(--warn)">Sem a aba <b>CRONO CUSTO DIRETO</b> não há curva prevista: a AVA vai mostrar só o peso de cada item.</div>':'')+
@@ -16722,11 +16730,19 @@
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     back.querySelector('#oiCancel').addEventListener('click',fecha);
     back.querySelector('#oiOk').addEventListener('click',function(){
-      // o que já estava vinculado a serviço e lançado como realizado é preservado por código
+      /* O realizado lançado é preservado sempre, por código do item.
+       *
+       * O VÍNCULO com o serviço, não: quando a planilha traz a coluna "Serviço do app", ela
+       * manda. Antes o vínculo antigo era copiado por cima, e quem corrigia os vínculos na
+       * planilha e reimportava via o app ignorar o arquivo e manter o que já estava lá —
+       * inclusive um vínculo errado herdado de "Vincular por nome", que aplica o serviço do
+       * grupo inteiro de uma vez. O vínculo antigo só é aproveitado quando o arquivo não tem
+       * essa coluna (a planilha de composições da obra), que é o caso em que perder o
+       * trabalho de vinculação seria gratuito. */
       var velho={}; if(antigo&&antigo.itens)antigo.itens.forEach(function(i){ velho[i.id]=i; });
       novo.itens.forEach(function(i){
         var v=velho[i.id]; if(!v)return;
-        if(v.svc)i.svc=v.svc;
+        if(v.svc&&!novo._temColunaSvc)i.svc=v.svc;
         if(v.rm&&Object.keys(v.rm).length)i.rm=v.rm;
       });
       if(antigo&&antigo.custos)novo.custos=antigo.custos;
