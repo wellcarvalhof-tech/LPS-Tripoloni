@@ -2995,7 +2995,17 @@
     var pts=[], lotes=[], x0=0, carregados=0;
     /* Com km de projeto cadastrado, o eixo e o do projeto. Sem ele, cai no encadeamento
      * antigo (um lote depois do outro a partir do zero) pra nao quebrar obra ja montada. */
-    var temKm=LOTE_KM0.some(function(v){ return v!=null; });
+    /* Km do lote: o cadastrado manda; faltando, sai do proprio nome ("165 LD" -> km 165).
+     * Sem esse palpite, obra montada antes do campo existir continuaria numerando do zero
+     * ate reimportar a cubacao — e o estaqueamento e justamente o que liga o diagrama ao
+     * projeto. Dois lotes no mesmo km (LE e LD) caem na mesma posicao de proprosito: e o
+     * mesmo ponto do tracado, uma pista de cada lado. */
+    var kmDoLote=function(li){
+      if(LOTE_KM0[li]!=null)return LOTE_KM0[li];
+      var m=String(LOTS[li]||'').match(/(\d{2,4})/);
+      return m?(+m[1])*1000:null;
+    };
+    var temKm=idxs.some(function(li){ return kmDoLote(li)!=null; });
     var sidC=(MASSAS.corteSi!=null&&SERV[MASSAS.corteSi])?SERV[MASSAS.corteSi].id:null;
     var sidA=(MASSAS.aterroSi!=null&&SERV[MASSAS.aterroSi])?SERV[MASSAS.aterroSi].id:null;
     idxs.forEach(function(li){
@@ -3004,7 +3014,8 @@
       if(ESTACAS[id])carregados++;
       var vol=ESTACA_VOL[id]||{}, qt=ESTACA_QTY[id]||{};
       var espac=LOTE_ESPAC[li]||20;
-      if(temKm&&LOTE_KM0[li]!=null)x0=LOTE_KM0[li];
+      var km0=temKm?kmDoLote(li):null;
+      if(km0!=null)x0=km0;
       var compr=LOTE_COMPR[li]||(est.length?est[est.length-1].dist+espac:0);
       var sc=0,sr=0,sa=0;
       est.forEach(function(e){
@@ -3532,7 +3543,10 @@
     var faltam=ids.filter(function(id){ return !ESTACAS[id]; });
     if(!ids.length||!faltam.length)return;
     /* A carga serve as duas telas que leem estaca; cada uma se redesenha do seu jeito. */
-    var repinta=function(){ if(current==='cr-reti')go('cr-reti'); else massasRedesenha(); };
+    var repinta=function(){
+      if(current==='cr-reti'||current==='cad-quant')go(current);
+      else massasRedesenha();
+    };
     MASSAS_AUTO=true; MASSAS_CARREGANDO=true; repinta();
     comCarga(async function(){
       for(var i=0;i<faltam.length;i++)await sbLoadEstacas(faltam[i]);
@@ -4323,6 +4337,63 @@
       alert('Falha ao gerar a distribuição de massas:'+String.fromCharCode(10)+String.fromCharCode(10)+((e&&e.message)||e));
     }finally{ cargaMenos(); }
   }
+  /** O que já está gravado na obra, pra tela não ficar em branco depois da importação.
+   *  Sai do banco (quantidade por lote×serviço e estacas carregadas), não de memória de sessão:
+   *  uma tela que só mostra a importação da vez some quando a pessoa volta nela. */
+  function qimpCadastrado(){
+    var porSvc=[], totalGeral=0;
+    SERV.forEach(function(sv,si){
+      var t=0, nLotes=0;
+      LOTS.forEach(function(_,li){
+        var q=orcNum((QTY[li]||[])[si]);
+        if(q>0){ t+=q; nLotes++; }
+      });
+      if(t>0){ porSvc.push({si:si,total:t,nLotes:nLotes}); totalGeral+=t; }
+    });
+    porSvc.sort(function(a,b){ return b.total-a.total; });
+    var ids=(window._LOTIDS||[]), nEst=0, lotesComEstaca=0, volC=0, volR=0, volA=0;
+    ids.forEach(function(id){
+      var est=ESTACAS[id]; if(!est)return;
+      var achou=false;
+      est.forEach(function(e){
+        var c=massaNum(e.volCorte)||0, r=massaNum(e.volRebaixo)||0, a=massaNum(e.volAterro)||0;
+        if(!c&&!r&&!a)return;
+        nEst++; volC+=c; volR+=r; volA+=a; achou=true;
+      });
+      if(achou)lotesComEstaca++;
+    });
+    return {porSvc:porSvc,totalGeral:totalGeral,nEst:nEst,lotesComEstaca:lotesComEstaca,
+            volC:volC,volR:volR,volA:volA,lotesCarregados:ids.filter(function(id){return !!ESTACAS[id];}).length,
+            totalLotes:ids.length};
+  }
+  function qimpCadastradoHTML(){
+    var C=qimpCadastrado();
+    if(!C.porSvc.length&&!C.nEst)
+      return '<div class="card" style="margin-top:14px"><div class="eyebrow">O que já está cadastrado</div>'+
+        '<div class="note">Nenhuma quantidade por lote e nenhuma estaca com volume ainda.</div></div>';
+    var linhas=C.porSvc.map(function(x){
+      var sv=SERV[x.si];
+      return '<tr><td><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</td>'+
+        '<td class="r mono">'+fmtBR(Math.round(x.total))+' '+escAttr(sv.u||'')+'</td>'+
+        '<td class="r mono">'+x.nLotes+'</td></tr>';
+    }).join('');
+    return '<div class="card" style="margin-top:14px"><div class="eyebrow">O que já está cadastrado</div>'+
+      '<div class="note" style="margin-bottom:8px">Isto é o que está gravado na obra agora — não a última importação. '+
+      'Importar de novo compara com estes números antes de mexer em qualquer coisa.</div>'+
+      (linhas?('<div class="tbl-wrap" style="max-height:260px"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th>Serviço</th><th class="r">Quantidade total</th><th class="r">Lotes</th></tr></thead><tbody>'+
+        linhas+'</tbody></table></div>')
+        :'<div class="note">Nenhuma quantidade por lote ainda.</div>')+
+      '<div class="note" style="margin-top:10px"><b>Cubação por estaca:</b> '+
+      (C.nEst
+        ? (fmtBR(C.nEst)+' estaca(s) com volume em '+C.lotesComEstaca+' lote(s) — corte <b>'+fmtBR(Math.round(C.volC))+
+           '</b>, rebaixo <b>'+fmtBR(Math.round(C.volR))+'</b>, aterro <b>'+fmtBR(Math.round(C.volA))+'</b> m³. '+
+           'É ela que alimenta a <b>Distribuição de massas</b> e o <b>Retigráfico</b>.')
+        : (C.lotesCarregados<C.totalLotes
+            ? 'as estacas ainda não foram lidas do banco nesta sessão — abra <b>Distribuição de massas</b> uma vez e volte aqui.'
+            : 'nenhuma estaca com volume. Gere pela importação abaixo.'))+
+      '</div></div>';
+  }
   VIEWS['cad-quant']=function(){
     var cab=head('Quantidades','Importa o quadro de cubação e transforma em quantidade por lote e serviço.',
       '<button class="btn" id="qimpModelo">Modelo</button>'+
@@ -4336,7 +4407,8 @@
         '<div class="note"><b>Relatório do Civil3D</b> — o arquivo original, sem mexer. O app procura o bloco '+
           '<b>"VOLUMES APÓS COMPENSAÇÃO LATERAL (PARA DISTRIBUIÇÃO LONGITUDINAL)"</b>, que é o volume que já passou pela compensação. '+
           'Os blocos de escavação, aterro geométrico e aterro corrigido não entram: são etapas do mesmo cálculo e somariam o volume duas vezes.</div>'+
-        '<div class="note" style="margin-top:10px">Ler não grava nada. Depois de ler, você confere o que o app entendeu e decide se aplica.</div></div>';
+        '<div class="note" style="margin-top:10px">Ler não grava nada. Depois de ler, você confere o que o app entendeu e decide se aplica.</div></div>'+
+        qimpCadastradoHTML();
 
     var p=qimpPrevia();
     var svcOpts=function(sel){
@@ -4422,7 +4494,8 @@
         : '<div class="note">Marque ao menos uma coluna como corte, rebaixo ou aterro para montar o diagrama.</div>')+
       '</div>';
     return cab+resumo+mapa+
-      '<div class="card"><div class="eyebrow">O que vai ser gravado</div>'+corpo+fora+acoes+'</div>'+massaCard;
+      '<div class="card"><div class="eyebrow">O que vai ser gravado</div>'+corpo+fora+acoes+'</div>'+massaCard+
+      qimpCadastradoHTML();
   };
   VIEWS['cad-acessos']=function(){
     return head('Acessos','Quem pode entrar nesta obra, com qual perfil e em quais abas.','')+
@@ -10775,6 +10848,7 @@
     if(view==='ac-ava'){ avaWire(); }
     if(view==='cr-massas'){ massasWire(); massasDraw(); massasAutoCarga(); }
     if(view==='cr-reti'){ retiWire(); retiDraw(); massasAutoCarga(); }
+    if(view==='cad-quant')massasAutoCarga();   // pra poder resumir a cubação já gravada
     if(view==='torre-rel'){execReportDraw();}
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
     if(view==='cr-gantt'){ wireCronoTabs(); ganttWire(); }
