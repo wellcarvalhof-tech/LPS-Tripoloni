@@ -68,7 +68,10 @@
   .nav-head .chev{margin-left:auto;transition:transform .15s;opacity:.6}
   .nav-group.open .chev{transform:rotate(90deg)}
   .nav-sub{max-height:0;overflow:hidden;transition:max-height .2s ease}
-  .nav-group.open .nav-sub{max-height:340px}
+  /* Folga de sobra: 340px cabiam 11 itens e o grupo "Tempo Caminho" ja tinha 13, entao os
+   * dois ultimos (Retigrafico e Oficina) eram renderizados e recortados — sumiam da tela sem
+   * nenhum sinal de que existiam. O numero so serve pra animacao abrir/fechar. */
+  .nav-group.open .nav-sub{max-height:1200px}
   .nav-item{display:block;width:100%;background:none;border:0;color:var(--nav-ink-2);font-family:inherit;font-size:13px;padding:7px 10px 7px 38px;border-radius:8px;cursor:pointer;text-align:left}
   .nav-item:hover{background:var(--nav-hover);color:var(--nav-ink)}
   .nav-item.active{color:#fff;background:var(--nav-hover)}
@@ -1347,7 +1350,7 @@
       ['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
       ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cr-gantt','Gantt'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
-      ['cad-equipes','Equipes'],['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
+      ['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
       ['cr-massas','Distribuição de massas'],['cr-reti','Retigráfico'],['cr-oficina','Oficina (estudo)']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-ava','AVA — Valor Agregado'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
