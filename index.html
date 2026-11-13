@@ -3783,6 +3783,7 @@
     if(!ws)throw new Error('Não achei a tabela de volumes. O arquivo precisa ter, numa das abas, as colunas Trecho / Estaca / Local (modelo padrão) ou o bloco "VOLUMES APÓS COMPENSAÇÃO LATERAL" (relatório do Civil3D).');
     var aoa=sheetRows(ws), lay=qimpLeiaute(aoa);
     var porLote={}, totCol={}, pulos={semEstaca:0,semVolume:0,totalOuNota:0}, nLinhas=0;
+    var porEstaca=[];   // granularidade de estaca: e dela que sai a distribuicao de massas
     var lotesVistos={};
     for(var i=lay.ini;i<aoa.length;i++){
       var row=aoa[i]||[];
@@ -3800,15 +3801,19 @@
       var lote=qimpLote(trecho,estaca,local);
       lotesVistos[lote]=(lotesVistos[lote]||0)+1;
       var alvo=porLote[lote]||(porLote[lote]={});
+      var daEstaca={};
       lay.cols.forEach(function(cc,k){
         if(!(vols[k]>0))return;
         alvo[cc.nome]=(alvo[cc.nome]||0)+vols[k];
         totCol[cc.nome]=(totCol[cc.nome]||0)+vols[k];
+        daEstaca[cc.nome]=(daEstaca[cc.nome]||0)+vols[k];
       });
+      var off=qimpOffset(estaca);
+      if(off!=null)porEstaca.push({lote:lote,off:off,vols:daEstaca});
     }
     var colunas=lay.cols.map(function(cc){ return cc.nome; }).filter(function(n){ return totCol[n]>0; });
     return {fonte:lay.fonte,aba:nomeAba,linhas:nLinhas,pulos:pulos,colunas:colunas,
-            total:totCol,porLote:porLote,lotes:lotesVistos};
+            total:totCol,porLote:porLote,lotes:lotesVistos,porEstaca:porEstaca};
   }
 
   /** Palpite de ligação coluna→serviço: nome igual, senão o serviço cujo nome aparece inteiro
@@ -3902,6 +3907,101 @@
     XLSX.writeFile(wb,'modelo-volumes-cubacao.xlsx');
     toast('Modelo exportado.');
   }
+  /* ---------------- Da cubação importada para a distribuição de massas ----------------
+   * O diagrama de massas lê ESTACA por ESTACA (corte, rebaixo e aterro), não o total do lote.
+   * A planilha tem exatamente essa granularidade — o que falta é dizer qual coluna é o quê.
+   * Rebaixo e recomposição são coisas opostas: o rebaixo TIRA material, a recomposição
+   * DEVOLVE. Jogar os dois no mesmo lado inverteria o saldo do diagrama. */
+  var QIMP_MASSA={};   // nome da coluna -> 'corte' | 'rebaixo' | 'aterro' | ''
+  var MASSA_PAPEIS=[['corte','Corte'],['rebaixo','Rebaixo'],['aterro','Aterro'],['','— fora —']];
+  function qimpSugereMassa(colunas){
+    var m={};
+    colunas.forEach(function(nome){
+      var k=qimpChave(nome);
+      /* "Recomposição ..." vem antes de "rebaixo"/"troca de solo" de proposito: ela CONTEM
+       * essas palavras e cairia no lado errado se a ordem fosse outra. */
+      /* A ordem aqui e o proprio criterio. "Corte 2a Cat. (Excluindo Rebaixo em 2a Cat.)"
+       * tem a palavra rebaixo no parentese: testar rebaixo antes de corte jogava o corte
+       * inteiro pro outro lado do diagrama, e o saldo saia invertido sem nada na tela
+       * denunciando. Por isso so o COMECO do nome decide. */
+      if(/^recomposi/.test(k))m[nome]='aterro';
+      else if(/^corpo de aterro|^camada final/.test(k))m[nome]='aterro';
+      else if(/^corte|^demoli/.test(k))m[nome]='corte';
+      else if(/^rebaixo|^troca de solo|^escarifica/.test(k))m[nome]='rebaixo';
+      else if(/compensa/.test(k))m[nome]='';      // compensação lateral fecha no próprio lugar
+      else if(/material vegetal|camada vegetal/.test(k))m[nome]='';  // bota-fora, não entra no saldo
+      else m[nome]='';
+    });
+    return m;
+  }
+  /** Offset da estaca DENTRO do lote, em metros: de "164+720,000" sai 720; de "164,720" também. */
+  function qimpOffset(est){
+    var s=String(est==null?'':est).trim();
+    var m=s.match(/^\s*\d+\s*\+\s*([\d.,]+)/);
+    if(m)return Math.round(qimpNum(m[1]));
+    var n=qimpNum(s);
+    if(!(n>0))return null;
+    return Math.round((n-Math.floor(n))*1000);
+  }
+  /** Estacas por lote, com os três volumes somados conforme o papel de cada coluna. */
+  function qimpMassaPrevia(){
+    if(!QIMP||!QIMP.porEstaca)return {porLote:{},nLotes:0,nEstacas:0,totC:0,totR:0,totA:0,semLote:0};
+    var loteIdx={}; LOTS.forEach(function(l,li){ loteIdx[qimpChave(l)]=li; });
+    var porLote={}, nEst=0, totC=0, totR=0, totA=0, semLote=0;
+    QIMP.porEstaca.forEach(function(e){
+      var li=loteIdx[qimpChave(e.lote)];
+      if(li==null){ semLote++; return; }
+      var c=0,r=0,a=0;
+      Object.keys(e.vols).forEach(function(nome){
+        var papel=QIMP_MASSA[nome];
+        if(papel==='corte')c+=e.vols[nome];
+        else if(papel==='rebaixo')r+=e.vols[nome];
+        else if(papel==='aterro')a+=e.vols[nome];
+      });
+      if(!c&&!r&&!a)return;
+      (porLote[li]||(porLote[li]=[])).push({dist:e.off,corte:c,rebaixo:r,aterro:a});
+      nEst++; totC+=c; totR+=r; totA+=a;
+    });
+    Object.keys(porLote).forEach(function(li){ porLote[li].sort(function(x,y){ return x.dist-y.dist; }); });
+    return {porLote:porLote,nLotes:Object.keys(porLote).length,nEstacas:nEst,
+            totC:totC,totR:totR,totA:totA,semLote:semLote};
+  }
+  async function qimpGeraMassas(){
+    var p=qimpMassaPrevia();
+    if(!p.nEstacas){ alert('Nada a gerar: nenhuma coluna foi marcada como corte, rebaixo ou aterro, ou nenhum lote casou.'); return; }
+    if(!confirm('Gerar a distribuição de massas a partir da cubação importada?'+String.fromCharCode(10)+String.fromCharCode(10)+
+      p.nEstacas+' estaca(s) em '+p.nLotes+' lote(s).'+String.fromCharCode(10)+
+      'Estaca que já existir tem os volumes atualizados; as que faltarem são criadas.'+String.fromCharCode(10)+
+      'Isso grava no banco agora.'))return;
+    cargaMais();
+    var criadas=0, atualizadas=0;
+    try{
+      var lotIds=window._LOTIDS||[];
+      var lis=Object.keys(p.porLote);
+      for(var i=0;i<lis.length;i++){
+        var li=+lis[i], loteId=lotIds[li];
+        if(!loteId)continue;
+        if(!ESTACAS[loteId])await sbLoadEstacas(loteId);
+        var porDist={}; (ESTACAS[loteId]||[]).forEach(function(e){ porDist[Math.round(e.dist)]=e.id; });
+        var linhas=p.porLote[li].map(function(x){
+          var id=porDist[x.dist];
+          if(id)atualizadas++; else criadas++;
+          return {id:id||newUuid(),obra_id:selectedObra.id,lote_id:loteId,
+                  numero:x.dist,distancia_m:x.dist,
+                  vol_corte:x.corte||null,vol_rebaixo:x.rebaixo||null,vol_aterro:x.aterro||null};
+        });
+        for(var k=0;k<linhas.length;k+=400){
+          var rr=await SB.from('lote_estacas').upsert(linhas.slice(k,k+400),{onConflict:'id'});
+          if(rr.error)throw rr.error;
+        }
+        delete ESTACAS[loteId];   // força reler com os volumes novos
+      }
+      toast(criadas+' estaca(s) criada(s) e '+atualizadas+' atualizada(s) — veja em Tempo Caminho → Distribuição de massas.');
+      go('cad-quant');
+    }catch(e){
+      alert('Falha ao gerar a distribuição de massas:'+String.fromCharCode(10)+String.fromCharCode(10)+((e&&e.message)||e));
+    }finally{ cargaMenos(); }
+  }
   VIEWS['cad-quant']=function(){
     var cab=head('Quantidades','Importa o quadro de cubação e transforma em quantidade por lote e serviço.',
       '<button class="btn" id="qimpModelo">Modelo</button>'+
@@ -3923,9 +4023,15 @@
         return '<option value="'+escAttr(sv.id)+'"'+(sel===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>';
       }).join('');
     };
+    var massaOpts=function(sel){
+      return MASSA_PAPEIS.map(function(p){
+        return '<option value="'+p[0]+'"'+(sel===p[0]?' selected':'')+'>'+p[1]+'</option>';
+      }).join('');
+    };
     var linhasCol=QIMP.colunas.map(function(nome){
       return '<tr><td>'+escAttr(nome)+'</td><td class="r mono">'+fmtBR(Math.round(QIMP.total[nome]))+'</td>'+
-        '<td><select class="esel" data-qmap="'+escAttr(nome)+'" style="max-width:220px">'+svcOpts(QIMP_MAPA[nome]||'')+'</select></td></tr>';
+        '<td><select class="esel" data-qmap="'+escAttr(nome)+'" style="max-width:220px">'+svcOpts(QIMP_MAPA[nome]||'')+'</select></td>'+
+        '<td><select class="esel" data-qmassa="'+escAttr(nome)+'" style="max-width:130px">'+massaOpts(QIMP_MASSA[nome]||'')+'</select></td></tr>';
     }).join('');
 
     var lotesFora=Object.keys(p.semLote);
@@ -3939,7 +4045,8 @@
     var mapa='<div class="card" style="margin-bottom:14px"><div class="eyebrow">De qual serviço é cada coluna</div>'+
       '<div class="note" style="margin-bottom:8px">O app chuta pelo nome; confira. Coluna deixada em "não importar" fica de fora.'+
       (p.semServico.length?(' <b style="color:var(--warn)">'+p.semServico.length+' coluna(s) ainda sem serviço.</b>'):'')+'</div>'+
-      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Coluna da planilha</th><th class="r">Volume total</th><th>Serviço da obra</th></tr></thead><tbody>'+
+      '<div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Coluna da planilha</th><th class="r">Volume total</th><th>Serviço da obra</th>'+
+      '<th title="Como esta coluna entra no diagrama de massas. Rebaixo tira material; recomposição devolve — por isso ficam em lados opostos.">Na massa</th></tr></thead><tbody>'+
       linhasCol+'</tbody></table></div></div>';
 
     var corpo=p.itens.length
@@ -3976,8 +4083,25 @@
       '<span class="note" style="margin:0">Aplicar só mexe na tela — depois é preciso salvar em Lotes &amp; Quantidades.</span>'+
       '</div>';
 
+    var m=qimpMassaPrevia();
+    var saldo=m.totC+m.totR-m.totA;
+    var massaCard='<div class="card" style="margin-top:14px"><div class="eyebrow">Distribuição de massas prevista</div>'+
+      '<div class="note" style="margin-bottom:8px">O diagrama de massas lê estaca por estaca. A cubação importada já tem essa granularidade — '+
+      'o que a coluna <b>Na massa</b> acima decide é o que é corte, o que é rebaixo e o que é aterro.</div>'+
+      (m.nEstacas
+        ? ('<div class="note"><b>'+fmtBR(m.nEstacas)+'</b> estaca(s) em <b>'+m.nLotes+'</b> lote(s)'+
+           (m.semLote?(' · '+fmtBR(m.semLote)+' fora (lote não casou)'):'')+'.</div>'+
+           '<div class="note">Corte <b>'+fmtBR(Math.round(m.totC))+'</b> · Rebaixo <b>'+fmtBR(Math.round(m.totR))+
+           '</b> · Aterro <b>'+fmtBR(Math.round(m.totA))+'</b> · saldo <b style="color:'+(saldo>=0?'var(--good)':'var(--crit)')+'">'+
+           (saldo>=0?'+':'')+fmtBR(Math.round(saldo))+'</b> (corte + rebaixo − aterro).</div>'+
+           '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">'+
+             '<button class="btn primary" id="qimpMassas">⛰ Gerar distribuição de massas</button>'+
+             '<span class="note" style="margin:0;color:var(--warn)">Este grava no banco na hora — diferente do botão de quantidades.</span>'+
+           '</div>')
+        : '<div class="note">Marque ao menos uma coluna como corte, rebaixo ou aterro para montar o diagrama.</div>')+
+      '</div>';
     return cab+resumo+mapa+
-      '<div class="card"><div class="eyebrow">O que vai ser gravado</div>'+corpo+fora+acoes+'</div>';
+      '<div class="card"><div class="eyebrow">O que vai ser gravado</div>'+corpo+fora+acoes+'</div>'+massaCard;
   };
   VIEWS['cad-acessos']=function(){
     return head('Acessos','Quem pode entrar nesta obra, com qual perfil e em quais abas.','')+
@@ -10643,6 +10767,7 @@
             try{
               QIMP=qimpLer(wb);
               QIMP_MAPA=qimpSugereMapa(QIMP.colunas);
+              QIMP_MASSA=qimpSugereMassa(QIMP.colunas);
               go('cad-quant');
             }catch(e){ alert('Não deu pra ler a planilha:'+String.fromCharCode(10)+String.fromCharCode(10)+((e&&e.message)||e)); }
           }).catch(function(err){ alert('Falha ao abrir o arquivo: '+((err&&err.message)||err)); });
@@ -10657,13 +10782,21 @@
           go('cad-quant');
         });
       });
+      document.querySelectorAll('[data-qmassa]').forEach(function(sel){
+        sel.addEventListener('change',function(){
+          QIMP_MASSA[sel.getAttribute('data-qmassa')]=sel.value;
+          go('cad-quant');
+        });
+      });
+      var bmass=document.getElementById('qimpMassas');
+      if(bmass)bmass.addEventListener('click',qimpGeraMassas);
       document.querySelectorAll('[data-qmodo]').forEach(function(b){
         b.addEventListener('click',function(){ QIMP_MODO=b.getAttribute('data-qmodo'); go('cad-quant'); });
       });
       var ba=document.getElementById('qimpAplicar');
       if(ba)ba.addEventListener('click',qimpAplicar);
       var bd=document.getElementById('qimpDescartar');
-      if(bd)bd.addEventListener('click',function(){ QIMP=null; QIMP_MAPA={}; go('cad-quant'); });
+      if(bd)bd.addEventListener('click',function(){ QIMP=null; QIMP_MAPA={}; QIMP_MASSA={}; go('cad-quant'); });
     }
     if(view==='cad-apoio'){
       document.querySelectorAll('table.edtbl tbody tr[data-ai]').forEach(function(tr){
