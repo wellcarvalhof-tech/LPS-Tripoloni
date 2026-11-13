@@ -660,7 +660,16 @@
     body.printing-lb #lbPrint thead th{background:#eee;font-weight:700}
     body.printing-lb #lbPrint tbody tr{break-inside:avoid;page-break-inside:avoid}
     body.printing-lb #lbPrint .tbl-wrap{overflow:visible}
-    body.printing-report #content>*:not(#repCard):not(#execRep){display:none!important}
+    body.printing-report #content>*:not(#repCard):not(#execRep):not(#avaRep){display:none!important}
+    /* A AVA na folha: sem os controles, cada cartão inteiro numa página só, e os gráficos
+     * com altura de impressão — na tela eles crescem com a janela, no papel isso estoura. */
+    body.printing-report #avaRep select,body.printing-report #avaRep button,body.printing-report #avaRep .subtab{display:none!important}
+    body.printing-report #avaRep input{border:none!important;background:transparent!important;padding:0!important;height:auto!important;width:auto!important;font-size:inherit}
+    body.printing-report #avaRep input[type=checkbox]{display:none!important}
+    body.printing-report #avaRep .card{break-inside:avoid;page-break-inside:avoid;box-shadow:none}
+    body.printing-report #avaRep .grid.g2,body.printing-report #avaRep .grid.g3{grid-template-columns:1fr 1fr}
+    body.printing-report #avaRep svg.chart{max-height:250px}
+    body.printing-report #avaRep .tbl-wrap{max-height:none!important;overflow:visible!important}
     body.printing-report #execRep select,body.printing-report #execRep button,body.printing-report #execRep .subtab{display:none!important}
     /* Na folha os campos editáveis viram texto: a tabela de produtividade por hora é feita de
        inputs, e com a borda em volta a folha fica ilegível. */
@@ -765,6 +774,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<!-- JSZip: o ExcelJS nao cria grafico, e um .xlsx e um ZIP — e com isto que os graficos
+     nativos entram no arquivo depois de pronto. Sem ele a exportacao sai so com os dados. -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -18041,6 +18053,7 @@
     var acoes=(D?('<span class="note" style="margin-right:4px">Data de corte</span>'+
       '<select class="inp" id="avaCorte" style="width:120px">'+opts+'</select>'):'')+
       '<button class="btn" id="avaExp">↧ Exportar Excel</button>'+
+      '<button class="btn" id="avaPdf" title="Abre a janela de impressão — escolha \'Salvar como PDF\' no destino">🖨 PDF</button>'+
       '<button class="btn primary" id="avaSalvar"'+(ORC_DIRTY?'':' disabled')+'>💾 Salvar lançamentos</button>';
     var tabs='<div class="subtabs" style="margin-bottom:12px">'+
       '<button class="subtab'+(AVA_TAB==='painel'?' active':'')+'" data-avatab="painel">Painel</button>'+
@@ -18058,8 +18071,17 @@
       '<div class="note">A planilha importada não trouxe custo distribuído por mês, então não há eixo de tempo pra COTA, '+
       'o COTR e o CRTR. A aba <b>Distribuição</b> funciona assim mesmo — ela monta o eixo pelo cronograma do app.</div></div>';
     else corpo=(AVA_TAB==='lanc'?avaLancHTML(D):avaPainelHTML(D));
-    return head('AVA — Análise do Valor Agregado','COTA, COTR e CRTR acumulados por mês, na base financeira do orçamento importado.',acoes)+
-      tabs+avisoAva+corpo;
+    /* Tudo dentro de #avaRep: a impressão esconde o resto da tela por esse id, e sem o
+     * embrulho a folha sairia com o menu e os controles junto. */
+    var cabPdf='<div class="print-only print-head" style="margin-bottom:8px">'+
+      '<h2 style="margin:0;font-family:\'Archivo\',sans-serif;font-size:16px">AVA — '+escAttr((window._OBRA&&window._OBRA.nome)||'Obra')+'</h2>'+
+      '<div class="note" style="margin:2px 0 0">'+
+        (D?('Data de corte: '+orcMesLabel(D.meses[D.corte])+' · '):'')+
+        'Base: '+(orcAtual().cfg.base==='venda'?'faturamento':'custo')+' · Emitido em '+fmtDate(new Date())+
+        (fAva?(' · '+escAttr(fAva)):'')+'</div></div>';
+    return '<div id="avaRep">'+
+      head('AVA — Análise do Valor Agregado','COTA, COTR e CRTR acumulados por mês, na base financeira do orçamento importado.',acoes)+
+      cabPdf+tabs+avisoAva+corpo+'</div>';
   };
   function avaDraw(){
     if(!orcTem())return;
@@ -18168,6 +18190,14 @@
     if(c)c.addEventListener('change',function(){ AVA_CORTE=+c.value; go('ac-ava'); });
     var s=document.getElementById('avaSalvar');
     if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
+    var pdf=document.getElementById('avaPdf');
+    if(pdf)pdf.addEventListener('click',function(){
+      document.body.classList.add('printing-report');
+      var prevTitle=document.title;
+      document.title='AVA - '+((window._OBRA&&window._OBRA.nome)||'obra');
+      window.onafterprint=function(){ document.body.classList.remove('printing-report'); document.title=prevTitle; window.onafterprint=null; };
+      window.print();
+    });
     var x=document.getElementById('avaExp');
     if(x)x.addEventListener('click',function(){ comCarga(exportAvaExcel); });
     document.querySelectorAll('[data-avacusto]').forEach(function(inp){
@@ -18190,12 +18220,196 @@
     });
     avaDraw();
   }
+  /* ================= Gráficos NATIVOS no Excel =================
+   *
+   * ExcelJS não cria gráfico. Mas um .xlsx é um ZIP de XML, e o que falta pra ter gráfico são
+   * quatro peças: a definição do gráfico, o desenho que ancora ele numa aba, as amarras (rels)
+   * e o registro no [Content_Types].xml. Elas entram depois que o ExcelJS fecha o arquivo.
+   *
+   * O gráfico aponta pras CÉLULAS das abas de dados, não pra números copiados — é isso que o
+   * faz editável de verdade no Excel: mudou a tabela, o gráfico acompanha; dá pra trocar tipo,
+   * cor, eixo e série como em qualquer gráfico feito à mão.
+   *
+   * Sem JSZip na página o arquivo sai como antes, só com os dados. Exportação que falha inteira
+   * por causa do enfeite é pior do que exportação sem o enfeite.
+   */
+  function gxEsc(t){
+    return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  /** Faixa que o Excel entende numa fórmula de gráfico: 'Nome da Aba'!$C$2:$C$30.
+   *  Serve pra coluna (mesma letra, linhas diferentes) e pra linha (mesma linha, letras
+   *  diferentes) — a distribuição mensal é lida deitada, mês por coluna. */
+  function gxFaixa(aba,c1,l1,c2,l2){
+    var a="'"+String(aba).replace(/'/g,"''")+"'!";
+    return a+'$'+c1+'$'+l1+((c2!=null&&l2!=null)?(':$'+c2+'$'+l2):'');
+  }
+  function gxColLetra(i){      // 0 -> A
+    var s='';
+    i=i+1;
+    while(i>0){ var r=(i-1)%26; s=String.fromCharCode(65+r)+s; i=Math.floor((i-1)/26); }
+    return s;
+  }
+  /** Uma série do gráfico. A ordem dos elementos dentro de <c:ser> é fixa no esquema do OOXML:
+   *  idx, order, tx, spPr, marker, cat, val, smooth. Fora de ordem o Excel recusa o arquivo. */
+  function gxSerie(i,cfg,s){
+    return '<c:ser><c:idx val="'+i+'"/><c:order val="'+i+'"/>'+
+      '<c:tx><c:strRef><c:f>'+gxEsc(s.nomeRef)+'</c:f></c:strRef></c:tx>'+
+      (s.cor?('<c:spPr>'+(cfg.tipo==='bar'
+        ? '<a:solidFill><a:srgbClr val="'+s.cor+'"/></a:solidFill>'
+        : '<a:ln w="22000"><a:solidFill><a:srgbClr val="'+s.cor+'"/></a:solidFill></a:ln>')+'</c:spPr>'):'')+
+      (cfg.tipo==='line'?'<c:marker><c:symbol val="none"/></c:marker>':'')+
+      '<c:cat><c:strRef><c:f>'+gxEsc(cfg.cat)+'</c:f></c:strRef></c:cat>'+
+      '<c:val><c:numRef><c:f>'+gxEsc(s.val)+'</c:f></c:numRef></c:val>'+
+      (cfg.tipo==='line'?'<c:smooth val="0"/>':'')+
+      '</c:ser>';
+  }
+  function gxChartXML(cfg,n){
+    var ax1=100000000+n*2, ax2=100000001+n*2;
+    var series=cfg.series.map(function(s,i){ return gxSerie(i,cfg,s); }).join('');
+    var corpo=(cfg.tipo==='bar')
+      ? '<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>'+
+        series+'<c:gapWidth val="60"/><c:overlap val="-20"/>'+
+        '<c:axId val="'+ax1+'"/><c:axId val="'+ax2+'"/></c:barChart>'
+      : '<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>'+
+        series+'<c:marker val="0"/>'+
+        '<c:axId val="'+ax1+'"/><c:axId val="'+ax2+'"/></c:lineChart>';
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"'+
+    ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'+
+    ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'+
+    '<c:chart>'+
+      '<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200" b="1"/></a:pPr>'+
+        '<a:r><a:rPr lang="pt-BR" sz="1200" b="1"/><a:t>'+gxEsc(cfg.titulo)+'</a:t></a:r></a:p></c:rich></c:tx>'+
+        '<c:overlay val="0"/></c:title>'+
+      '<c:autoTitleDeleted val="0"/>'+
+      '<c:plotArea><c:layout/>'+corpo+
+        '<c:catAx><c:axId val="'+ax1+'"/><c:scaling><c:orientation val="minMax"/></c:scaling>'+
+          '<c:delete val="0"/><c:axPos val="b"/><c:tickLblPos val="nextTo"/>'+
+          '<c:crossAx val="'+ax2+'"/><c:crosses val="autoZero"/><c:auto val="1"/>'+
+          '<c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>'+
+        '<c:valAx><c:axId val="'+ax2+'"/><c:scaling><c:orientation val="minMax"/></c:scaling>'+
+          '<c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/>'+
+          '<c:numFmt formatCode="'+gxEsc(cfg.numFmt||'General')+'" sourceLinked="0"/>'+
+          '<c:tickLblPos val="nextTo"/><c:crossAx val="'+ax1+'"/><c:crosses val="autoZero"/>'+
+          '<c:crossBetween val="'+(cfg.tipo==='bar'?'between':'midCat')+'"/></c:valAx>'+
+      '</c:plotArea>'+
+      '<c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>'+
+      '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/>'+
+    '</c:chart></c:chartSpace>';
+  }
+  /** O desenho: onde cada gráfico fica na aba. Dois gráficos por linha, 16 linhas de altura. */
+  function gxDrawingXML(qtd){
+    var anchors='';
+    for(var i=0;i<qtd;i++){
+      var col=(i%2)*9, lin=Math.floor(i/2)*17;
+      anchors+='<xdr:twoCellAnchor>'+
+        '<xdr:from><xdr:col>'+col+'</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>'+lin+'</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'+
+        '<xdr:to><xdr:col>'+(col+8)+'</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>'+(lin+16)+'</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'+
+        '<xdr:graphicFrame macro="">'+
+          '<xdr:nvGraphicFramePr><xdr:cNvPr id="'+(i+2)+'" name="Grafico '+(i+1)+'"/>'+
+          '<xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>'+
+          '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>'+
+          '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">'+
+            '<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"'+
+            ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId'+(i+1)+'"/>'+
+          '</a:graphicData></a:graphic>'+
+        '</xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>';
+    }
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+      '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"'+
+      ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'+anchors+'</xdr:wsDr>';
+  }
+  /** Descobre em qual arquivo mora a aba — ExcelJS numera sheet1, sheet2… na ordem de criação,
+   *  mas confiar nisso é confiar numa coisa que não está escrita em lugar nenhum. O caminho
+   *  certo é o que o próprio arquivo diz: workbook.xml dá o rId da aba, e o rels dá o arquivo. */
+  async function gxArquivoDaAba(zip,nomeAba){
+    var wbXml=await zip.file('xl/workbook.xml').async('string');
+    var relXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    var dp=new DOMParser();
+    var wd=dp.parseFromString(wbXml,'application/xml');
+    var rd=dp.parseFromString(relXml,'application/xml');
+    var rid=null;
+    [].forEach.call(wd.getElementsByTagName('sheet'),function(sh){
+      if(sh.getAttribute('name')===nomeAba)rid=sh.getAttribute('r:id')||sh.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id');
+    });
+    if(!rid)return null;
+    var alvo=null;
+    [].forEach.call(rd.getElementsByTagName('Relationship'),function(r){
+      if(r.getAttribute('Id')===rid)alvo=r.getAttribute('Target');
+    });
+    if(!alvo)return null;
+    return 'xl/'+String(alvo).replace(/^\/?xl\//,'').replace(/^\.\//,'');
+  }
+  /** Injeta os gráficos no buffer que o ExcelJS produziu. Devolve o buffer novo, ou o original
+   *  se qualquer coisa faltar — o arquivo sem gráfico ainda serve, arquivo corrompido não. */
+  async function gxInjeta(buf,nomeAbaDestino,graficos){
+    if(typeof JSZip==='undefined'||!graficos||!graficos.length)return buf;
+    try{
+      var zip=await JSZip.loadAsync(buf);
+      var arqAba=await gxArquivoDaAba(zip,nomeAbaDestino);
+      if(!arqAba||!zip.file(arqAba))return buf;
+      var nomeCurto=arqAba.split('/').pop();
+
+      graficos.forEach(function(g,i){
+        zip.file('xl/charts/chart'+(i+1)+'.xml',gxChartXML(g,i));
+      });
+      zip.file('xl/drawings/drawing1.xml',gxDrawingXML(graficos.length));
+      zip.file('xl/drawings/_rels/drawing1.xml.rels',
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+        graficos.map(function(g,i){
+          return '<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart'+(i+1)+'.xml"/>';
+        }).join('')+'</Relationships>');
+
+      /* rels da aba: pode já existir (hyperlink, por exemplo), então o desenho entra junto com
+       * um Id que não colide com os que estão lá. */
+      var relPath='xl/worksheets/_rels/'+nomeCurto+'.rels';
+      var relAtual=zip.file(relPath)?await zip.file(relPath).async('string'):null;
+      var novoId='rIdGraficos';
+      if(relAtual){
+        zip.file(relPath,relAtual.replace('</Relationships>',
+          '<Relationship Id="'+novoId+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>'));
+      }else{
+        zip.file(relPath,'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+          '<Relationship Id="'+novoId+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>'+
+          '</Relationships>');
+      }
+
+      /* <drawing> é o ÚLTIMO filho de <worksheet> no esquema. Entrar em qualquer outro lugar
+       * faz o Excel recusar o arquivo. */
+      var abaXml=await zip.file(arqAba).async('string');
+      if(abaXml.indexOf('<drawing ')<0){
+        if(abaXml.indexOf('xmlns:r=')<0)
+          abaXml=abaXml.replace('<worksheet ','<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
+        abaXml=abaXml.replace('</worksheet>','<drawing r:id="'+novoId+'"/></worksheet>');
+        zip.file(arqAba,abaXml);
+      }
+
+      var ct=await zip.file('[Content_Types].xml').async('string');
+      var add='';
+      graficos.forEach(function(g,i){
+        if(ct.indexOf('/xl/charts/chart'+(i+1)+'.xml')<0)
+          add+='<Override PartName="/xl/charts/chart'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>';
+      });
+      if(ct.indexOf('/xl/drawings/drawing1.xml')<0)
+        add+='<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>';
+      if(add)zip.file('[Content_Types].xml',ct.replace('</Types>',add+'</Types>'));
+
+      return await zip.generateAsync({type:'arraybuffer',compression:'DEFLATE'});
+    }catch(e){
+      console.warn('gráficos não entraram no Excel:',e&&e.message);
+      return buf;
+    }
+  }
   async function exportAvaExcel(){
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
     var D=avaCalcular(), X=avaDistribuicao();
     if(!D&&!(X&&X.linhas.length)){ alert('Sem dados pra exportar.'); return; }
     var O=orcAtual(), wb=new ExcelJS.Workbook();
     wb.creator='LPS Tripoloni'; wb.created=new Date();
+    var linhaTotalFin=0;
     if(D){
     var k=D.kpi;
     var wsR=wb.addWorksheet('Resumo'); wsR.columns=[{width:40},{width:26}];
@@ -18265,6 +18479,8 @@
       for(var cp=3;cp<=3+X.N;cp++)rP.getCell(cp).numFmt='0.0%';
       var wsF=fazAba('Distribuição · financeiro',function(L,i){ return L.rs[i]||0; },'#,##0.00',function(L){ return L.valor; });
       var rT=wsF.addRow(['Total',''].concat(X.totRs).concat([X.somaRs]));
+      linhaTotalFin=rT.number;   // o gráfico de barras lê esta linha
+      rT.getCell(1).value='Total previsto no mês';
       rT.font={size:10,bold:true};
       for(var cf=3;cf<=3+X.N;cf++)rT.getCell(cf).numFmt='#,##0.00';
       var rA=wsF.addRow(['Acumulado',''].concat(X.accRs).concat(['']));
@@ -18306,8 +18522,39 @@
       var notaF=wsF.addRow(['','','A distribuição sai do cronograma do app: a quantidade de cada serviço em cada mês vira percentual, e o percentual distribui o valor que o orçamento dá àquele serviço (soma das folhas vinculadas a ele). Não é a COTA da planilha — são duas leituras do mesmo orçamento, e a diferença entre elas é informação.']);
       notaF.font={size:9,italic:true};
     }
+    /* ---- Gráficos nativos, numa aba só ----
+     * Eles apontam pras células das abas de dados: mexeu na tabela, o gráfico acompanha, e
+     * no Excel dá pra trocar tipo, cor e eixo como em qualquer gráfico feito à mão. */
+    var graficos=[];
+    if(D&&D.meses.length>1){
+      var l1=2, l2=1+D.meses.length, ab='Curva S';
+      var cat=gxFaixa(ab,'A',l1,'A',l2);
+      var sr=function(col,cor){ return {nomeRef:gxFaixa(ab,col,1),val:gxFaixa(ab,col,l1,col,l2),cor:cor}; };
+      graficos.push({tipo:'line',titulo:'Curva S — R$ acumulado',cat:cat,numFmt:'#,##0',
+        series:[sr('E','E05A3B'),sr('F','2E7D32'),sr('G','B38600')]});
+      graficos.push({tipo:'line',titulo:'Curva S — % acumulado',cat:cat,numFmt:'0.0"%"',
+        series:[sr('B','E05A3B'),sr('C','2E7D32'),sr('D','B38600')]});
+      graficos.push({tipo:'line',titulo:'Índices de desempenho (IDP, IDC, IDP-t)',cat:cat,numFmt:'0.00',
+        series:[sr('H','1565C0'),sr('I','6A1B9A'),sr('J','00838F')]});
+    }
+    if(X&&X.linhas.length&&X.N>0&&linhaTotalFin>0){
+      /* Esta série é lida DEITADA: um mês por coluna, na linha do total. */
+      var abf='Distribuição · financeiro';
+      var cI=gxColLetra(2), cF=gxColLetra(2+X.N-1);
+      graficos.push({tipo:'bar',titulo:'Desembolso previsto por mês (R$)',numFmt:'#,##0',
+        cat:gxFaixa(abf,cI,1,cF,1),
+        series:[{nomeRef:gxFaixa(abf,'A',linhaTotalFin),val:gxFaixa(abf,cI,linhaTotalFin,cF,linhaTotalFin),cor:'2E7D32'}]});
+    }
+    if(graficos.length){
+      var wsG=wb.addWorksheet('Gráficos');
+      wsG.getCell('A1').value='Os gráficos desta aba são gráficos do Excel, ligados às células das abas de dados — edite à vontade.';
+      wsG.getCell('A1').font={italic:true,size:10};
+      wsG.getRow(1).height=18;
+      for(var cg=1;cg<=18;cg++)wsG.getColumn(cg).width=11;
+    }
     var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
     var buf=await wb.xlsx.writeBuffer();
+    if(graficos.length)buf=await gxInjeta(buf,'Gráficos',graficos);
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a'); a.href=url;
