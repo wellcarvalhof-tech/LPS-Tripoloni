@@ -18919,6 +18919,173 @@
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:11.5px"><thead><tr>'+th+'</tr></thead>'+
       '<tbody>'+linhas+linhaTot+linhaAcc+'</tbody></table></div></div>';
   }
+  /* ---------------- Importar o avanço realizado até a data de corte ----------------
+   * A planilha de saldo da obra traz, por item da EAP, a quantidade total e o bloco
+   * "EXECUTADO E MEDIDO" com o que já foi feito — em quantidade e em reais. A razão entre os
+   * dois é o avanço acumulado daquele item até a data do corte.
+   *
+   * O casamento com o orçamento é pelo CÓDIGO do item, e aqui ele é confiável porque as duas
+   * planilhas saem do mesmo lugar: medido com os arquivos de uma obra, 332 de 334 linhas
+   * acharam o item correspondente. As que não acharem são listadas, não somem caladas.
+   */
+  function avImpLe(wb){
+    var alvo=null;
+    (wb.SheetNames||[]).forEach(function(n){
+      if(alvo)return;
+      var aoa=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null});
+      for(var i=0;i<14&&i<aoa.length;i++){
+        var h=(aoa[i]||[]).map(function(v){ return chaveNomeServ(String(v==null?'':v)); });
+        if(h.indexOf('item pmg')>=0&&h.indexOf('qtde total')>=0){ alvo={aoa:aoa,cab:i,h:h,nome:n}; break; }
+      }
+    });
+    if(!alvo)return null;
+    var h=alvo.h;
+    var col={cod:h.indexOf('item pmg'),sub:h.indexOf('subgrupo'),nome:h.indexOf('descricao'),
+             un:h.indexOf('un'),qtd:h.indexOf('qtde total'),vt:h.indexOf('valor total')};
+    if(col.cod<0||col.qtd<0)return null;
+    /* "QTDE" e "FINANCEIRO" aparecem duas vezes: uma no bloco EXECUTADO E MEDIDO e outra no
+     * SALDO. Quem diz qual é qual é a linha de cima, com o nome do bloco — pegar o primeiro par
+     * depois de VALOR TOTAL daria certo hoje e erraria no dia que a planilha trocar a ordem. */
+    var grp=null;
+    for(var g=alvo.cab-1;g>=0&&g>=alvo.cab-3;g--){
+      var cand=(alvo.aoa[g]||[]).map(function(v){ return chaveNomeServ(String(v==null?'':v)); });
+      if(cand.some(function(x){ return x.indexOf('executado')>=0; })){ grp=cand; break; }
+    }
+    var ini=-1;
+    if(grp)grp.forEach(function(x,ci){ if(ini<0&&x.indexOf('executado')>=0)ini=ci; });
+    if(ini<0)ini=col.vt;
+    var cq=-1, cf=-1;
+    for(var c=ini;c<h.length&&c<ini+6;c++){
+      if(cq<0&&h[c]==='qtde')cq=c;
+      if(cf<0&&h[c]==='financeiro')cf=c;
+    }
+    if(cq<0&&cf<0)return null;
+    var linhas=[], subs={};
+    for(var r=alvo.cab+1;r<alvo.aoa.length;r++){
+      var L=alvo.aoa[r]||[];
+      var cod=String(L[col.cod]==null?'':L[col.cod]).trim();
+      if(!cod||!/^[0-9]+(\.[0-9]+)*$/.test(cod))continue;
+      var qt=orcNum(L[col.qtd]), vt=col.vt>=0?orcNum(L[col.vt]):0;
+      if(!(qt>0)&&!(vt>0))continue;
+      var exq=cq>=0?orcNum(L[cq]):0, exf=cf>=0?orcNum(L[cf]):0;
+      var sub=col.sub>=0?String(L[col.sub]==null?'':L[col.sub]).trim():'';
+      linhas.push({cod:cod,sub:sub,nome:String((col.nome>=0?L[col.nome]:'')||'').trim(),
+                   qtd:qt,vt:vt,exq:exq,exf:exf,
+                   pctFis:qt>0?Math.max(0,Math.min(1.5,exq/qt)):null,
+                   pctFin:vt>0?Math.max(0,Math.min(1.5,exf/vt)):null});
+      if(sub)subs[sub]=true;
+    }
+    if(!linhas.length)return null;
+    /* Código repetido existe: o mesmo item da EAP aparece em duas linhas, com quantidades
+     * diferentes (um aterro partido em dois lançamentos). Somar antes de dividir é o único
+     * jeito de o percentual sair certo — casar linha a linha faria o segundo sobrescrever o
+     * primeiro, e contaria o peso do item duas vezes na conta de cobertura. */
+    var porCodigo={}, ordem=[];
+    linhas.forEach(function(x){
+      var a=porCodigo[x.cod];
+      if(!a){ porCodigo[x.cod]=x; ordem.push(x.cod); return; }
+      a.qtd+=x.qtd; a.vt+=x.vt; a.exq+=x.exq; a.exf+=x.exf;
+      if(!a.sub&&x.sub)a.sub=x.sub;
+    });
+    var agrupadas=ordem.map(function(k){
+      var a=porCodigo[k];
+      a.pctFis=a.qtd>0?Math.max(0,Math.min(1.5,a.exq/a.qtd)):null;
+      a.pctFin=a.vt>0?Math.max(0,Math.min(1.5,a.exf/a.vt)):null;
+      return a;
+    });
+    return {linhas:agrupadas,brutas:linhas.length,aba:alvo.nome,
+            subgrupos:Object.keys(subs).length,temFis:cq>=0,temFin:cf>=0};
+  }
+  function avImportarRealizado(){
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(!orcTem()){ alert('Importe o orçamento antes: o avanço é lançado nos itens dele.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var lido=avImpLe(wb);
+        if(!lido){
+          alert('Não reconheci este arquivo.'+String.fromCharCode(10)+String.fromCharCode(10)+
+            'Procuro uma aba com as colunas ITEM PMG, DESCRIÇÃO e QTDE. TOTAL, e um bloco "EXECUTADO E MEDIDO" com QTDE e FINANCEIRO.');
+          return;
+        }
+        avImpDialogo(lido,file.name);
+      }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function avImpDialogo(lido,nomeArq){
+    var O=orcAtual();
+    var porCod={};
+    O.itens.forEach(function(it){ if(it.folha)(porCod[it.cod]=porCod[it.cod]||[]).push(it); });
+    var casam=[], fora=[];
+    lido.linhas.forEach(function(x){
+      var c=porCod[x.cod]||[];
+      if(c.length===1)casam.push({l:x,it:c[0]});
+      else fora.push(x);
+    });
+    var pesoCasado=0, pesoTotal=0;
+    O.itens.forEach(function(it){ if(it.folha)pesoTotal+=orcNum(it[(O.cfg.base==='venda')?'venda':'custo']); });
+    casam.forEach(function(p){ pesoCasado+=orcNum(p.it[(O.cfg.base==='venda')?'venda':'custo']); });
+    var somaVt=0, somaEx=0;
+    lido.linhas.forEach(function(x){ somaVt+=x.vt; somaEx+=x.exf; });
+    var meses=avaMeses();
+    var corteAtual=(AVA_CORTE!=null&&meses[AVA_CORTE])?meses[AVA_CORTE]:(meses.length?meses[meses.length-1]:'');
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:640px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar avanço realizado</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(nomeArq)+' · aba '+escAttr(lido.aba)+'</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><tbody>'+
+        '<tr><td>Itens com quantidade</td><td class="r mono">'+lido.linhas.length+
+          ((lido.brutas&&lido.brutas>lido.linhas.length)?(' <span class="note">('+lido.brutas+' linhas, código repetido somado)</span>'):'')+'</td></tr>'+
+        '<tr><td>Acharam o item no orçamento</td><td class="r mono">'+casam.length+
+          (fora.length?(' <span style="color:var(--warn)">('+fora.length+' não)</span>'):'')+'</td></tr>'+
+        '<tr><td>Peso do orçamento coberto</td><td class="r mono">'+fmtDec(pesoTotal>0?100*pesoCasado/pesoTotal:0,1)+'%</td></tr>'+
+        '<tr><td>Executado na planilha</td><td class="r mono">'+fmtMoeda(somaEx)+' de '+fmtMoeda(somaVt)+
+          ' · <b>'+fmtDec(somaVt>0?100*somaEx/somaVt:0,2)+'%</b></td></tr>'+
+      '</tbody></table></div>'+
+      '<label style="display:block;margin-top:12px;font-size:12.5px">O acumulado entra no mês de'+
+        '<select class="einp" id="aiMes" style="width:100%;margin-top:4px">'+
+          meses.map(function(m){ return '<option value="'+m+'"'+(m===corteAtual?' selected':'')+'>'+orcMesLabel(m)+'</option>'; }).join('')+
+        '</select></label>'+
+      '<label style="display:block;margin-top:10px;font-size:12.5px">Medir o avanço por'+
+        '<select class="einp" id="aiBase" style="width:100%;margin-top:4px">'+
+          (lido.temFis?'<option value="fis" selected>Quantidade executada ÷ quantidade total</option>':'')+
+          (lido.temFin?'<option value="fin"'+(lido.temFis?'':' selected')+'>Financeiro executado ÷ valor total</option>':'')+
+        '</select></label>'+
+      '<label style="display:block;margin-top:10px;font-size:12.5px;cursor:pointer">'+
+        '<input type="checkbox" id="aiManual" checked style="margin-right:6px;vertical-align:-1px">'+
+        'Marcar estes itens como <b>apontamento manual</b></label>'+
+      '<div class="note" style="margin:4px 0 0">Sem isso o valor fica gravado mas não é usado: a AVA só lê o lançamento manual nos itens marcados assim. '+
+        'Marcando, estes itens passam a tirar o avanço da planilha e não do cronograma do app — que é o que se quer pra um realizado que o cronograma daqui não cobre.</div>'+
+      (fora.length?('<div class="banner" style="margin-top:10px;color:var(--warn)"><div><b>'+fora.length+' linha(s) sem item correspondente</b> no orçamento em uso, pelo código: '+
+        escAttr(fora.slice(0,8).map(function(x){ return x.cod; }).join(', '))+(fora.length>8?(' e mais '+(fora.length-8)):'')+'. Ficam de fora.</div></div>'):'')+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="aiCancel">Cancelar</button>'+
+        '<button class="btn primary" id="aiOk"'+(casam.length?'':' disabled')+'>Importar avanço</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#aiCancel').addEventListener('click',fecha);
+    back.querySelector('#aiOk').addEventListener('click',function(){
+      var mes=back.querySelector('#aiMes').value;
+      var base=back.querySelector('#aiBase').value;
+      var manual=back.querySelector('#aiManual').checked;
+      var n=0, semPct=0;
+      casam.forEach(function(p){
+        var pct=(base==='fin')?p.l.pctFin:p.l.pctFis;
+        if(pct==null)pct=(base==='fin')?p.l.pctFis:p.l.pctFin;
+        if(pct==null){ semPct++; return; }
+        p.it.rm=p.it.rm||{};
+        p.it.rm[mes]=+(100*pct).toFixed(4);
+        if(manual)p.it.fonteAvanco='manual';
+        n++;
+      });
+      orcSujo(); fecha();
+      AVA_TAB='lanc'; go('ac-ava');
+      toast(n+' item(ns) com avanço lançado em '+orcMesLabel(mes)+
+        (manual?' e marcados como apontamento manual.':'.')+
+        (semPct?(' '+semPct+' sem como calcular o percentual.'):'')+
+        ' Salve pra gravar na obra.');
+    });
+  }
   function avaLancHTML(D){
     var O=orcAtual(), meses=D.meses;
     var th='<th style="min-width:230px">Atividade</th>';
@@ -18947,7 +19114,11 @@
       corpo+='</tr>';
     });
     var nMan=0; D.linhas.forEach(function(L){ if(avaManualNo(L.no))nMan++; });
-    return '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Lançamentos do mês</div>'+
+    return '<div class="card">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
+        '<div class="eyebrow" style="margin-bottom:2px">Lançamentos do mês</div>'+
+        (isReadOnly()?'':'<button class="btn" id="avaImpReal" style="padding:4px 10px;font-size:11.5px" title="Lê a planilha de saldo da obra e lança o avanço acumulado de cada item até a data de corte">↥ Importar avanço realizado</button>')+
+      '</div>'+
       '<div class="note" style="margin-bottom:8px">O <b>CRTR</b> é o custo real do mês, na mesma base do orçamento. '+
       'O avanço é <b>acumulado</b> (%) e só precisa ser lançado quando muda — o valor vale dali em diante. '+
       'Atividade que tira o avanço do cronograma aparece em cinza e não é editável aqui: pra lançar à mão, marque <b>Apontamento: Manual</b> na linha dela, em Cadastro → Orçamento.'+
@@ -19109,6 +19280,8 @@
     if(c)c.addEventListener('change',function(){ AVA_CORTE=+c.value; go('ac-ava'); });
     var s=document.getElementById('avaSalvar');
     if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
+    var impR=document.getElementById('avaImpReal');
+    if(impR)impR.addEventListener('click',avImportarRealizado);
     var pdf=document.getElementById('avaPdf');
     if(pdf)pdf.addEventListener('click',function(){
       document.body.classList.add('printing-report');
