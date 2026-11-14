@@ -9671,9 +9671,13 @@
       if(p){ accP+=p; temP=true; }
       if(r){ accR+=r; temR=true; }
       var fim=orcMesFim(m); if(!fim)return;
+      /* Só o mês que TEM lançamento ganha valor. Carregar o acumulado pra frente aqui fazia o
+       * último mês do histórico parecer ter realizado — e a emenda automática ia parar lá, fora
+       * do plano às vezes, deixando a curva do app saindo do zero. Quem prolonga o último valor
+       * conhecido no desenho é histCurvaNoEixo, que também sabe onde o realizado acaba. */
       pontos.push({iso:mondayOfIso(fim),
-                   e:temP?Math.min(1.5,accP/base):null,
-                   r:temR?Math.min(1.5,accR/base):null});
+                   e:p?Math.min(1.5,accP/base):null,
+                   r:r?Math.min(1.5,accR/base):null});
     });
     if(!pontos.length)return null;
     return {fonte:'histórico do orçamento · '+v.nome,pontos:pontos,base:base,
@@ -12446,7 +12450,7 @@
         botoes+'</div>'+
       '<div style="display:flex;gap:18px;flex-wrap:wrap">'+
         item(curvaHistFonte()==='orcamento'?'Realizado no histórico':'Realizado da planilha',ultR?((100*ultR.r).toFixed(1).replace('.',',')+'%'):'—',
-             ultR?('até '+brDate(ultR.iso)):'a planilha não traz realizado')+
+             ultR?('até '+brDate(ultR.iso)):(curvaHistFonte()==='orcamento'?'o histórico não traz realizado':'a planilha não traz realizado'))+
         item('Emenda com o plano',anc?rotSem(mondayOf(anc.w)):'—',
              anc?(anc.semEfeito?'o plano já chega a 100% nessa semana — a emenda não tem o que esticar'
                               :('o previsto daqui parte de '+anc.base.toFixed(1).replace('.',',')+'%'+
@@ -12459,6 +12463,7 @@
       ((anc&&!anc.semEfeito&&anc.escopo==='saldo'&&anc.vPrev>1)
         ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O cadastro está marcado como <b>só o saldo</b>, mas o plano já acumula '+anc.vPrev.toFixed(1).replace('.',',')+'% até a semana da emenda. Essas semanas ficam de fora e viram um salto na emenda — se o saldo é de hoje, o plano deveria começar na semana da emenda.</div></div>'
         :'')+
+      ((curvaHistFonte()==='orcamento'&&!ultR)        ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O histórico deste orçamento tem <b>previsto</b>, mas nenhum <b>realizado</b>. Por isso o previsto do app começa do zero: não há de onde partir. Carregue o executado em <b>Cadastro → Orçamento → Histórico mensal → ↥ Importar realizado (saldo)</b>.</div></div>'        :'')+
       (pacote||lotViewSet()?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>Com filtro de lotes ou pacote ativo, a curva importada continua sendo a da obra inteira — ela não tem como ser recortada.</div></div>':'')+
     '</div>';
   }
