@@ -5902,6 +5902,11 @@
           '<select class="esel" id="cvCurveSel" style="height:28px">'+curveOpts+'</select>'+
           pacoteSel+
           weekSel+
+          '<select class="esel" id="cvPesoSel" style="height:28px" title="Como cada serviço pesa na curva geral">'+
+            '<option value="auto"'+(curvaPesoModo()==='auto'?' selected':'')+'>Peso: padrão</option>'+
+            (orcTem()?('<option value="orcamento"'+(curvaPesoModo()==='orcamento'?' selected':'')+'>Peso: pelo orçamento (R$)</option>'):'')+
+            '<option value="qtd"'+(curvaPesoModo()==='qtd'?' selected':'')+'>Peso: pela quantidade</option>'+
+          '</select>'+
           '<select class="esel" id="cvEscalaSel" style="height:28px" title="Passo do eixo do tempo">'+
             '<option value="semana"'+(window._curvaSEscala==='mes'?'':' selected')+'>Por semana</option>'+
             '<option value="mes"'+(window._curvaSEscala==='mes'?' selected':'')+'>Por mês</option>'+
@@ -11064,6 +11069,11 @@
         window._curvaSPacote=pacoteSelEl.value||'';
         go('ac-curvas');
       });
+      var pesoSelEl=document.getElementById('cvPesoSel');
+      if(pesoSelEl)pesoSelEl.addEventListener('change',function(){
+        window._curvaSPeso=pesoSelEl.value;
+        go('ac-curvas');
+      });
       var escSelEl=document.getElementById('cvEscalaSel');
       if(escSelEl)escSelEl.addEventListener('change',function(){
         window._curvaSEscala=escSelEl.value==='mes'?'mes':'semana';
@@ -11851,12 +11861,42 @@
     var p=h&&h.pesos;
     return (p&&typeof p==='object')?p:null;
   }
+  /** Quanto cada serviço vale EM DINHEIRO num orçamento qualquer — o da obra ou o que um
+   *  cenário congelou. Só folha vinculada entra: grupo é a soma dos filhos e contaria duas
+   *  vezes, e folha sem vínculo não tem como ter avanço. */
+  function orcPesoPorServico(O){
+    if(!O||!O.itens||!O.itens.length)return null;
+    var base=(O.cfg&&O.cfg.base==='venda')?'venda':'custo';
+    var temFilho={};
+    O.itens.forEach(function(it){ if(it.pai)temFilho[it.sec+'|'+it.pai]=true; });
+    var rs={}, algum=false;
+    O.itens.forEach(function(it){
+      if(temFilho[it.id]||!it.svc)return;
+      var v=orcNum(it[base]); if(!(v>0))return;
+      rs[it.svc]=(rs[it.svc]||0)+v; algum=true;
+    });
+    return algum?rs:null;
+  }
+  /** Como a curva pondera cada serviço. 'auto' é o que o app sempre fez — pesos cadastrados
+   *  se houver, senão quantidade crua. 'orcamento' usa o dinheiro, e é o único jeito de
+   *  comparar dois cenários na mesma régua quando os saldos mudaram: cada curva pondera pelo
+   *  orçamento DELA. Fica à escolha e não muda número de ninguém sem pedir. */
+  function curvaPesoModo(){ return window._curvaSPeso||'auto'; }
   /** Pesos por índice de serviço, já normalizados entre os serviços que TÊM quantidade neste
    *  recorte. Serviço sem quantidade não pode segurar peso: ele travaria a curva abaixo de 100%
-   *  sem nunca ter como avançar. Devolve null quando não há pesos cadastrados. */
-  function curvaPesos(totalByServ){
-    var p=curvaPesosBrutos(); if(!p)return null;
-    var bruto=SERV.map(function(sv){ return Math.max(0,+p[sv.id]||0); });
+   *  sem nunca ter como avançar. Devolve null quando não há pesos — aí a curva soma quantidade.
+   *  `snap` é o cenário dono desta curva: com ele, o dinheiro é o do cenário, não o de hoje. */
+  function curvaPesos(totalByServ,snap){
+    var modo=curvaPesoModo(), bruto=null;
+    if(modo==='qtd')return null;
+    if(modo==='orcamento'){
+      var rs=orcPesoPorServico((snap&&snap.orcamento)?snap.orcamento:orcAtual());
+      if(!rs)return null;
+      bruto=SERV.map(function(sv){ return Math.max(0,+rs[sv.id]||0); });
+    }else{
+      var p=curvaPesosBrutos(); if(!p)return null;
+      bruto=SERV.map(function(sv){ return Math.max(0,+p[sv.id]||0); });
+    }
     var soma=0;
     bruto.forEach(function(v,si){ if(!totalByServ||totalByServ[si]>0)soma+=v; });
     if(!(soma>0))return null;
@@ -12333,14 +12373,14 @@
       (pacote||lotViewSet()?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>Com filtro de lotes ou pacote ativo, a curva importada continua sendo a da obra inteira — ela não tem como ser recortada.</div></div>':'')+
     '</div>';
   }
-  function cumulativePct(weekly,tw,totalByServ,grandTotal){
+  function cumulativePct(weekly,tw,totalByServ,grandTotal,snap){
     /* A curva geral sai de um de dois jeitos:
      *  - com PESOS cadastrados, e a media do avanco de cada servico ponderada pelo peso dele.
      *    E a regua da obra: quem pesa mais na curva e quem representa mais serviço.
      *  - sem pesos, e a soma crua das quantidades sobre o total — o que mistura m3 com m2 e
      *    com metro, e deixa quem tem numero grande mandar na curva. Continua sendo o padrao
      *    pra nao mudar numero de obra que ninguem pediu pra mudar. */
-    var pesos=curvaPesos(totalByServ);
+    var pesos=curvaPesos(totalByServ,snap);
     var accum=SERV.map(function(){return 0;}), grandAccum=0;
     var series={}; SERV.forEach(function(s,si){ series[si]=[0]; });
     var totalSeries=[0];
@@ -12466,6 +12506,25 @@
    *  window._curvaSPacote estiver setado, filtra pra só os lotes daquele pacote contratual —
    *  o cronograma continua calculado integrado (predecessoras entre pacotes funcionam), só a
    *  visão/curva mostrada é que fica recortada. */
+  /** Quantidade total de cada serviço SEGUNDO UM SNAPSHOT — o saldo que o cenário tinha
+   *  quando foi congelado. Lote fora do filtro ou de outro pacote não entra, igual ao
+   *  cálculo do saldo de hoje. Lote/serviço que o snapshot não cita cai no saldo da obra:
+   *  cenário antigo só guardava parte, e zerar o resto inventaria um escopo menor. */
+  function totaisDoSnap(snap,pacote){
+    var q=(snap&&snap.quantidades)||null;
+    var ids=window._LOTIDS||[];
+    return SERV.map(function(sv,si){
+      var t=0;
+      LOTS.forEach(function(l,li){
+        if(!lotInView(li))return;
+        if(pacote&&pacoteOfLote(li)!==pacote)return;
+        var k=ids[li]?(ids[li]+'::'+sv.id):null;
+        var v=(k&&q&&q[k]!==undefined)?+q[k]:null;
+        t+=(v!=null&&isFinite(v))?v:((QTY[li]||[])[si]||0);
+      });
+      return t;
+    });
+  }
   function curvaSData(){
     var pacote=window._curvaSPacote||'';
     var baseline=activeBaseline();
@@ -12479,8 +12538,17 @@
 
     var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(!lotInView(li))return;if(pacote&&pacoteOfLote(li)!==pacote)return;t+=QTY[li][si]||0;});return t;});
     var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+    /* A linha de base mede contra o saldo DELA, não contra o de hoje. Os dois saldos usando
+     * o mesmo denominador era o que fazia a curva do cenário inicial não bater: um escopo
+     * antigo medido com a régua do escopo novo nunca chega a 100%, ou passa de 100%,
+     * dependendo de pra que lado o saldo andou. */
+    var totalLB=totalByServ, grandLB=grandTotal;
+    if(baseline&&baseline.snap&&baseline.snap.quantidades){
+      totalLB=totaisDoSnap(baseline.snap,pacote);
+      grandLB=totalLB.reduce(function(a,b){return a+b;},0);
+    }
     var executivo=cumulativePct(weeklyFromSegs(segsExec,tw),tw,totalByServ,grandTotal);
-    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalByServ,grandTotal):null;
+    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalLB,grandLB,baseline.snap):null;
 
     // realizado: apontamentos reais de Produção Diária, agregados na semana de trabalho correspondente à data
     var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
@@ -14238,6 +14306,11 @@
       feriados:JSON.parse(JSON.stringify(calData())),
       servicos:SERV.map(function(s){return {id:s.id,nome:s.n,unidade:s.u,cor:s.hex,eq:s.eq,produtividade:s.p,lag:s.lag,config:JSON.parse(JSON.stringify(s.cfg||{}))};}),
       quantidades:captureQuantidades(),
+      /* O orçamento entra junto com os saldos: um cenário é o par saldo+valor de um
+       * momento da obra. Sem isso, a curva de um cenário antigo sairia ponderada pelo
+       * dinheiro de hoje — medir o passado com a régua do presente, que é justamente o
+       * que faz o cenário inicial não bater com o que foi vendido. */
+      orcamento:(ORC&&ORC.itens&&ORC.itens.length)?JSON.parse(JSON.stringify(ORC)):null,
       motor:MOTOR_ATUAL
     };
   }
@@ -14253,10 +14326,12 @@
         servicos:Array.isArray(raw.servicos)?raw.servicos:null,
         // cenário gravado antes disso não tem saldo próprio: null = usa o da obra
         quantidades:(raw.quantidades&&typeof raw.quantidades==='object')?raw.quantidades:null,
+        // idem pro orçamento: null = o cenário usa o valor que a obra tem hoje
+        orcamento:(raw.orcamento&&raw.orcamento.itens&&raw.orcamento.itens.length)?raw.orcamento:null,
         motor:(+raw.motor>0)?+raw.motor:1
       };
     }
-    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null,quantidades:null,motor:1};
+    return {ovr:raw,feriados:{holidayWeeks:[],rainPeriods:[]},servicos:null,quantidades:null,orcamento:null,motor:1};
   }
   /** Roda buildSchedule() com um snapshot completo (ajustes + calendário + serviços) em vez do
    *  estado ao vivo, sem alterar o estado global (restaura tudo no finally). snap=null usa o
@@ -14405,6 +14480,12 @@
     }
     window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
     aplicaQuantidadesDoSnap(snap);   // o saldo do cenário entra na edição junto com o resto
+    /* O orçamento do cenário entra como entra o resto: vira o orçamento vivo enquanto o
+     * cenário está aberto. Sair do cenário recarrega a obra inteira do banco, então o
+     * orçamento da obra volta sozinho. Cenário sem orçamento próprio fica com o da obra —
+     * é o que ele sempre usou. */
+    if(snap.orcamento&&snap.orcamento.itens&&snap.orcamento.itens.length)
+      ORC=JSON.parse(JSON.stringify(snap.orcamento));
     adjDirty(); ADJ_PENDING={};
     CENARIO_VISTA=null;              // ver e editar sao modos diferentes; nao ficam ligados juntos
     ACTIVE_CENARIO={id:c.id,nome:c.nome};
@@ -16707,6 +16788,13 @@
   /* ---------- persistência ---------- */
   async function orcSalvar(){
     if(!selectedObra||!SB){ toast('Abra uma obra conectada pra salvar.'); return; }
+    /* Com um cenário aberto, o orçamento editado é o DELE: gravar na obra aqui jogaria o
+     * orçamento do cenário por cima do da obra sem ninguém pedir. */
+    if(ACTIVE_CENARIO){
+      try{ await saveIntoActiveCenario(); ORC_DIRTY=false; }
+      catch(e){ alert('Falha ao salvar no cenário: '+((e&&e.message)||e)); }
+      return;
+    }
     try{
       await sbUpdateObra(selectedObra.id,{orcamento:ORC});
       ORC_DIRTY=false; toast('Orçamento salvo.'); go('cad-orc');
