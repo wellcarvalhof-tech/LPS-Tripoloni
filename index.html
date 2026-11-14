@@ -5902,6 +5902,12 @@
           '<select class="esel" id="cvCurveSel" style="height:28px">'+curveOpts+'</select>'+
           pacoteSel+
           weekSel+
+          ((curvaHistTemArquivo()&&curvaHistTemOrcamento())
+            ? ('<select class="esel" id="cvHistSel" style="height:28px" title="De onde sai o passado da obra: o arquivo de Curva S importado ou o histórico mensal do orçamento">'+
+                '<option value="arquivo"'+(curvaHistFonte()==='arquivo'?' selected':'')+'>Histórico: arquivo de Curva S</option>'+
+                '<option value="orcamento"'+(curvaHistFonte()==='orcamento'?' selected':'')+'>Histórico: do orçamento</option>'+
+              '</select>')
+            : '')+
           '<select class="esel" id="cvPesoSel" style="height:28px" title="Como cada serviço pesa na curva geral">'+
             '<option value="auto"'+(curvaPesoModo()==='auto'?' selected':'')+'>Peso: padrão</option>'+
             (orcTem()?('<option value="orcamento"'+(curvaPesoModo()==='orcamento'?' selected':'')+'>Peso: pelo orçamento (R$)</option>'):'')+
@@ -9620,9 +9626,75 @@
    * desenhada ao lado, nunca substituindo a conta do app — e a tela diz isso.
    *
    * O ganho é o pedaço que o app não tem como calcular: o avanço antes de o plano existir. */
+  /** De onde a Curva S tira o histórico: do arquivo de Curva S importado, ou do histórico
+   *  mensal do orçamento em uso. São duas leituras do mesmo passado e nem sempre existem as
+   *  duas — o seletor só aparece quando há escolha a fazer. Fica na sessão, como os outros
+   *  seletores da tela. */
+  function curvaHistFonte(){
+    var esc=window._curvaHistFonte;
+    if(esc==='orcamento'||esc==='arquivo')return esc;
+    /* Sem escolha feita vale a que existir: quem acabou de carregar o realizado no orçamento
+     * não precisa descobrir um seletor pra ver o que importou. Com as duas, o arquivo — é a
+     * leitura oficial da obra, e o seletor fica lá pra trocar. */
+    return curvaHistTemArquivo()?'arquivo':'orcamento';
+  }
+  /** Último dia de 'AAAA-MM'. */
+  function orcMesFim(k){
+    var p=String(k||'').split('-'), a=+p[0], m=+p[1];
+    if(!a||!m)return null;
+    var d=new Date(a,m,0);   // dia 0 do mês seguinte = último do mês
+    return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+  }
+  /** O histórico mensal do orçamento lido como curva: um ponto por mês, no fechamento dele,
+   *  com o acumulado em percentual.
+   *
+   *  O denominador é o total de REFERÊNCIA do histórico: o contrato de onde o realizado foi
+   *  tirado, guardado na importação. Sem ele vale a soma do previsto; sem os dois, o total do
+   *  orçamento em uso. Dividir o realizado pela soma dele mesmo daria 100% sempre, que é o
+   *  erro clássico dessa conta. */
+  function orcHistCurva(){
+    var v=orcVersaoAtiva(); if(!v)return null;
+    var h=orcHistDe(v); if(!h||!h.meses.length)return null;
+    var soma=function(o){ var t=0; Object.keys(o||{}).forEach(function(k){ t+=orcNum(o[k]); }); return t; };
+    var base=orcNum(h.base);
+    if(!(base>0))base=soma(h.prev);
+    if(!(base>0))base=orcBAC();
+    if(!(base>0))return null;
+    var porMes=function(o,m){
+      var t=0, suf='::'+m;
+      Object.keys(o||{}).forEach(function(k){ if(k.slice(-suf.length)===suf)t+=orcNum(o[k]); });
+      return t;
+    };
+    var pontos=[], accP=0, accR=0, temP=false, temR=false;
+    h.meses.forEach(function(m){
+      var p=porMes(h.prev,m), r=porMes(h.real,m);
+      if(p){ accP+=p; temP=true; }
+      if(r){ accR+=r; temR=true; }
+      var fim=orcMesFim(m); if(!fim)return;
+      pontos.push({iso:mondayOfIso(fim),
+                   e:temP?Math.min(1.5,accP/base):null,
+                   r:temR?Math.min(1.5,accR/base):null});
+    });
+    if(!pontos.length)return null;
+    return {fonte:'histórico do orçamento · '+v.nome,pontos:pontos,base:base,
+            temPrevisto:temP,temRealizado:temR};
+  }
+  /** Verdadeiro quando há histórico nos dois lugares — é o que faz o seletor aparecer. */
+  function curvaHistTemOrcamento(){ return !!orcHistCurva(); }
+  function curvaHistTemArquivo(){
+    var h=window._OBRA&&window._OBRA.historico, c=h&&h.curva;
+    return !!(c&&c.pontos&&c.pontos.length);
+  }
   function histCurva(){
+    /* A emenda com o plano — âncora, escopo e % de partida — é configuração da tela e vale
+     * pras duas fontes: ela diz onde o previsto daqui encosta, não de onde o passado veio. */
     var h=window._OBRA&&window._OBRA.historico;
     var c=h&&h.curva;
+    if(curvaHistFonte()==='orcamento'){
+      var oc=orcHistCurva();
+      if(oc)return {fonte:oc.fonte,pontos:oc.pontos,
+                    ancora:(c&&c.ancora)||'',escopo:c&&c.escopo,baseAjuste:c&&c.baseAjuste};
+    }
     return (c&&c.pontos&&c.pontos.length)?c:null;
   }
   /** Segunda-feira da semana ISO (ano, semana). A semana 1 é a que contém 4 de janeiro. */
@@ -11067,6 +11139,11 @@
       var pacoteSelEl=document.getElementById('cvPacoteSel');
       if(pacoteSelEl)pacoteSelEl.addEventListener('change',function(){
         window._curvaSPacote=pacoteSelEl.value||'';
+        go('ac-curvas');
+      });
+      var histSelEl=document.getElementById('cvHistSel');
+      if(histSelEl)histSelEl.addEventListener('change',function(){
+        window._curvaHistFonte=histSelEl.value;
         go('ac-curvas');
       });
       var pesoSelEl=document.getElementById('cvPesoSel');
@@ -16527,7 +16604,8 @@
     if(!h||typeof h!=='object')return null;
     return {meses:Array.isArray(h.meses)?h.meses.slice().sort():[],
             prev:(h.prev&&typeof h.prev==='object')?h.prev:{},
-            real:(h.real&&typeof h.real==='object')?h.real:{}};
+            real:(h.real&&typeof h.real==='object')?h.real:{},
+            base:+h.base||0};
   }
   function orcHistAtivo(){
     var v=orcVersaoAtiva();
@@ -16536,7 +16614,7 @@
     return (h&&h.meses.length)?h:null;
   }
   function orcHistGarante(v){
-    if(!v.hist||typeof v.hist!=='object')v.hist={meses:[],prev:{},real:{}};
+    if(!v.hist||typeof v.hist!=='object')v.hist={meses:[],prev:{},real:{},base:0};
     if(!Array.isArray(v.hist.meses))v.hist.meses=[];
     if(!v.hist.prev)v.hist.prev={};
     if(!v.hist.real)v.hist.real={};
@@ -17479,6 +17557,9 @@
         var sid=sel?sel.value:'';
         if(!sid)return;
         usados++;
+        /* O contrato de onde este realizado saiu é o denominador da curva depois. Sem
+         * guardar aqui, dividir o realizado pela soma dele mesmo daria 100% sempre. */
+        if(g.ref>0)h.base=(orcNum(h.base)||0)+g.ref;
         var porMes=mesUnico?(function(){ var o={}; o[mesUnico]=g.total; return o; })():g.meses;
         Object.keys(porMes).forEach(function(m){
           var k=sid+'::'+m;
