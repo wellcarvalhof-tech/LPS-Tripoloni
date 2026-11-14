@@ -12633,6 +12633,97 @@
       return t;
     });
   }
+  /** O realizado que veio no histórico do orçamento, por SERVIÇO: quanto cada um já tinha
+   *  executado, em reais acumulados, mês a mês — e quanto ele vale no orçamento, que é o
+   *  denominador pra isso virar percentual de avanço daquele serviço.
+   *
+   *  Sem isto, escolher um serviço ou um grupo na Curva S mostrava o realizado dos APONTAMENTOS
+   *  do app, que é zero no período que o histórico cobre. A curva geral mostrava o histórico e a
+   *  do serviço mostrava zero — a mesma tela dizendo duas coisas. */
+  function orcHistRealPorServico(){
+    var v=orcVersaoAtiva(); if(!v)return null;
+    var h=orcHistDe(v); if(!h||!h.meses.length)return null;
+    var valor=orcPesoPorServico(v.orc);
+    if(!valor)return null;
+    var temAlgum=false, porSvc={};
+    SERV.forEach(function(sv){
+      var acum=0, serie=[];
+      h.meses.forEach(function(m){
+        var x=orcNum(h.real[sv.id+'::'+m]);
+        if(x){ acum+=x; temAlgum=true; }
+        var fim=orcMesFim(m);
+        if(fim)serie.push({iso:mondayOfIso(fim),acum:acum});
+      });
+      if(serie.length)porSvc[sv.id]=serie;
+    });
+    if(!temAlgum)return null;
+    var ultIso='';
+    h.meses.forEach(function(m){
+      var fim=orcMesFim(m);
+      if(fim){ var iso=mondayOfIso(fim); if(iso>ultIso)ultIso=iso; }
+    });
+    return {porSvc:porSvc,valor:valor,ultIso:ultIso,base:orcNum(h.base)};
+  }
+  /** Emenda o realizado do app no realizado do histórico, serviço por serviço.
+   *
+   *  Até a última semana coberta pelo histórico vale o histórico — é o período que o app não
+   *  tem como contar, porque a obra andou antes dele. Depois dali, o que o app apontou CONTINUA
+   *  de onde o histórico parou: soma-se o que foi apontado da virada pra cá. Somar os dois
+   *  inteiros contaria o mesmo avanço duas vezes. */
+  function realComHistorico(real,H,tw,totalByServ){
+    var series={}, ultW=0;
+    for(var w=1;w<=tw;w++){
+      if(mondayOf(w).toISOString().slice(0,10)<=H.ultIso)ultW=w;
+    }
+    var pctHistEm=function(sid,iso){
+      var s=H.porSvc[sid]; if(!s||!s.length)return null;
+      var val=orcNum(H.valor[sid]); if(!(val>0))return null;
+      var ac=0, achou=false;
+      s.forEach(function(p){ if(p.iso<=iso){ ac=p.acum; achou=true; } });
+      return achou?Math.min(100,100*ac/val):0;
+    };
+    SERV.forEach(function(sv,si){
+      var orig=real.series[si]||[], out=[0];
+      var noCorte=null;
+      for(var w=1;w<=tw;w++){
+        var iso=mondayOf(w).toISOString().slice(0,10);
+        var ph=pctHistEm(sv.id,iso);
+        if(ph==null){ out.push(orig[w]==null?0:orig[w]); continue; }
+        if(w<=ultW){ out.push(ph); noCorte={h:ph,app:orig[w]||0}; continue; }
+        /* Depois do histórico: o que o app apontou DALI pra frente, somado ao que já estava. */
+        var base=noCorte?noCorte.h:ph;
+        var appNoCorte=noCorte?noCorte.app:0;
+        var delta=(orig[w]||0)-appNoCorte;
+        out.push(Math.min(100,Math.max(base,base+(delta>0?delta:0))));
+      }
+      series[si]=out;
+    });
+    /* A curva geral é a mesma conta da curva do histórico: o acumulado de todos sobre a base de
+     * referência. Com pesos cadastrados ou pelo orçamento, vale a média ponderada das séries —
+     * que agora já são as do histórico. */
+    var pesos=curvaPesos(totalByServ,null);
+    var totalSeries=[0];
+    for(var w2=1;w2<=tw;w2++){
+      if(pesos){
+        var v=0, somaP=0;
+        SERV.forEach(function(sv,si){
+          if(!pesos[si])return;
+          somaP+=pesos[si];
+          v+=pesos[si]*Math.min(100,series[si][w2]||0);
+        });
+        totalSeries.push(somaP>0?v/somaP:0);
+      }else{
+        var acTot=0, valTot=0;
+        SERV.forEach(function(sv,si){
+          var val=orcNum(H.valor[sv.id]); if(!(val>0))return;
+          valTot+=val;
+          acTot+=val*Math.min(100,series[si][w2]||0)/100;
+        });
+        totalSeries.push(valTot>0?100*acTot/valTot:0);
+      }
+    }
+    return {series:series,totalSeries:totalSeries};
+  }
   function curvaSData(){
     var pacote=window._curvaSPacote||'';
     var baseline=activeBaseline();
@@ -12691,6 +12782,12 @@
       if(t>totalByServ[si]*1.001)acimaDoCadastro.push({nome:sv.n,pct:100*t/totalByServ[si]});
     });
     var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal);
+    /* Com o histórico do orçamento escolhido, o realizado de CADA serviço vem dele: senão a
+     * curva geral mostra o passado e a do serviço mostra zero, na mesma tela. */
+    if(curvaHistFonte()==='orcamento'){
+      var HR=orcHistRealPorServico();
+      if(HR)real=realComHistorico(real,HR,tw,totalByServ);
+    }
 
     /* A ancora emenda o plano no realizado que veio da planilha: na semana escolhida a curva
      * do app vale o que a obra ja tinha, e o que falta do plano preenche o que falta ate 100%.
