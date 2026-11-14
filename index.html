@@ -16872,6 +16872,18 @@
   /** Nomear o serviço de um grupo vale pra tudo que está dentro dele — é o que se espera de uma
    *  EAP: o item 12.1 "Drenagem superficial" não tem como ser de um serviço e as sarjetas dele
    *  de outro, a não ser que alguém abra o grupo e diga isso item a item. */
+  /** Marcar a fonte do apontamento vale pra subárvore inteira, igual ao vínculo: o item
+   *  12.1 não tem como ser do cronograma e as sarjetas dele manuais, a não ser que alguém
+   *  abra o grupo e diga isso item a item. */
+  function orcAplicaFonte(no,fonte){
+    var n=0;
+    (function anda(x){
+      x.it.fonteAvanco=(fonte==='manual')?'manual':'cronograma'; n++;
+      x.filhos.forEach(anda);
+    })(no);
+    orcSujo();
+    return n;
+  }
   function orcAplicaSvc(no,svcId){
     var n=0;
     (function anda(x){
@@ -17049,6 +17061,9 @@
           if(!o.crono)i.pm=(v&&v.pm)?v.pm:{};
           if(!(o.svc&&novo._temColunaSvc))i.svc=v?(v.svc||null):null;
           if(v&&v.rm&&Object.keys(v.rm).length)i.rm=v.rm;
+          /* A fonte do apontamento é escolha de quem usa, não dado da planilha: trocar a
+           * estrutura não pode desmarcar o que foi marcado como manual. */
+          if(v&&v.fonteAvanco)i.fonteAvanco=v.fonteAvanco;
         });
         if(!o.crono&&antigo&&antigo.meses&&antigo.meses.length)novo.meses=antigo.meses.slice();
         alvo=novo;
@@ -17095,6 +17110,7 @@
   }
   function orcLinhaHTML(no,arv,total){
     var it=no.it, temFilho=!!no.filhos.length;
+    var manual=avaManualNo(no);
     var aberto=orcNoAberto(it);
     var pct=total>0?(100*no.peso/total):0;
     var uni=orcSvcSubarvore(no);
@@ -17119,6 +17135,15 @@
           ? 'Os itens dentro deste grupo não apontam todos pro mesmo serviço — ou são serviços diferentes, ou parte está sem vínculo. Escolher um aqui aplica a todos de uma vez.'
           : (temFilho?'Escolher aqui aplica a todos os itens dentro do grupo. Abra o grupo pra ajustar item a item.':'Serviço deste item'))+
         '">'+svcOpts+'</select></td>'+
+      /* De onde vem o AVANÇO desta linha. Por regra é o cronograma — o serviço vinculado
+       * diz quanto andou. Manual é pra exceção: item que o cronograma não representa e que
+       * alguém aponta na mão, na aba Lançamentos da AVA. */
+      '<td'+(manual?' style="background:var(--warn-bg)"':'')+'>'+
+        '<select class="einp" data-orcfonte="'+escAttr(it.id)+'" style="min-width:118px" title="'+
+        (temFilho?'Escolher aqui aplica a todos os itens dentro do grupo.':'De onde vem o avanço deste item')+'">'+
+          '<option value="cronograma"'+(manual?'':' selected')+'>Cronograma</option>'+
+          '<option value="manual"'+(manual?' selected':'')+'>Manual</option>'+
+        '</select></td>'+
       '</tr>';
     if(aberto)no.filhos.forEach(function(f){ html+=orcLinhaHTML(f,arv,total); });
     return html;
@@ -17350,10 +17375,10 @@
       '<button class="btn" id="orcAuto" style="padding:4px 10px;font-size:11.5px" title="Vincula por semelhança de nome com os serviços cadastrados">Vincular por nome</button></div></div>'+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
         '<th>Item</th><th>Descrição</th><th>Un.</th><th class="r">Quantidade</th><th class="r">Custo unit.</th>'+
-        '<th class="r">'+(O.cfg.base==='venda'?'Faturamento':'Custo')+'</th><th class="r">% do total</th><th>Serviço do app</th>'+
+        '<th class="r">'+(O.cfg.base==='venda'?'Faturamento':'Custo')+'</th><th class="r">% do total</th><th>Serviço do app</th><th>Apontamento</th>'+
       '</tr></thead><tbody>'+
       arv.raizes.map(function(r){
-        var cab='<tr class="orc-sec"><td colspan="8" style="background:var(--elev);font-weight:700">'+escAttr(orcSecaoNome(r.it.sec))+'</td></tr>';
+        var cab='<tr class="orc-sec"><td colspan="9" style="background:var(--elev);font-weight:700">'+escAttr(orcSecaoNome(r.it.sec))+'</td></tr>';
         return (r.it.cod==='1'?cab:'')+orcLinhaHTML(r,arv,total);
       }).join('')+
       '</tbody></table></div></div>';
@@ -17407,6 +17432,15 @@
         ORCS=ORCS.filter(function(x){ return x.id!==id; });
         if(ORC_ATIVO===id){ ORC_ATIVO=ORCS.length?ORCS[0].id:''; ORC=ORCS.length?ORCS[0].orc:null; }
         orcSujo(); go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orcfonte]').forEach(function(sel){
+      sel.addEventListener('change',function(){
+        var arv=orcArvore(), no=arv.mapa[sel.getAttribute('data-orcfonte')];
+        if(!no)return;
+        var n=orcAplicaFonte(no,sel.value);
+        go('cad-orc');
+        if(n>1)toast('Aplicado a '+n+' linha(s) dentro do grupo.');
       });
     });
     document.querySelectorAll('[data-orctab]').forEach(function(bt){
@@ -17579,6 +17613,7 @@
    *  Filho sem vínculo entra com 0, a mesma regra que a AVA já aplica na atividade solta; se
    *  NENHUM filho tem de onde tirar avanço, devolve null e o lançamento manual assume. */
   function avaAvancoNo(no,mes){
+    if(avaManualNo(no))return avaAvancoManual(no,mes);
     if(!no.filhos.length)return no.it.svc?avaAvancoServico(no.it.svc,mes):null;
     var uni=orcSvcSubarvore(no);
     if(uni.svc&&!uni.misto)return avaAvancoServico(uni.svc,mes);
@@ -17729,7 +17764,33 @@
   /** De onde sai o avanço de uma atividade: de um serviço só, dos itens dentro dela (grupo
    *  ajustado item a item) ou do lançamento manual. Decide o que a tela mostra e o que ela
    *  deixa editar — campo editável numa atividade que já tira avanço de serviço é armadilha. */
+  /** Um nó é de apontamento MANUAL quando ele — ou a subárvore inteira dele — está marcado
+   *  assim no orçamento. Marcar o grupo marca tudo que está dentro, que é como o vínculo
+   *  com o serviço já se comporta. Grupo com parte manual e parte do cronograma não é
+   *  manual: ele é a média dos filhos, cada um pela regra dele. */
+  function avaManualNo(no){
+    if(!no.filhos.length)return no.it.fonteAvanco==='manual';
+    if(no.it.fonteAvanco==='manual')return true;
+    var todos=true, algum=false;
+    no.filhos.forEach(function(f){ if(avaManualNo(f))algum=true; else todos=false; });
+    return algum&&todos;
+  }
+  /** Avanço lançado À MÃO, acumulado até o mês. O lançamento vale do mês dele em diante:
+   *  é acumulado, não incremento, e só precisa ser escrito quando muda. */
+  function avaAvancoManual(no,mes){
+    var rm=no.it.rm; if(!rm)return null;
+    var ms=avaMeses(), ult=null;
+    for(var i=0;i<ms.length;i++){
+      var v=rm[ms[i]];
+      if(v!=null&&v!=='')ult=orcNum(v)/100;
+      if(ms[i]===mes)break;
+    }
+    return ult;
+  }
   function avaFonteDoNo(no){
+    /* Marcado como manual, a fonte é manual mesmo que haja serviço vinculado — o vínculo
+     * continua valendo pro peso e pra distribuição, só o AVANÇO deixa de vir do cronograma. */
+    if(avaManualNo(no))return {tipo:'manual',id:null,nome:''};
     var uni=orcSvcSubarvore(no);
     var id=no.filhos.length?uni.svc:(no.it.svc||null);
     if(id){
@@ -18586,7 +18647,8 @@
     var corpo='';
     D.linhas.forEach(function(L){
       var it=L.no.it, fonte=avaFonteDoNo(L.no), sv=fonte.tipo==='manual'?null:fonte;
-      corpo+='<tr><td>'+escAttr(it.nome)+' <span class="note mono">'+escAttr(it.cod)+'</span>'+
+      corpo+='<tr'+(fonte.tipo==='manual'?' style="background:var(--warn-bg)"':'')+'><td>'+escAttr(it.nome)+' <span class="note mono">'+escAttr(it.cod)+'</span>'+
+        (fonte.tipo==='manual'?' <span class="pill" title="O avanço desta atividade é lançado à mão aqui">manual</span>':'')+
         (sv?(' <span class="pill mut" title="'+(fonte.tipo==='misto'
               ? 'Os itens dentro desta atividade não apontam todos pro mesmo serviço: o avanço é a média deles, ponderada pelo custo (item sem vínculo entra como 0%). Ajuste item a item no orçamento.'
               : 'Avanço vem do serviço vinculado — não é editável aqui')+'">'+escAttr(sv.nome)+'</span>'):'')+'</td>';
@@ -18600,10 +18662,12 @@
       });
       corpo+='</tr>';
     });
+    var nMan=0; D.linhas.forEach(function(L){ if(avaManualNo(L.no))nMan++; });
     return '<div class="card"><div class="eyebrow" style="margin-bottom:2px">Lançamentos do mês</div>'+
       '<div class="note" style="margin-bottom:8px">O <b>CRTR</b> é o custo real do mês, na mesma base do orçamento. '+
       'O avanço é <b>acumulado</b> (%) e só precisa ser lançado quando muda — o valor vale dali em diante. '+
-      'Atividade vinculada a um serviço traz o avanço do app e não é editável aqui.</div>'+
+      'Atividade que tira o avanço do cronograma aparece em cinza e não é editável aqui: pra lançar à mão, marque <b>Apontamento: Manual</b> na linha dela, em Cadastro → Orçamento.'+
+      (nMan?(' Nesta obra, <b>'+nMan+'</b> atividade(s) estão em apontamento manual.'):'')+'</div>'+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:11.5px"><thead><tr>'+th+'</tr></thead>'+
       '<tbody>'+linCusto+corpo+'</tbody></table></div></div>';
   }
