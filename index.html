@@ -17391,7 +17391,11 @@
       }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
     });
   }
-  function histMapaDialogo(grupos,meses,nomeArq){
+  /** opts.escolheMes: o arquivo é um retrato acumulado, sem série mensal — o mês vem de um
+   *  seletor e o valor inteiro de cada grupo entra nele.
+   *  opts.med: 'prev' ou 'real', o valor inicial do seletor. */
+  function histMapaDialogo(grupos,meses,nomeArq,opts){
+    opts=opts||{};
     var back=document.createElement('div'); back.className='segmenu-backdrop';
     /* Sugestão por semelhança de nome já marcada: a maioria casa, e conferir é mais rápido do
      * que escolher setenta vezes do zero. */
@@ -17401,29 +17405,46 @@
       var sv=nm?SERV.filter(function(x){ return x.n===nm; })[0]:null;
       sug[g.id]=sv?sv.id:'';
     });
-    var opts=function(sel){
+    var svcOpts=function(sel){
       return '<option value=""'+(sel?'':' selected')+'>— não importar —</option>'+
         SERV.map(function(sv){ return '<option value="'+escAttr(sv.id)+'"'+(sel===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>'; }).join('');
     };
     var total=0; grupos.forEach(function(g){ total+=g.total; });
+    var temRef=grupos.some(function(g){ return g.ref>0; });
     var linhas=grupos.map(function(g){
-      return '<tr><td class="mono" style="white-space:nowrap">'+escAttr(g.cod)+'</td>'+
-        '<td>'+escAttr(g.nome)+'<div class="note" style="margin:0">'+escAttr(g.secNome)+'</div></td>'+
+      return '<tr>'+(opts.escolheMes?'':('<td class="mono" style="white-space:nowrap">'+escAttr(g.cod)+'</td>'))+
+        '<td>'+escAttr(g.nome)+(g.secNome?('<div class="note" style="margin:0">'+escAttr(g.secNome)+'</div>'):'')+'</td>'+
+        (temRef?('<td class="r mono note">'+fmtMoedaCurta(g.ref||0)+'</td>'):'')+
         '<td class="r mono">'+fmtMoedaCurta(g.total)+'</td>'+
-        '<td><select class="einp" data-hmap="'+escAttr(g.id)+'" style="min-width:180px">'+opts(sug[g.id])+'</select></td></tr>';
+        '<td><select class="einp" data-hmap="'+escAttr(g.id)+'" style="min-width:180px">'+svcOpts(sug[g.id])+'</select></td></tr>';
     }).join('');
+    /* Os meses pra escolher: os do orçamento em uso e os da AVA, que é onde a curva anda. */
+    var mesesEsc=[];
+    if(opts.escolheMes){
+      var vis={};
+      ((orcAtual().meses)||[]).concat(avaMeses()||[]).forEach(function(m){ if(m&&!vis[m]){ vis[m]=1; mesesEsc.push(m); } });
+      mesesEsc.sort();
+      if(!mesesEsc.length)mesesEsc=[orcMesKey(new Date())];
+    }
     back.innerHTML='<div class="segmenu-panel card" style="max-width:860px">'+
       '<div class="eyebrow" style="margin-bottom:2px">Importar histórico — '+escAttr(nomeArq)+'</div>'+
-      '<div class="note" style="margin-bottom:10px">'+grupos.length+' grupo(s) e '+meses.length+' mês(es), '+fmtMoeda(total)+' no total. '+
-        'Diga a que serviço cada grupo corresponde — o valor mensal dele entra no histórico desse serviço. '+
+      '<div class="note" style="margin-bottom:10px">'+grupos.length+' grupo(s)'+(opts.escolheMes?'':(' e '+meses.length+' mês(es)'))+', '+fmtMoeda(total)+' no total. '+
+        'Diga a que serviço cada grupo corresponde — o valor dele entra no histórico desse serviço. '+
         'O que ficar em <b>— não importar —</b> fica de fora, e o diálogo diz quanto isso representa. '+
-        '<b>O orçamento não é alterado.</b></div>'+
+        (opts.nota||'<b>O orçamento não é alterado.</b>')+'</div>'+
       '<label style="display:block;margin-bottom:10px;font-size:12.5px">Os valores entram como'+
         '<select class="einp" id="hmMed" style="width:220px;margin-left:6px">'+
-          '<option value="prev" selected>Previsto</option><option value="real">Realizado</option>'+
+          '<option value="prev"'+(opts.med==='real'?'':' selected')+'>Previsto</option>'+
+          '<option value="real"'+(opts.med==='real'?' selected':'')+'>Realizado</option>'+
         '</select></label>'+
+      (opts.escolheMes?('<label style="display:block;margin-bottom:10px;font-size:12.5px">No mês de'+
+        '<select class="einp" id="hmMes" style="width:220px;margin-left:6px">'+
+          mesesEsc.map(function(m,i){ return '<option value="'+m+'"'+(i===mesesEsc.length-1?' selected':'')+'>'+orcMesLabel(m)+'</option>'; }).join('')+
+        '</select>'+
+        '<div class="note" style="margin:4px 0 0">O arquivo é um acumulado até a data de corte, não uma série mensal: o valor inteiro entra neste mês, e é dele que a curva e a AVA passam a contar.</div></label>'):'')+
       '<div class="tbl-wrap" style="max-height:50vh"><table class="edtbl" style="font-size:12px"><thead><tr>'+
-        '<th>Item</th><th>Grupo</th><th class="r">Total</th><th>Serviço do app</th></tr></thead>'+
+        (opts.escolheMes?'':'<th>Item</th>')+'<th>Grupo</th>'+(temRef?('<th class="r">'+(opts.rotuloRef||'Referência')+'</th>'):'')+
+        '<th class="r">'+(opts.rotuloValor||'Total')+'</th><th>Serviço do app</th></tr></thead>'+
         '<tbody>'+linhas+'</tbody></table></div>'+
       '<div class="note" style="margin-top:8px" id="hmResumo"></div>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">'+
@@ -17449,18 +17470,20 @@
       var v=orcVersaoAtiva(); if(!v){ fecha(); return; }
       var h=orcHistGarante(v);
       var med=back.querySelector('#hmMed').value==='real'?'real':'prev';
+      var mesUnico=opts.escolheMes?back.querySelector('#hmMes').value:null;
       var usados=0, valor=0;
-      meses.forEach(function(m){ if(h.meses.indexOf(m)<0)h.meses.push(m); });
+      (mesUnico?[mesUnico]:meses).forEach(function(m){ if(h.meses.indexOf(m)<0)h.meses.push(m); });
       h.meses.sort();
       grupos.forEach(function(g){
         var sel=back.querySelector('[data-hmap="'+g.id+'"]');
         var sid=sel?sel.value:'';
         if(!sid)return;
         usados++;
-        Object.keys(g.meses).forEach(function(m){
+        var porMes=mesUnico?(function(){ var o={}; o[mesUnico]=g.total; return o; })():g.meses;
+        Object.keys(porMes).forEach(function(m){
           var k=sid+'::'+m;
-          h[med][k]=(orcNum(h[med][k])||0)+g.meses[m];
-          valor+=g.meses[m];
+          h[med][k]=(orcNum(h[med][k])||0)+porMes[m];
+          valor+=porMes[m];
         });
       });
       v.fonteDist='orcamento';
@@ -17497,6 +17520,7 @@
         '<option value="real"'+(med==='real'?' selected':'')+'>Realizado (R$)</option>'+
       '</select>'+
       (ro?'':('<button class="btn" id="orcHistImp" style="padding:4px 10px;font-size:11.5px" title="Lê um cronograma físico-financeiro e soma os valores mensais dele neste histórico, sem mexer no orçamento">↥ Importar cronograma FF</button>'+
+             '<button class="btn" id="orcHistReal" style="padding:4px 10px;font-size:11.5px" title="Lê a planilha de saldo da obra e lança no histórico o executado acumulado de cada subgrupo, no mês escolhido">↥ Importar realizado (saldo)</button>'+
              '<button class="btn" id="orcHistAdd" style="padding:4px 10px;font-size:11.5px">+ mês</button>'+
              '<button class="btn" id="orcHistDoCrono" style="padding:4px 10px;font-size:11.5px" title="Preenche o previsto com o cronograma de custo que veio na planilha (as colunas COTA), somado por serviço">Preencher do cronograma de custo</button>'))+
       '<span class="note" style="align-self:center">'+h.meses.length+' mês(es)</span></div>';
@@ -17555,6 +17579,8 @@
   function orcHistWire(){
     var imp=document.getElementById('orcHistImp');
     if(imp)imp.addEventListener('click',histImportarFF);
+    var impR=document.getElementById('orcHistReal');
+    if(impR)impR.addEventListener('click',histImportarRealizado);
     var on=document.getElementById('orcHistOn');
     if(on)on.addEventListener('change',function(){
       var v=orcVersaoAtiva(); if(!v)return;
@@ -18996,9 +19022,28 @@
     return {linhas:agrupadas,brutas:linhas.length,aba:alvo.nome,
             subgrupos:Object.keys(subs).length,temFis:cq>=0,temFin:cf>=0};
   }
-  function avImportarRealizado(){
+  /** Os SUBGRUPOS da planilha de saldo são os nomes dos serviços da obra — TERRAPLENAGEM -
+   *  CORTE, CFT DUP, BASE DUP, DRENO… — então o realizado dela entra no histórico por serviço
+   *  somando as linhas de cada subgrupo. O que não for serviço do app (CONT GABI, QTDE 1, linha
+   *  sem subgrupo) aparece na tela pra ser mapeado ou deixado de fora.
+   *
+   *  O arquivo é um retrato ACUMULADO até a data de corte, não uma série mensal: por isso o mês
+   *  é escolhido na hora, e o valor inteiro entra nele. É a partir dele que a curva e a AVA
+   *  passam a contar. */
+  function avImpGruposPorSubgrupo(lido){
+    var por={}, ordem=[];
+    lido.linhas.forEach(function(x){
+      var nome=x.sub||'(sem subgrupo)';
+      if(!por[nome]){ por[nome]={id:'sg:'+nome,cod:'',nome:nome,secNome:'',total:0,ref:0,meses:{}}; ordem.push(nome); }
+      por[nome].total+=x.exf;
+      por[nome].ref+=x.vt;
+    });
+    return ordem.map(function(k){ return por[k]; })
+      .sort(function(a,b){ return b.total-a.total; });
+  }
+  function histImportarRealizado(){
     if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
-    if(!orcTem()){ alert('Importe o orçamento antes: o avanço é lançado nos itens dele.'); return; }
+    if(!orcVersaoAtiva()){ alert('Importe ou escolha um orçamento antes: o histórico é dele.'); return; }
     pickExcelFile(function(file){
       readWorkbookFile(file).then(function(wb){
         var lido=avImpLe(wb);
@@ -19007,83 +19052,12 @@
             'Procuro uma aba com as colunas ITEM PMG, DESCRIÇÃO e QTDE. TOTAL, e um bloco "EXECUTADO E MEDIDO" com QTDE e FINANCEIRO.');
           return;
         }
-        avImpDialogo(lido,file.name);
+        var grupos=avImpGruposPorSubgrupo(lido);
+        if(!grupos.length){ alert('O arquivo foi lido, mas não achei valor executado em nenhuma linha.'); return; }
+        histMapaDialogo(grupos,[],file.name,{escolheMes:true,med:'real',
+          rotuloValor:'Executado',rotuloRef:'Do contrato',
+          nota:'O executado acumulado de cada subgrupo entra no histórico do serviço escolhido, no mês escolhido. <b>O orçamento não é alterado.</b>'});
       }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
-    });
-  }
-  function avImpDialogo(lido,nomeArq){
-    var O=orcAtual();
-    var porCod={};
-    O.itens.forEach(function(it){ if(it.folha)(porCod[it.cod]=porCod[it.cod]||[]).push(it); });
-    var casam=[], fora=[];
-    lido.linhas.forEach(function(x){
-      var c=porCod[x.cod]||[];
-      if(c.length===1)casam.push({l:x,it:c[0]});
-      else fora.push(x);
-    });
-    var pesoCasado=0, pesoTotal=0;
-    O.itens.forEach(function(it){ if(it.folha)pesoTotal+=orcNum(it[(O.cfg.base==='venda')?'venda':'custo']); });
-    casam.forEach(function(p){ pesoCasado+=orcNum(p.it[(O.cfg.base==='venda')?'venda':'custo']); });
-    var somaVt=0, somaEx=0;
-    lido.linhas.forEach(function(x){ somaVt+=x.vt; somaEx+=x.exf; });
-    var meses=avaMeses();
-    var corteAtual=(AVA_CORTE!=null&&meses[AVA_CORTE])?meses[AVA_CORTE]:(meses.length?meses[meses.length-1]:'');
-    var back=document.createElement('div'); back.className='segmenu-backdrop';
-    back.innerHTML='<div class="segmenu-panel card" style="max-width:640px">'+
-      '<div class="eyebrow" style="margin-bottom:2px">Importar avanço realizado</div>'+
-      '<div class="note" style="margin-bottom:12px">'+escAttr(nomeArq)+' · aba '+escAttr(lido.aba)+'</div>'+
-      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><tbody>'+
-        '<tr><td>Itens com quantidade</td><td class="r mono">'+lido.linhas.length+
-          ((lido.brutas&&lido.brutas>lido.linhas.length)?(' <span class="note">('+lido.brutas+' linhas, código repetido somado)</span>'):'')+'</td></tr>'+
-        '<tr><td>Acharam o item no orçamento</td><td class="r mono">'+casam.length+
-          (fora.length?(' <span style="color:var(--warn)">('+fora.length+' não)</span>'):'')+'</td></tr>'+
-        '<tr><td>Peso do orçamento coberto</td><td class="r mono">'+fmtDec(pesoTotal>0?100*pesoCasado/pesoTotal:0,1)+'%</td></tr>'+
-        '<tr><td>Executado na planilha</td><td class="r mono">'+fmtMoeda(somaEx)+' de '+fmtMoeda(somaVt)+
-          ' · <b>'+fmtDec(somaVt>0?100*somaEx/somaVt:0,2)+'%</b></td></tr>'+
-      '</tbody></table></div>'+
-      '<label style="display:block;margin-top:12px;font-size:12.5px">O acumulado entra no mês de'+
-        '<select class="einp" id="aiMes" style="width:100%;margin-top:4px">'+
-          meses.map(function(m){ return '<option value="'+m+'"'+(m===corteAtual?' selected':'')+'>'+orcMesLabel(m)+'</option>'; }).join('')+
-        '</select></label>'+
-      '<label style="display:block;margin-top:10px;font-size:12.5px">Medir o avanço por'+
-        '<select class="einp" id="aiBase" style="width:100%;margin-top:4px">'+
-          (lido.temFis?'<option value="fis" selected>Quantidade executada ÷ quantidade total</option>':'')+
-          (lido.temFin?'<option value="fin"'+(lido.temFis?'':' selected')+'>Financeiro executado ÷ valor total</option>':'')+
-        '</select></label>'+
-      '<label style="display:block;margin-top:10px;font-size:12.5px;cursor:pointer">'+
-        '<input type="checkbox" id="aiManual" checked style="margin-right:6px;vertical-align:-1px">'+
-        'Marcar estes itens como <b>apontamento manual</b></label>'+
-      '<div class="note" style="margin:4px 0 0">Sem isso o valor fica gravado mas não é usado: a AVA só lê o lançamento manual nos itens marcados assim. '+
-        'Marcando, estes itens passam a tirar o avanço da planilha e não do cronograma do app — que é o que se quer pra um realizado que o cronograma daqui não cobre.</div>'+
-      (fora.length?('<div class="banner" style="margin-top:10px;color:var(--warn)"><div><b>'+fora.length+' linha(s) sem item correspondente</b> no orçamento em uso, pelo código: '+
-        escAttr(fora.slice(0,8).map(function(x){ return x.cod; }).join(', '))+(fora.length>8?(' e mais '+(fora.length-8)):'')+'. Ficam de fora.</div></div>'):'')+
-      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
-        '<button class="btn" id="aiCancel">Cancelar</button>'+
-        '<button class="btn primary" id="aiOk"'+(casam.length?'':' disabled')+'>Importar avanço</button></div></div>';
-    document.body.appendChild(back);
-    function fecha(){ back.remove(); }
-    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
-    back.querySelector('#aiCancel').addEventListener('click',fecha);
-    back.querySelector('#aiOk').addEventListener('click',function(){
-      var mes=back.querySelector('#aiMes').value;
-      var base=back.querySelector('#aiBase').value;
-      var manual=back.querySelector('#aiManual').checked;
-      var n=0, semPct=0;
-      casam.forEach(function(p){
-        var pct=(base==='fin')?p.l.pctFin:p.l.pctFis;
-        if(pct==null)pct=(base==='fin')?p.l.pctFis:p.l.pctFin;
-        if(pct==null){ semPct++; return; }
-        p.it.rm=p.it.rm||{};
-        p.it.rm[mes]=+(100*pct).toFixed(4);
-        if(manual)p.it.fonteAvanco='manual';
-        n++;
-      });
-      orcSujo(); fecha();
-      AVA_TAB='lanc'; go('ac-ava');
-      toast(n+' item(ns) com avanço lançado em '+orcMesLabel(mes)+
-        (manual?' e marcados como apontamento manual.':'.')+
-        (semPct?(' '+semPct+' sem como calcular o percentual.'):'')+
-        ' Salve pra gravar na obra.');
     });
   }
   function avaLancHTML(D){
@@ -19117,7 +19091,7 @@
     return '<div class="card">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
         '<div class="eyebrow" style="margin-bottom:2px">Lançamentos do mês</div>'+
-        (isReadOnly()?'':'<button class="btn" id="avaImpReal" style="padding:4px 10px;font-size:11.5px" title="Lê a planilha de saldo da obra e lança o avanço acumulado de cada item até a data de corte">↥ Importar avanço realizado</button>')+
+        ''+
       '</div>'+
       '<div class="note" style="margin-bottom:8px">O <b>CRTR</b> é o custo real do mês, na mesma base do orçamento. '+
       'O avanço é <b>acumulado</b> (%) e só precisa ser lançado quando muda — o valor vale dali em diante. '+
@@ -19280,8 +19254,7 @@
     if(c)c.addEventListener('change',function(){ AVA_CORTE=+c.value; go('ac-ava'); });
     var s=document.getElementById('avaSalvar');
     if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
-    var impR=document.getElementById('avaImpReal');
-    if(impR)impR.addEventListener('click',avImportarRealizado);
+
     var pdf=document.getElementById('avaPdf');
     if(pdf)pdf.addEventListener('click',function(){
       document.body.classList.add('printing-report');
