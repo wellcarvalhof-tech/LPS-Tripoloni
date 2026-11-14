@@ -16730,12 +16730,142 @@
     return orcMesKey(t);
   }
   /** Lê a planilha de composições inteira e devolve o orçamento pronto (sem gravar). */
+  /* ---------------- Cronograma físico-financeiro (o "FF") ----------------
+   * Terceiro formato de planilha de obra. A EAP fica à esquerda — item, descrição, unidade,
+   * quantidade, unitário e total — e à direita vem um bloco por MÊS com três colunas: o % do
+   * item naquele mês, a quantidade e o valor em reais. É o cronograma que a obra tinha antes,
+   * com o orçamento e a distribuição no mesmo arquivo.
+   *
+   * O que entra:
+   *   EAP, unidade, quantidade, custo unitário e custo total  → o orçamento;
+   *   TOTAL (R$) de cada mês                                  → a COTA (pm), a curva prevista;
+   *   % de cada mês, acumulado                                → o avanço do item (rm).
+   *
+   * Folha é nó SEM FILHOS, e não "linha com código de composição": nesta planilha a VERBA é
+   * lançada no próprio item de nível 1, sem composição abaixo, e exigir o código deixaria ela
+   * de fora — some o valor dela do orçamento sem ninguém perceber.
+   */
+  function orcLerFF(wb,nomeArq){
+    var alvo=null;
+    (wb.SheetNames||[]).forEach(function(n){
+      if(alvo)return;
+      var aoa=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true,defval:null});
+      for(var i=0;i<12&&i<aoa.length;i++){
+        var h=(aoa[i]||[]).map(function(v){ return chaveNomeServ(String(v==null?'':v)); });
+        if(h.indexOf('item')>=0&&h.indexOf('descricao')>=0&&h.indexOf('qtde')>=0&&
+           h.indexOf('unit')>=0&&h.indexOf('total')>=0){
+          alvo={nome:n,aoa:aoa,cab:i,h:h}; break;
+        }
+      }
+    });
+    if(!alvo)return null;
+    var col={item:alvo.h.indexOf('item'),nome:alvo.h.indexOf('descricao'),
+             un:alvo.h.indexOf('unid'),qtd:alvo.h.indexOf('qtde'),
+             cu:alvo.h.indexOf('unit'),tot:alvo.h.indexOf('total')};
+    /* Os meses: no cabeçalho, depois da coluna TOTAL, toda célula que é uma data. Cada bloco
+     * tem três colunas — %, quantidade e reais — e é sempre nessa ordem. A linha de baixo
+     * confirma qual é qual, quando ela existe. */
+    var sub=(alvo.aoa[alvo.cab+1]||[]).map(function(v){ return chaveNomeServ(String(v==null?'':v)); });
+    var blocos=[];
+    (alvo.aoa[alvo.cab]||[]).forEach(function(v,ci){
+      if(ci<=col.tot)return;
+      var k=orcMesKey(v);
+      if(!k)return;
+      var cPct=ci, cRs=ci+2;
+      if(sub[ci+2]!=='total (r$)'&&sub[ci+2]!=='total'){
+        for(var d=0;d<4;d++){ if(sub[ci+d]==='total (r$)'||sub[ci+d]==='total'){ cRs=ci+d; break; } }
+      }
+      blocos.push({mes:k,pct:cPct,rs:cRs});
+    });
+    blocos.sort(function(a,b){ return a.mes<b.mes?-1:1; });
+    if(!blocos.length)return null;
+
+    var novo=orcVazio();
+    novo.cfg.arquivo=nomeArq||''; novo.cfg.importadoEm=new Date().toISOString();
+    novo.meses=blocos.map(function(b){ return b.mes; });
+    var sec=null, nSec=0, porChave={}, acum={};
+    var IGNORA=/^(unit|acumulado|item|mensal|total|uni|descricao)/;
+    for(var r=alvo.cab+1;r<alvo.aoa.length;r++){
+      var lin=alvo.aoa[r]||[];
+      var bruto=lin[col.item];
+      var txt=String(bruto==null?'':bruto).trim();
+      if(!txt)continue;
+      var temDesc=!!String((col.nome>=0?lin[col.nome]:'')||'').trim();
+      var cd=orcCodigo(bruto);
+      /* Código digitado errado — "4.1.5,.1", com vírgula no meio — existe na planilha de
+       * verdade e vale R$ 781 mil. Limpar o que não é dígito nem ponto recupera o item no
+       * lugar certo da árvore; descartar a linha sumiria com o dinheiro dela. */
+      if(!cd&&temDesc)cd=orcCodigo(txt.replace(/[^\d.]/g,''));
+      if(!cd){
+        /* Cabeçalho de seção: texto na coluna ITEM e DESCRIÇÃO vazia. Pelo texto não dava —
+         * "INTERSEÇÕES 1" tem dígito e nem por isso é código. */
+        if(temDesc)continue;
+        /* A linha ACUMULADO traz o total que a planilha declara. Guardo pra poder comparar
+         * com a soma do que foi lido — quando os dois discordam, quem importa precisa saber. */
+        if(chaveNomeServ(txt).indexOf('acumulado')===0)novo._declarado=orcNum(lin[col.tot]);
+        if(IGNORA.test(chaveNomeServ(txt)))continue;
+        nSec++; sec={k:'S'+nSec,nome:txt};
+        novo.secoes.push(sec);
+        continue;
+      }
+      if(!sec){ nSec++; sec={k:'S'+nSec,nome:'Planilha'}; novo.secoes.push(sec); }
+      var nome=String((col.nome>=0?lin[col.nome]:'')||'').trim();
+      if(!nome)continue;
+      var chave=sec.k+'|'+cd.cod;
+      if(porChave[chave])continue;
+      var it={id:chave,sec:sec.k,cod:cd.cod,nivel:cd.nivel,pai:orcPai(cd.cod),nome:nome,
+        un:String((col.un>=0?lin[col.un]:'')||'').trim(),
+        qtd:orcNum(lin[col.qtd]),cu:orcNum(lin[col.cu]),custo:orcNum(lin[col.tot]),
+        vu:0,venda:0,folha:false,svc:null,pm:{},rm:{}};
+      var ac=0, temPct=false;
+      blocos.forEach(function(b){
+        var rs=orcNum(lin[b.rs]);
+        if(rs)it.pm[b.mes]=rs;
+        var p=orcNum(lin[b.pct]);
+        if(p){ ac+=p; temPct=true; }
+        if(temPct)it.rm[b.mes]=+(100*ac).toFixed(4);
+      });
+      if(!temPct)it.rm={};
+      porChave[chave]=it;
+      novo.itens.push(it);
+    }
+    if(!novo.itens.length)return null;
+    /* Item cujo PAI não existe no arquivo (4.1.18.1 sem 4.1.18) ficaria solto na raiz da EAP.
+     * Religo no ancestral mais próximo que existe — 4.1, no caso. Não muda nenhum valor: só
+     * põe a linha no galho onde ela pertence, em vez de pendurada no nada. */
+    var existe={};
+    novo.itens.forEach(function(x){ existe[x.id]=true; });
+    novo.itens.forEach(function(x){
+      if(!x.pai||existe[x.sec+'|'+x.pai])return;
+      var p=x.pai;
+      while(p&&!existe[x.sec+'|'+p])p=orcPai(p);
+      x.pai=p||'';
+    });
+    /* Quem tem filho é grupo: o valor dele é a soma de baixo e some daqui pra não contar duas
+     * vezes. Quem não tem é composição, com código de referência ou sem. */
+    var temFilho={};
+    novo.itens.forEach(function(it2){ if(it2.pai)temFilho[it2.sec+'|'+it2.pai]=true; });
+    novo.itens.forEach(function(it3){
+      it3.folha=!temFilho[it3.id];
+      if(!it3.folha){ it3.custo=0; it3.venda=0; it3.qtd=0; it3.cu=0; it3.vu=0; it3.pm={}; it3.rm={}; }
+    });
+    novo._semServico=[]; novo._temColunaSvc=false;
+    novo._recalc={custo:0,venda:0};
+    novo._temAvanco=novo.itens.some(function(x){ return x.folha&&Object.keys(x.rm||{}).length>0; });
+    var somaLida=0;
+    novo.itens.forEach(function(x){ if(x.folha)somaLida+=orcNum(x.custo); });
+    novo._somaLida=somaLida;
+    return novo;
+  }
   function orcLerWorkbook(wb,nomeArq){
     /* Dois formatos: a planilha de composições da obra (PLANILHA SALDO) e a que o PRÓPRIO
      * app exporta. A segunda nao era aceita — exportar e reimportar dava erro, que e o
      * minimo que um par exportar/importar tem que fazer. */
     var doApp=orcLerExportado(wb,nomeArq);
     if(doApp)return doApp;
+    /* O cronograma físico-financeiro: EAP de um lado, um bloco por mês do outro. */
+    var ff=orcLerFF(wb,nomeArq);
+    if(ff)return ff;
     var saldo=orcAbaPorNome(wb,/planilha\s*saldo/);
     if(!saldo)throw new Error('Não reconheci o arquivo. Ele precisa ter a aba "PLANILHA SALDO" (planilha de composições da obra) ou o formato que este app exporta em "↧ Exportar Excel" — com as colunas Item, Descrição e Custo total.');
     var novo=orcVazio();
@@ -16957,7 +17087,8 @@
       custo:tem('custo')||tem('cu'),
       venda:tem('venda')||tem('vu'),
       crono:novo.meses.length>1||novo.itens.some(function(i){ return Object.keys(i.pm||{}).length>0; }),
-      svc:!!novo._temColunaSvc
+      svc:!!novo._temColunaSvc,
+      avanco:!!novo._temAvanco
     };
   }
   /** Mostra o que foi encontrado e deixa escolher o que entra, antes de mexer no orçamento. */
@@ -16984,6 +17115,7 @@
         cx('venda','Faturamento','Faturamento unitário e total.',true)+
         cx('crono','Cronograma de custo','A distribuição do custo por mês (a COTA).',true)+
         cx('svc','Vínculo com os serviços','A coluna "Serviço do app" da planilha.',true)+
+        cx('avanco','Avanço mensal (%)','O avanço de cada item mês a mês, que a planilha traz em percentual. Entra como apontamento MANUAL: a atividade passa a tirar o avanço daqui, e não do cronograma do app.',true)+
       '</div><div class="note" style="margin:6px 0 0" id="oiNota"></div></div>';
     var back=document.createElement('div'); back.className='segmenu-backdrop';
     back.innerHTML='<div class="segmenu-panel card" style="max-width:620px">'+
@@ -17002,6 +17134,9 @@
         (nAnt?('<tr><td style="color:var(--crit)">Orçamento atual</td><td class="r mono" style="color:var(--crit)">'+nAnt+' itens serão substituídos</td></tr>'):'')+
       '</tbody></table></div>'+
       (novo.meses.length<=1?'<div class="note" style="margin-top:10px;color:var(--warn)">Sem a aba <b>CRONO CUSTO DIRETO</b> não há curva prevista: a AVA vai mostrar só o peso de cada item.</div>':'')+
+      ((novo._declarado>0&&Math.abs(novo._somaLida-novo._declarado)>Math.max(1,0.0005*novo._declarado))
+        ?('<div class="banner" style="margin-top:10px;color:var(--warn)"><div>A soma das composições deu <b>'+fmtMoeda(novo._somaLida)+'</b>, e a planilha declara <b>'+fmtMoeda(novo._declarado)+'</b> no total — '+
+          'diferença de '+fmtMoeda(Math.abs(novo._somaLida-novo._declarado))+'. Costuma ser item que existe no arquivo com valor mas ficou fora da soma dele. Entra tudo o que está escrito; confira se a diferença é esperada.</div></div>'):'')+
       ((novo._recalc&&(novo._recalc.custo||novo._recalc.venda))
         ?('<div class="banner" style="margin-top:10px;color:var(--warn)"><div>Em '+
           [(novo._recalc.custo?(novo._recalc.custo+' linha(s) de custo'):''),
@@ -17060,7 +17195,11 @@
           if(!o.venda){ i.vu=v?v.vu:0; i.venda=v?v.venda:0; }
           if(!o.crono)i.pm=(v&&v.pm)?v.pm:{};
           if(!(o.svc&&novo._temColunaSvc))i.svc=v?(v.svc||null):null;
-          if(v&&v.rm&&Object.keys(v.rm).length)i.rm=v.rm;
+          /* Avanço que veio na planilha: entra como apontamento manual, senão ficaria
+           * gravado sem nunca ser usado — a AVA só olha o manual quando o item está marcado. */
+          if(o.avanco&&novo._temAvanco&&Object.keys(i.rm||{}).length){ if(i.folha!==false)i.fonteAvanco='manual'; }
+          else if(novo._temAvanco)i.rm={};
+          if(v&&v.rm&&Object.keys(v.rm).length&&!(o.avanco&&novo._temAvanco))i.rm=v.rm;
           /* A fonte do apontamento é escolha de quem usa, não dado da planilha: trocar a
            * estrutura não pode desmarcar o que foi marcado como manual. */
           if(v&&v.fonteAvanco)i.fonteAvanco=v.fonteAvanco;
@@ -17079,6 +17218,7 @@
           if(o.venda){ it.vu=n.vu; it.venda=n.venda; }
           if(o.crono)it.pm=n.pm;
           if(o.svc&&novo._temColunaSvc)it.svc=n.svc;
+          if(o.avanco&&novo._temAvanco&&Object.keys(n.rm||{}).length){ it.rm=n.rm; it.fonteAvanco='manual'; }
         });
         if(o.crono&&novo.meses.length)alvo.meses=novo.meses.slice();
         alvo.cfg=Object.assign({},alvo.cfg,{arquivo:novo.cfg.arquivo,importadoEm:novo.cfg.importadoEm});
