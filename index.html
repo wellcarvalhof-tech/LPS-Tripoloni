@@ -17329,140 +17329,284 @@
         '<th></th><th>Orçamento</th><th class="r">Tamanho</th><th class="r">Total</th><th>Cenário</th><th></th>'+
       '</tr></thead><tbody>'+linhas+'</tbody></table></div></div>';
   }
-  var ORC_TAB='eap', ORC_HIST_MED='prev';
-  /** A aba de histórico: um grid serviço × mês com o previsto e o realizado do PRÓPRIO
-   *  orçamento. É o que alimenta a distribuição quando a versão está marcada pra isso. */
-  function orcHistHTML(){
-    var v=orcVersaoAtiva();
-    if(!v)return '<div class="card"><div class="note">Importe um orçamento primeiro.</div></div>';
-    var h=orcHistGarante(v), ro=isReadOnly();
-    var med=(ORC_HIST_MED==='real')?'real':'prev';
-    var ligado=(v.fonteDist==='orcamento');
-    var cab='<div class="card" style="margin-bottom:12px">'+
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
-        '<div><div class="eyebrow" style="margin-bottom:2px">Histórico de '+escAttr(v.nome)+'</div>'+
-        '<div class="note" style="margin:0;max-width:640px">Quanto cada serviço previa e quanto realizou, mês a mês, <b>segundo este orçamento</b>. '+
-          'Serve pro orçamento antigo de uma obra: o cronograma do app não descreve mais aquele momento, mas a planilha da época descreve.</div></div>'+
-        '<label class="lotchip'+(ligado?' on':'')+'" title="Com isto ligado, a Distribuição da AVA sai daqui em vez de sair do cronograma do app">'+
-          '<input type="checkbox" id="orcHistOn"'+(ligado?' checked':'')+(ro?' disabled':'')+'>A distribuição vem deste histórico</label>'+
-      '</div>'+
-      (ligado&&!h.meses.length
-        ? '<div class="banner" style="margin-top:10px;color:var(--warn)"><div>Ligado, mas sem nenhum mês: a distribuição continua saindo do cronograma até o primeiro mês entrar.</div></div>'
-        : '')+
-    '</div>';
-    var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'+
-      '<select class="esel" id="orcHistMed" style="height:28px">'+
-        '<option value="prev"'+(med==='prev'?' selected':'')+'>Previsto (R$)</option>'+
-        '<option value="real"'+(med==='real'?' selected':'')+'>Realizado (R$)</option>'+
-      '</select>'+
-      (ro?'':('<button class="btn" id="orcHistAdd" style="padding:4px 10px;font-size:11.5px">+ mês</button>'+
-             '<button class="btn" id="orcHistDoCrono" style="padding:4px 10px;font-size:11.5px" title="Preenche o previsto com o cronograma de custo que veio na planilha (as colunas COTA), somado por serviço">Preencher do cronograma de custo</button>'))+
-      '<span class="note" style="align-self:center">'+h.meses.length+' mês(es)</span></div>';
-    if(!h.meses.length)
-      return cab+'<div class="card">'+acoes+'<div class="note">Nenhum mês cadastrado. Use <b>+ mês</b> pra começar, ou <b>Preencher do cronograma de custo</b> se a planilha trouxe as colunas COTA.</div></div>';
-    var tot={}, totMes={}, grand=0;
-    SERV.forEach(function(sv){ tot[sv.id]=0; });
-    h.meses.forEach(function(m){
-      totMes[m]=0;
-      SERV.forEach(function(sv){
-        var val=orcNum(h[med][sv.id+'::'+m]);
-        tot[sv.id]+=val; totMes[m]+=val;
-      });
-      grand+=totMes[m];
-    });
-    var thead='<tr><th class="lk lk0"></th><th class="lk lk1">Serviço</th>'+
-      h.meses.map(function(m){
-        return '<th class="r" style="white-space:nowrap">'+orcMesLabel(m)+
-          (ro?'':'<br><button class="iconbtn" data-orchistdel="'+escAttr(m)+'" title="Remover este mês">✕</button>')+'</th>';
-      }).join('')+'<th class="r">Total</th></tr>';
-    var linhas=SERV.map(function(sv,si){
-      return '<tr><td class="lk lk0" style="color:var(--muted);font-size:10px;text-align:right">'+(si+1)+'</td>'+
-        '<td class="lk lk1">'+escAttr(sv.n)+'</td>'+
-        h.meses.map(function(m){
-          var k=sv.id+'::'+m, val=orcNum(h[med][k]);
-          return '<td class="r"><input class="einp" data-orchist="'+escAttr(k)+'" value="'+(val?fmtDec(val,2):'')+'"'+
-            (ro?' disabled':'')+' style="width:98px;text-align:right"></td>';
-        }).join('')+
-        '<td class="r mono">'+fmtMoedaCurta(tot[sv.id])+'</td></tr>';
-    }).join('');
-    var rodape='<tr style="background:var(--elev);font-weight:700"><td class="lk lk0"></td><td class="lk lk1">Total do mês</td>'+
-      h.meses.map(function(m){ return '<td class="r mono">'+fmtMoedaCurta(totMes[m])+'</td>'; }).join('')+
-      '<td class="r mono">'+fmtMoedaCurta(grand)+'</td></tr>';
-    return cab+'<div class="card">'+acoes+
-      '<div class="lot-wrap"><table class="lot-tbl"><thead>'+thead+'</thead><tbody>'+linhas+rodape+'</tbody></table></div>'+
-      '<div class="note" style="margin-top:6px">Valores em reais, por serviço e por mês. O que você digita aqui não mexe na EAP — é a leitura mensal que este orçamento carrega.</div></div>';
-  }
-  /** Soma o cronograma de custo da planilha (as colunas COTA de cada item) por serviço e por
-   *  mês. É o melhor ponto de partida pro histórico: já é a distribuição que veio no arquivo. */
-  function orcHistDoCronograma(v){
-    var O=v.orc, h=orcHistGarante(v), n=0;
-    var temFilho={};
-    O.itens.forEach(function(it){ if(it.pai)temFilho[it.sec+'|'+it.pai]=true; });
-    O.itens.forEach(function(it){
-      if(temFilho[it.id]||!it.svc)return;
-      Object.keys(it.pm||{}).forEach(function(m){
-        var val=orcNum(it.pm[m]); if(!val)return;
-        if(h.meses.indexOf(m)<0)h.meses.push(m);
-        var k=it.svc+'::'+m;
-        h.prev[k]=(orcNum(h.prev[k])||0)+val; n++;
-      });
-    });
-    h.meses.sort();
-    return n;
-  }
-  function orcHistWire(){
-    var on=document.getElementById('orcHistOn');
-    if(on)on.addEventListener('change',function(){
-      var v=orcVersaoAtiva(); if(!v)return;
-      v.fonteDist=on.checked?'orcamento':'cronograma';
-      orcSujo(); go('cad-orc');
-    });
-    var med=document.getElementById('orcHistMed');
-    if(med)med.addEventListener('change',function(){ ORC_HIST_MED=med.value; go('cad-orc'); });
-    var add=document.getElementById('orcHistAdd');
-    if(add)add.addEventListener('click',function(){
-      var v=orcVersaoAtiva(); if(!v)return;
-      var h=orcHistGarante(v);
-      var sug=h.meses.length?orcMesProx(h.meses[h.meses.length-1])
-                            :(v.orc.meses&&v.orc.meses.length?v.orc.meses[0]:orcMesKey(new Date()));
-      var r=prompt('Mês a acrescentar (AAAA-MM):',sug||'');
-      if(r==null)return;
-      var k=orcMesKey(String(r).trim());
-      if(!k){ alert('Mês inválido. Escreva como 2026-01 ou 01/2026.'); return; }
-      if(h.meses.indexOf(k)<0)h.meses.push(k);
-      h.meses.sort();
-      orcSujo(); go('cad-orc');
-    });
-    var dc=document.getElementById('orcHistDoCrono');
-    if(dc)dc.addEventListener('click',function(){
-      var v=orcVersaoAtiva(); if(!v)return;
-      var n=orcHistDoCronograma(v);
-      orcSujo(); go('cad-orc');
-      toast(n?(n+' lançamento(s) somados do cronograma de custo.')
-             :'A planilha deste orçamento não trouxe cronograma de custo por mês.');
-    });
-    document.querySelectorAll('[data-orchistdel]').forEach(function(bt){
-      bt.addEventListener('click',function(){
-        var v=orcVersaoAtiva(); if(!v)return;
-        var m=bt.getAttribute('data-orchistdel'), h=orcHistGarante(v);
-        if(!confirm('Remover o mês '+orcMesLabel(m)+' deste histórico? Os valores dele se perdem.'))return;
-        h.meses=h.meses.filter(function(x){ return x!==m; });
-        ['prev','real'].forEach(function(f){
-          Object.keys(h[f]).forEach(function(k){ if(k.slice(-7)===m)delete h[f][k]; });
-        });
-        orcSujo(); go('cad-orc');
-      });
-    });
-    document.querySelectorAll('[data-orchist]').forEach(function(inp){
-      inp.addEventListener('change',function(){
-        var v=orcVersaoAtiva(); if(!v)return;
-        var h=orcHistGarante(v), med2=(ORC_HIST_MED==='real')?'real':'prev';
-        var k=inp.getAttribute('data-orchist'), val=orcNum(inp.value);
-        if(val)h[med2][k]=val; else delete h[med2][k];
-        orcSujo(); go('cad-orc');
-      });
-    });
-  }
+  /* ---------------- Importar o histórico de um cronograma físico-financeiro ----------------
+   * A planilha FF descreve a obra por ITEM da EAP; o histórico daqui é por SERVIÇO. Entre os
+   * dois não há ponte automática: medido com a planilha de uma obra, casar item a item com o
+   * orçamento em uso acerta 57% das composições pelo código e 22% por código+nome — perder 40%
+   * do dinheiro em silêncio é pior do que perguntar.
+   *
+   * Então a ponte é feita uma vez, na mão, no nível em que as duas coisas se parecem: os grupos
+   * de 2º nível (Limpeza, Corte, Aterro, Estrutura Pista, Drenagem superficial…), que é como os
+   * serviços do app são nomeados. São algumas dezenas de linhas, com sugestão por semelhança de
+   * nome já preenchida.
+   *
+   * Nada disto mexe no orçamento: entra só no histórico da versão em uso.
+   */
+  function ffGruposNivel2(novo){
+    var temFilho={};
+    novo.itens.forEach(function(i){ if(i.pai)temFilho[i.sec+'|'+i.pai]=true; });
+    var porId={};
+    novo.itens.forEach(function(i){ porId[i.id]=i; });
+    /* O grupo de cada folha: sobe até o 2º nível. Folha de 1º nível sem filhos (a verba) é
+     * grupo dela mesma — senão o dinheiro dela não entraria em lugar nenhum. */
+    var grupoDe=function(it){
+      var cur=it;
+      var guard=0;
+      while(cur&&cur.nivel>2&&guard++<12)cur=porId[cur.sec+'|'+cur.pai];
+      return cur||it;
+    };
+    var mapa={};
+    novo.itens.forEach(function(it){
+      if(temFilho[it.id])return;                 // só folha carrega dinheiro
+      var g=grupoDe(it);
+      var k=g.id;
+      if(!mapa[k])mapa[k]={id:k,sec:g.sec,secNome:'',cod:g.cod,nome:g.nome,total:0,meses:{}};
+      mapa[k].total+=orcNum(it.custo);
+      Object.keys(it.pm||{}).forEach(function(m){
+        mapa[k].meses[m]=(mapa[k].meses[m]||0)+orcNum(it.pm[m]);
+      });
+    });
+    var secNome={};
+    (novo.secoes||[]).forEach(function(s){ secNome[s.k]=s.nome; });
+    return Object.keys(mapa).map(function(k){
+      mapa[k].secNome=secNome[mapa[k].sec]||'';
+      return mapa[k];
+    }).filter(function(g){ return g.total>0||Object.keys(g.meses).length; })
+      .sort(function(a,b){ return (a.sec<b.sec?-1:a.sec>b.sec?1:0)||(a.cod<b.cod?-1:1); });
+  }
+  function histImportarFF(){
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    if(!orcVersaoAtiva()){ alert('Importe ou escolha um orçamento antes: o histórico é dele.'); return; }
+    pickExcelFile(function(file){
+      readWorkbookFile(file).then(function(wb){
+        var novo=orcLerFF(wb,file.name);
+        if(!novo){
+          alert('Não reconheci este arquivo como cronograma físico-financeiro.'+String.fromCharCode(10)+String.fromCharCode(10)+
+            'Procuro uma aba com as colunas ITEM, DESCRIÇÃO, QTDE., UNIT. e TOTAL, e um bloco por mês ao lado (%, QTDE. e TOTAL (R$)).');
+          return;
+        }
+        var grupos=ffGruposNivel2(novo);
+        if(!grupos.length){ alert('O arquivo foi lido, mas não achei valor mensal em nenhum item.'); return; }
+        histMapaDialogo(grupos,novo.meses,file.name);
+      }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function histMapaDialogo(grupos,meses,nomeArq){
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    /* Sugestão por semelhança de nome já marcada: a maioria casa, e conferir é mais rápido do
+     * que escolher setenta vezes do zero. */
+    var sug={};
+    grupos.forEach(function(g){
+      var nm=servicoParecido(g.nome);
+      var sv=nm?SERV.filter(function(x){ return x.n===nm; })[0]:null;
+      sug[g.id]=sv?sv.id:'';
+    });
+    var opts=function(sel){
+      return '<option value=""'+(sel?'':' selected')+'>— não importar —</option>'+
+        SERV.map(function(sv){ return '<option value="'+escAttr(sv.id)+'"'+(sel===sv.id?' selected':'')+'>'+escAttr(sv.n)+'</option>'; }).join('');
+    };
+    var total=0; grupos.forEach(function(g){ total+=g.total; });
+    var linhas=grupos.map(function(g){
+      return '<tr><td class="mono" style="white-space:nowrap">'+escAttr(g.cod)+'</td>'+
+        '<td>'+escAttr(g.nome)+'<div class="note" style="margin:0">'+escAttr(g.secNome)+'</div></td>'+
+        '<td class="r mono">'+fmtMoedaCurta(g.total)+'</td>'+
+        '<td><select class="einp" data-hmap="'+escAttr(g.id)+'" style="min-width:180px">'+opts(sug[g.id])+'</select></td></tr>';
+    }).join('');
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:860px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar histórico — '+escAttr(nomeArq)+'</div>'+
+      '<div class="note" style="margin-bottom:10px">'+grupos.length+' grupo(s) e '+meses.length+' mês(es), '+fmtMoeda(total)+' no total. '+
+        'Diga a que serviço cada grupo corresponde — o valor mensal dele entra no histórico desse serviço. '+
+        'O que ficar em <b>— não importar —</b> fica de fora, e o diálogo diz quanto isso representa. '+
+        '<b>O orçamento não é alterado.</b></div>'+
+      '<label style="display:block;margin-bottom:10px;font-size:12.5px">Os valores entram como'+
+        '<select class="einp" id="hmMed" style="width:220px;margin-left:6px">'+
+          '<option value="prev" selected>Previsto</option><option value="real">Realizado</option>'+
+        '</select></label>'+
+      '<div class="tbl-wrap" style="max-height:50vh"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th>Item</th><th>Grupo</th><th class="r">Total</th><th>Serviço do app</th></tr></thead>'+
+        '<tbody>'+linhas+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:8px" id="hmResumo"></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">'+
+        '<button class="btn" id="hmCancel">Cancelar</button>'+
+        '<button class="btn primary" id="hmOk">Importar para o histórico</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#hmCancel').addEventListener('click',fecha);
+    function resumo(){
+      var fora=0, n=0;
+      grupos.forEach(function(g){
+        var sel=back.querySelector('[data-hmap="'+g.id+'"]');
+        if(!sel||!sel.value){ fora+=g.total; n++; }
+      });
+      back.querySelector('#hmResumo').innerHTML=n
+        ? ('<b style="color:var(--warn)">'+n+' grupo(s) sem serviço</b> — '+fmtMoeda(fora)+' ('+fmtDec(total>0?100*fora/total:0,1)+'% do arquivo) ficam de fora.')
+        : 'Todos os grupos têm serviço: o arquivo inteiro entra.';
+    }
+    back.querySelectorAll('[data-hmap]').forEach(function(sel){ sel.addEventListener('change',resumo); });
+    resumo();
+    back.querySelector('#hmOk').addEventListener('click',function(){
+      var v=orcVersaoAtiva(); if(!v){ fecha(); return; }
+      var h=orcHistGarante(v);
+      var med=back.querySelector('#hmMed').value==='real'?'real':'prev';
+      var usados=0, valor=0;
+      meses.forEach(function(m){ if(h.meses.indexOf(m)<0)h.meses.push(m); });
+      h.meses.sort();
+      grupos.forEach(function(g){
+        var sel=back.querySelector('[data-hmap="'+g.id+'"]');
+        var sid=sel?sel.value:'';
+        if(!sid)return;
+        usados++;
+        Object.keys(g.meses).forEach(function(m){
+          var k=sid+'::'+m;
+          h[med][k]=(orcNum(h[med][k])||0)+g.meses[m];
+          valor+=g.meses[m];
+        });
+      });
+      v.fonteDist='orcamento';
+      orcSujo(); fecha();
+      ORC_TAB='hist'; ORC_HIST_MED=med;
+      go('cad-orc');
+      toast(usados+' grupo(s) somados no histórico ('+fmtMoeda(valor)+'). A distribuição desta versão passou a vir dele. Salve pra gravar na obra.');
+    });
+  }
+  var ORC_TAB='eap', ORC_HIST_MED='prev';
+  /** A aba de histórico: um grid serviço × mês com o previsto e o realizado do PRÓPRIO
+   *  orçamento. É o que alimenta a distribuição quando a versão está marcada pra isso. */
+  function orcHistHTML(){
+    var v=orcVersaoAtiva();
+    if(!v)return '<div class="card"><div class="note">Importe um orçamento primeiro.</div></div>';
+    var h=orcHistGarante(v), ro=isReadOnly();
+    var med=(ORC_HIST_MED==='real')?'real':'prev';
+    var ligado=(v.fonteDist==='orcamento');
+    var cab='<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
+        '<div><div class="eyebrow" style="margin-bottom:2px">Histórico de '+escAttr(v.nome)+'</div>'+
+        '<div class="note" style="margin:0;max-width:640px">Quanto cada serviço previa e quanto realizou, mês a mês, <b>segundo este orçamento</b>. '+
+          'Serve pro orçamento antigo de uma obra: o cronograma do app não descreve mais aquele momento, mas a planilha da época descreve.</div></div>'+
+        '<label class="lotchip'+(ligado?' on':'')+'" title="Com isto ligado, a Distribuição da AVA sai daqui em vez de sair do cronograma do app">'+
+          '<input type="checkbox" id="orcHistOn"'+(ligado?' checked':'')+(ro?' disabled':'')+'>A distribuição vem deste histórico</label>'+
+      '</div>'+
+      (ligado&&!h.meses.length
+        ? '<div class="banner" style="margin-top:10px;color:var(--warn)"><div>Ligado, mas sem nenhum mês: a distribuição continua saindo do cronograma até o primeiro mês entrar.</div></div>'
+        : '')+
+    '</div>';
+    var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'+
+      '<select class="esel" id="orcHistMed" style="height:28px">'+
+        '<option value="prev"'+(med==='prev'?' selected':'')+'>Previsto (R$)</option>'+
+        '<option value="real"'+(med==='real'?' selected':'')+'>Realizado (R$)</option>'+
+      '</select>'+
+      (ro?'':('<button class="btn" id="orcHistImp" style="padding:4px 10px;font-size:11.5px" title="Lê um cronograma físico-financeiro e soma os valores mensais dele neste histórico, sem mexer no orçamento">↥ Importar cronograma FF</button>'+
+             '<button class="btn" id="orcHistAdd" style="padding:4px 10px;font-size:11.5px">+ mês</button>'+
+             '<button class="btn" id="orcHistDoCrono" style="padding:4px 10px;font-size:11.5px" title="Preenche o previsto com o cronograma de custo que veio na planilha (as colunas COTA), somado por serviço">Preencher do cronograma de custo</button>'))+
+      '<span class="note" style="align-self:center">'+h.meses.length+' mês(es)</span></div>';
+    if(!h.meses.length)
+      return cab+'<div class="card">'+acoes+'<div class="note">Nenhum mês cadastrado. Use <b>+ mês</b> pra começar, ou <b>Preencher do cronograma de custo</b> se a planilha trouxe as colunas COTA.</div></div>';
+    var tot={}, totMes={}, grand=0;
+    SERV.forEach(function(sv){ tot[sv.id]=0; });
+    h.meses.forEach(function(m){
+      totMes[m]=0;
+      SERV.forEach(function(sv){
+        var val=orcNum(h[med][sv.id+'::'+m]);
+        tot[sv.id]+=val; totMes[m]+=val;
+      });
+      grand+=totMes[m];
+    });
+    var thead='<tr><th class="lk lk0"></th><th class="lk lk1">Serviço</th>'+
+      h.meses.map(function(m){
+        return '<th class="r" style="white-space:nowrap">'+orcMesLabel(m)+
+          (ro?'':'<br><button class="iconbtn" data-orchistdel="'+escAttr(m)+'" title="Remover este mês">✕</button>')+'</th>';
+      }).join('')+'<th class="r">Total</th></tr>';
+    var linhas=SERV.map(function(sv,si){
+      return '<tr><td class="lk lk0" style="color:var(--muted);font-size:10px;text-align:right">'+(si+1)+'</td>'+
+        '<td class="lk lk1">'+escAttr(sv.n)+'</td>'+
+        h.meses.map(function(m){
+          var k=sv.id+'::'+m, val=orcNum(h[med][k]);
+          return '<td class="r"><input class="einp" data-orchist="'+escAttr(k)+'" value="'+(val?fmtDec(val,2):'')+'"'+
+            (ro?' disabled':'')+' style="width:98px;text-align:right"></td>';
+        }).join('')+
+        '<td class="r mono">'+fmtMoedaCurta(tot[sv.id])+'</td></tr>';
+    }).join('');
+    var rodape='<tr style="background:var(--elev);font-weight:700"><td class="lk lk0"></td><td class="lk lk1">Total do mês</td>'+
+      h.meses.map(function(m){ return '<td class="r mono">'+fmtMoedaCurta(totMes[m])+'</td>'; }).join('')+
+      '<td class="r mono">'+fmtMoedaCurta(grand)+'</td></tr>';
+    return cab+'<div class="card">'+acoes+
+      '<div class="lot-wrap"><table class="lot-tbl"><thead>'+thead+'</thead><tbody>'+linhas+rodape+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:6px">Valores em reais, por serviço e por mês. O que você digita aqui não mexe na EAP — é a leitura mensal que este orçamento carrega.</div></div>';
+  }
+  /** Soma o cronograma de custo da planilha (as colunas COTA de cada item) por serviço e por
+   *  mês. É o melhor ponto de partida pro histórico: já é a distribuição que veio no arquivo. */
+  function orcHistDoCronograma(v){
+    var O=v.orc, h=orcHistGarante(v), n=0;
+    var temFilho={};
+    O.itens.forEach(function(it){ if(it.pai)temFilho[it.sec+'|'+it.pai]=true; });
+    O.itens.forEach(function(it){
+      if(temFilho[it.id]||!it.svc)return;
+      Object.keys(it.pm||{}).forEach(function(m){
+        var val=orcNum(it.pm[m]); if(!val)return;
+        if(h.meses.indexOf(m)<0)h.meses.push(m);
+        var k=it.svc+'::'+m;
+        h.prev[k]=(orcNum(h.prev[k])||0)+val; n++;
+      });
+    });
+    h.meses.sort();
+    return n;
+  }
+  function orcHistWire(){
+    var imp=document.getElementById('orcHistImp');
+    if(imp)imp.addEventListener('click',histImportarFF);
+    var on=document.getElementById('orcHistOn');
+    if(on)on.addEventListener('change',function(){
+      var v=orcVersaoAtiva(); if(!v)return;
+      v.fonteDist=on.checked?'orcamento':'cronograma';
+      orcSujo(); go('cad-orc');
+    });
+    var med=document.getElementById('orcHistMed');
+    if(med)med.addEventListener('change',function(){ ORC_HIST_MED=med.value; go('cad-orc'); });
+    var add=document.getElementById('orcHistAdd');
+    if(add)add.addEventListener('click',function(){
+      var v=orcVersaoAtiva(); if(!v)return;
+      var h=orcHistGarante(v);
+      var sug=h.meses.length?orcMesProx(h.meses[h.meses.length-1])
+                            :(v.orc.meses&&v.orc.meses.length?v.orc.meses[0]:orcMesKey(new Date()));
+      var r=prompt('Mês a acrescentar (AAAA-MM):',sug||'');
+      if(r==null)return;
+      var k=orcMesKey(String(r).trim());
+      if(!k){ alert('Mês inválido. Escreva como 2026-01 ou 01/2026.'); return; }
+      if(h.meses.indexOf(k)<0)h.meses.push(k);
+      h.meses.sort();
+      orcSujo(); go('cad-orc');
+    });
+    var dc=document.getElementById('orcHistDoCrono');
+    if(dc)dc.addEventListener('click',function(){
+      var v=orcVersaoAtiva(); if(!v)return;
+      var n=orcHistDoCronograma(v);
+      orcSujo(); go('cad-orc');
+      toast(n?(n+' lançamento(s) somados do cronograma de custo.')
+             :'A planilha deste orçamento não trouxe cronograma de custo por mês.');
+    });
+    document.querySelectorAll('[data-orchistdel]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        var v=orcVersaoAtiva(); if(!v)return;
+        var m=bt.getAttribute('data-orchistdel'), h=orcHistGarante(v);
+        if(!confirm('Remover o mês '+orcMesLabel(m)+' deste histórico? Os valores dele se perdem.'))return;
+        h.meses=h.meses.filter(function(x){ return x!==m; });
+        ['prev','real'].forEach(function(f){
+          Object.keys(h[f]).forEach(function(k){ if(k.slice(-7)===m)delete h[f][k]; });
+        });
+        orcSujo(); go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orchist]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var v=orcVersaoAtiva(); if(!v)return;
+        var h=orcHistGarante(v), med2=(ORC_HIST_MED==='real')?'real':'prev';
+        var k=inp.getAttribute('data-orchist'), val=orcNum(inp.value);
+        if(val)h[med2][k]=val; else delete h[med2][k];
+        orcSujo(); go('cad-orc');
+      });
+    });
+  }
   VIEWS['cad-orc']=function(){
     if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
     var O=orcAtual();
