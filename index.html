@@ -16478,7 +16478,10 @@
       if(Array.isArray(raw.versoes)){
         ORCS=raw.versoes.filter(function(v){ return v&&v.orc&&v.orc.itens&&v.orc.itens.length; })
           .map(function(v){ return {id:v.id||orcNovoId(),nome:v.nome||'Orçamento',
-                                    cenarioId:v.cenarioId||'',criadoEm:v.criadoEm||'',orc:v.orc}; });
+                                    cenarioId:v.cenarioId||'',criadoEm:v.criadoEm||'',
+                                    fonteDist:(v.fonteDist==='orcamento'?'orcamento':'cronograma'),
+                                    hist:(v.hist&&typeof v.hist==='object')?v.hist:null,
+                                    orc:v.orc}; });
         ORC_ATIVO=raw.ativo||'';
       }else if(raw.itens&&raw.itens.length){
         ORCS=[{id:orcNovoId(),nome:((raw.cfg&&raw.cfg.arquivo)||'Orçamento'),cenarioId:'',
@@ -16510,6 +16513,41 @@
       ORC=novo;
     }
     orcSujo();
+  }
+  /* ---------------- Histórico do orçamento ----------------
+   * Um orçamento pode trazer a própria distribuição mensal — quanto cada serviço previa e
+   * quanto realizou, mês a mês. É o caso do orçamento antigo de uma obra: o cronograma do
+   * app não descreve mais aquele momento, mas a planilha da época descreve.
+   *
+   * Com o histórico ligado, a distribuição da AVA sai DAQUI em vez de sair do cronograma.
+   * Fica por versão: cada orçamento tem o histórico dele, e é a versão em uso que manda. */
+  function orcHistDe(v){
+    if(!v)return null;
+    var h=v.hist;
+    if(!h||typeof h!=='object')return null;
+    return {meses:Array.isArray(h.meses)?h.meses.slice().sort():[],
+            prev:(h.prev&&typeof h.prev==='object')?h.prev:{},
+            real:(h.real&&typeof h.real==='object')?h.real:{}};
+  }
+  function orcHistAtivo(){
+    var v=orcVersaoAtiva();
+    if(!v||v.fonteDist!=='orcamento')return null;
+    var h=orcHistDe(v);
+    return (h&&h.meses.length)?h:null;
+  }
+  function orcHistGarante(v){
+    if(!v.hist||typeof v.hist!=='object')v.hist={meses:[],prev:{},real:{}};
+    if(!Array.isArray(v.hist.meses))v.hist.meses=[];
+    if(!v.hist.prev)v.hist.prev={};
+    if(!v.hist.real)v.hist.real={};
+    return v.hist;
+  }
+  /** Mes seguinte a 'AAAA-MM'. */
+  function orcMesProx(k){
+    var p=String(k||'').split('-'), a=+p[0], m=+p[1];
+    if(!a||!m)return null;
+    m++; if(m>12){ m=1; a++; }
+    return a+'-'+('0'+m).slice(-2);
   }
   function orcAtual(){
     /* Vendo um cenário, o orçamento é o DELE: o da versão amarrada a ele, ou o que ficou
@@ -17126,6 +17164,140 @@
         '<th></th><th>Orçamento</th><th class="r">Tamanho</th><th class="r">Total</th><th>Cenário</th><th></th>'+
       '</tr></thead><tbody>'+linhas+'</tbody></table></div></div>';
   }
+  var ORC_TAB='eap', ORC_HIST_MED='prev';
+  /** A aba de histórico: um grid serviço × mês com o previsto e o realizado do PRÓPRIO
+   *  orçamento. É o que alimenta a distribuição quando a versão está marcada pra isso. */
+  function orcHistHTML(){
+    var v=orcVersaoAtiva();
+    if(!v)return '<div class="card"><div class="note">Importe um orçamento primeiro.</div></div>';
+    var h=orcHistGarante(v), ro=isReadOnly();
+    var med=(ORC_HIST_MED==='real')?'real':'prev';
+    var ligado=(v.fonteDist==='orcamento');
+    var cab='<div class="card" style="margin-bottom:12px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
+        '<div><div class="eyebrow" style="margin-bottom:2px">Histórico de '+escAttr(v.nome)+'</div>'+
+        '<div class="note" style="margin:0;max-width:640px">Quanto cada serviço previa e quanto realizou, mês a mês, <b>segundo este orçamento</b>. '+
+          'Serve pro orçamento antigo de uma obra: o cronograma do app não descreve mais aquele momento, mas a planilha da época descreve.</div></div>'+
+        '<label class="lotchip'+(ligado?' on':'')+'" title="Com isto ligado, a Distribuição da AVA sai daqui em vez de sair do cronograma do app">'+
+          '<input type="checkbox" id="orcHistOn"'+(ligado?' checked':'')+(ro?' disabled':'')+'>A distribuição vem deste histórico</label>'+
+      '</div>'+
+      (ligado&&!h.meses.length
+        ? '<div class="banner" style="margin-top:10px;color:var(--warn)"><div>Ligado, mas sem nenhum mês: a distribuição continua saindo do cronograma até o primeiro mês entrar.</div></div>'
+        : '')+
+    '</div>';
+    var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">'+
+      '<select class="esel" id="orcHistMed" style="height:28px">'+
+        '<option value="prev"'+(med==='prev'?' selected':'')+'>Previsto (R$)</option>'+
+        '<option value="real"'+(med==='real'?' selected':'')+'>Realizado (R$)</option>'+
+      '</select>'+
+      (ro?'':('<button class="btn" id="orcHistAdd" style="padding:4px 10px;font-size:11.5px">+ mês</button>'+
+             '<button class="btn" id="orcHistDoCrono" style="padding:4px 10px;font-size:11.5px" title="Preenche o previsto com o cronograma de custo que veio na planilha (as colunas COTA), somado por serviço">Preencher do cronograma de custo</button>'))+
+      '<span class="note" style="align-self:center">'+h.meses.length+' mês(es)</span></div>';
+    if(!h.meses.length)
+      return cab+'<div class="card">'+acoes+'<div class="note">Nenhum mês cadastrado. Use <b>+ mês</b> pra começar, ou <b>Preencher do cronograma de custo</b> se a planilha trouxe as colunas COTA.</div></div>';
+    var tot={}, totMes={}, grand=0;
+    SERV.forEach(function(sv){ tot[sv.id]=0; });
+    h.meses.forEach(function(m){
+      totMes[m]=0;
+      SERV.forEach(function(sv){
+        var val=orcNum(h[med][sv.id+'::'+m]);
+        tot[sv.id]+=val; totMes[m]+=val;
+      });
+      grand+=totMes[m];
+    });
+    var thead='<tr><th class="lk lk0"></th><th class="lk lk1">Serviço</th>'+
+      h.meses.map(function(m){
+        return '<th class="r" style="white-space:nowrap">'+orcMesLabel(m)+
+          (ro?'':'<br><button class="iconbtn" data-orchistdel="'+escAttr(m)+'" title="Remover este mês">✕</button>')+'</th>';
+      }).join('')+'<th class="r">Total</th></tr>';
+    var linhas=SERV.map(function(sv,si){
+      return '<tr><td class="lk lk0" style="color:var(--muted);font-size:10px;text-align:right">'+(si+1)+'</td>'+
+        '<td class="lk lk1">'+escAttr(sv.n)+'</td>'+
+        h.meses.map(function(m){
+          var k=sv.id+'::'+m, val=orcNum(h[med][k]);
+          return '<td class="r"><input class="einp" data-orchist="'+escAttr(k)+'" value="'+(val?fmtDec(val,2):'')+'"'+
+            (ro?' disabled':'')+' style="width:98px;text-align:right"></td>';
+        }).join('')+
+        '<td class="r mono">'+fmtMoedaCurta(tot[sv.id])+'</td></tr>';
+    }).join('');
+    var rodape='<tr style="background:var(--elev);font-weight:700"><td class="lk lk0"></td><td class="lk lk1">Total do mês</td>'+
+      h.meses.map(function(m){ return '<td class="r mono">'+fmtMoedaCurta(totMes[m])+'</td>'; }).join('')+
+      '<td class="r mono">'+fmtMoedaCurta(grand)+'</td></tr>';
+    return cab+'<div class="card">'+acoes+
+      '<div class="lot-wrap"><table class="lot-tbl"><thead>'+thead+'</thead><tbody>'+linhas+rodape+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:6px">Valores em reais, por serviço e por mês. O que você digita aqui não mexe na EAP — é a leitura mensal que este orçamento carrega.</div></div>';
+  }
+  /** Soma o cronograma de custo da planilha (as colunas COTA de cada item) por serviço e por
+   *  mês. É o melhor ponto de partida pro histórico: já é a distribuição que veio no arquivo. */
+  function orcHistDoCronograma(v){
+    var O=v.orc, h=orcHistGarante(v), n=0;
+    var temFilho={};
+    O.itens.forEach(function(it){ if(it.pai)temFilho[it.sec+'|'+it.pai]=true; });
+    O.itens.forEach(function(it){
+      if(temFilho[it.id]||!it.svc)return;
+      Object.keys(it.pm||{}).forEach(function(m){
+        var val=orcNum(it.pm[m]); if(!val)return;
+        if(h.meses.indexOf(m)<0)h.meses.push(m);
+        var k=it.svc+'::'+m;
+        h.prev[k]=(orcNum(h.prev[k])||0)+val; n++;
+      });
+    });
+    h.meses.sort();
+    return n;
+  }
+  function orcHistWire(){
+    var on=document.getElementById('orcHistOn');
+    if(on)on.addEventListener('change',function(){
+      var v=orcVersaoAtiva(); if(!v)return;
+      v.fonteDist=on.checked?'orcamento':'cronograma';
+      orcSujo(); go('cad-orc');
+    });
+    var med=document.getElementById('orcHistMed');
+    if(med)med.addEventListener('change',function(){ ORC_HIST_MED=med.value; go('cad-orc'); });
+    var add=document.getElementById('orcHistAdd');
+    if(add)add.addEventListener('click',function(){
+      var v=orcVersaoAtiva(); if(!v)return;
+      var h=orcHistGarante(v);
+      var sug=h.meses.length?orcMesProx(h.meses[h.meses.length-1])
+                            :(v.orc.meses&&v.orc.meses.length?v.orc.meses[0]:orcMesKey(new Date()));
+      var r=prompt('Mês a acrescentar (AAAA-MM):',sug||'');
+      if(r==null)return;
+      var k=orcMesKey(String(r).trim());
+      if(!k){ alert('Mês inválido. Escreva como 2026-01 ou 01/2026.'); return; }
+      if(h.meses.indexOf(k)<0)h.meses.push(k);
+      h.meses.sort();
+      orcSujo(); go('cad-orc');
+    });
+    var dc=document.getElementById('orcHistDoCrono');
+    if(dc)dc.addEventListener('click',function(){
+      var v=orcVersaoAtiva(); if(!v)return;
+      var n=orcHistDoCronograma(v);
+      orcSujo(); go('cad-orc');
+      toast(n?(n+' lançamento(s) somados do cronograma de custo.')
+             :'A planilha deste orçamento não trouxe cronograma de custo por mês.');
+    });
+    document.querySelectorAll('[data-orchistdel]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        var v=orcVersaoAtiva(); if(!v)return;
+        var m=bt.getAttribute('data-orchistdel'), h=orcHistGarante(v);
+        if(!confirm('Remover o mês '+orcMesLabel(m)+' deste histórico? Os valores dele se perdem.'))return;
+        h.meses=h.meses.filter(function(x){ return x!==m; });
+        ['prev','real'].forEach(function(f){
+          Object.keys(h[f]).forEach(function(k){ if(k.slice(-7)===m)delete h[f][k]; });
+        });
+        orcSujo(); go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orchist]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var v=orcVersaoAtiva(); if(!v)return;
+        var h=orcHistGarante(v), med2=(ORC_HIST_MED==='real')?'real':'prev';
+        var k=inp.getAttribute('data-orchist'), val=orcNum(inp.value);
+        if(val)h[med2][k]=val; else delete h[med2][k];
+        orcSujo(); go('cad-orc');
+      });
+    });
+  }
   VIEWS['cad-orc']=function(){
     if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
     var O=orcAtual();
@@ -17185,7 +17357,13 @@
         return (r.it.cod==='1'?cab:'')+orcLinhaHTML(r,arv,total);
       }).join('')+
       '</tbody></table></div></div>';
-    return topo+kpis+tabela;
+    /* Duas abas: a EAP, que é o orçamento em si, e o histórico mensal que ele carrega. */
+    var abas='<div class="subtabs" id="orcTabs" style="margin:0 0 12px">'+
+      '<button class="subtab'+(ORC_TAB==='hist'?'':' active')+'" data-orctab="eap">EAP e pesos</button>'+
+      '<button class="subtab'+(ORC_TAB==='hist'?' active':'')+'" data-orctab="hist">Histórico mensal</button>'+
+    '</div>';
+    if(ORC_TAB==='hist')return topo+abas+orcHistHTML();
+    return topo+abas+kpis+tabela;
   };
   function orcWire(){
     document.querySelectorAll('[data-orcusa]').forEach(function(bt){
@@ -17231,6 +17409,10 @@
         orcSujo(); go('cad-orc');
       });
     });
+    document.querySelectorAll('[data-orctab]').forEach(function(bt){
+      bt.addEventListener('click',function(){ ORC_TAB=bt.getAttribute('data-orctab'); go('cad-orc'); });
+    });
+    orcHistWire();
     var b=document.getElementById('orcImp'); if(b)b.addEventListener('click',orcImportar);
     var s=document.getElementById('orcSalvar'); if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
     var x=document.getElementById('orcExp'); if(x)x.addEventListener('click',function(){ comCarga(exportOrcamentoExcel); });
@@ -17451,7 +17633,28 @@
     var meses=Object.keys(mesSet).sort(), N=meses.length, idx={};
     meses.forEach(function(k,i){ idx[k]=i; });
 
+    /* Com o histórico ligado na versão em uso, a distribuição sai DELE: o dinheiro de cada
+     * serviço em cada mês é o que o orçamento registrou, não o que o cronograma de hoje
+     * produziria. Quantidade não existe no histórico — ele é financeiro —, então a aba de
+     * quantidade fica vazia nesse modo, e a tela diz isso. */
+    var H=orcHistAtivo();
     var linhas=[];
+    if(H){
+      H.meses.forEach(function(m){ if(idx[m]==null){ idx[m]=meses.length; meses.push(m); } });
+      meses.sort(); N=meses.length; idx={}; meses.forEach(function(k,i){ idx[k]=i; });
+      SERV.forEach(function(sv,si){
+        var porMes=[], tot=0;
+        for(var i=0;i<N;i++)porMes.push(0);
+        H.meses.forEach(function(m){
+          var val=orcNum(H.prev[sv.id+'::'+m]); if(!val)return;
+          porMes[idx[m]]+=val; tot+=val;
+        });
+        if(!(tot>0))return;
+        var pctH=porMes.map(function(r){ return tot>0?r/tot:0; });
+        linhas.push({si:si,sv:sv,un:sv.u||'',qtd:porMes.map(function(){ return 0; }),tot:0,
+          valor:tot,pct:pctH,rs:porMes.slice(),doHistorico:true});
+      });
+    }else{
     SERV.forEach(function(sv,si){
       var serie=wq.M[si]||[], porMes=[], tot=0;
       for(var i=0;i<N;i++)porMes.push(0);
@@ -17465,6 +17668,7 @@
       linhas.push({si:si,sv:sv,un:sv.u||'',qtd:porMes,tot:tot,valor:valor,
         pct:pct,rs:pct.map(function(f){ return f*valor; })});
     });
+    }
 
     var totRs=[], somaRs=0;
     for(var i2=0;i2<N;i2++)totRs.push(0);
@@ -17478,7 +17682,7 @@
     });
     var accRs=[], accCota=[], a1=0, a2=0;
     for(var i4=0;i4<N;i4++){ a1+=totRs[i4]; accRs.push(a1); a2+=cotaMes[i4]; accCota.push(a2); }
-    return {meses:meses,N:N,linhas:linhas,totRs:totRs,somaRs:somaRs,
+    return {meses:meses,N:N,linhas:linhas,totRs:totRs,somaRs:somaRs,doHistorico:!!H,
       accRs:accRs,cotaMes:cotaMes,accCota:accCota,semVinc:V.semVinc,
       semValor:linhas.filter(function(L){ return !(L.valor>0); }).length};
   }
