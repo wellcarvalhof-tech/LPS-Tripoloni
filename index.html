@@ -1238,7 +1238,7 @@
     EQMACRO_DIRTY=false;
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
-    ORC=(obra.orcamento&&typeof obra.orcamento==='object'&&obra.orcamento.itens)?obra.orcamento:null;
+    orcCarregaVersoes(obra.orcamento);
     EAP=(obra.eap&&typeof obra.eap==='object'&&obra.eap.itens)?obra.eap:null;
     EAP_DIRTY=false; EAP_OPEN={};
     ORC_DIRTY=false; ORC_OPEN={}; AVA_CORTE=null; AVA_TAB='painel';
@@ -12547,8 +12547,16 @@
       totalLB=totaisDoSnap(baseline.snap,pacote);
       grandLB=totalLB.reduce(function(a,b){return a+b;},0);
     }
+    /* O dinheiro da linha de base: primeiro o orçamento amarrado a ela na tela de orçamentos,
+     * depois o que ficou congelado no snapshot. É o que faz a curva dela ser ponderada pelos
+     * valores da época, e não pelos de hoje. */
+    var snapLB=null;
+    if(baseline&&baseline.snap){
+      var vb=orcVersaoDoCenario(baseline.id);
+      snapLB=vb?Object.assign({},baseline.snap,{orcamento:vb.orc}):baseline.snap;
+    }
     var executivo=cumulativePct(weeklyFromSegs(segsExec,tw),tw,totalByServ,grandTotal);
-    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalLB,grandLB,baseline.snap):null;
+    var cliente=segsCliente?cumulativePct(weeklyFromSegs(segsCliente,tw),tw,totalLB,grandLB,snapLB):null;
 
     // realizado: apontamentos reais de Produção Diária, agregados na semana de trabalho correspondente à data
     var realWeekly=[]; for(var w3=0;w3<=tw;w3++)realWeekly[w3]=SERV.map(function(){return 0;});
@@ -14481,10 +14489,13 @@
     window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
     aplicaQuantidadesDoSnap(snap);   // o saldo do cenário entra na edição junto com o resto
     /* O orçamento do cenário entra como entra o resto: vira o orçamento vivo enquanto o
-     * cenário está aberto. Sair do cenário recarrega a obra inteira do banco, então o
-     * orçamento da obra volta sozinho. Cenário sem orçamento próprio fica com o da obra —
-     * é o que ele sempre usou. */
-    if(snap.orcamento&&snap.orcamento.itens&&snap.orcamento.itens.length)
+     * cenário está aberto. Primeiro a versão amarrada a ele na tela de orçamentos, que é a
+     * que a pessoa escolheu; depois o que ficou congelado no snapshot, pra cenário criado
+     * antes dessa tela existir. Sem nenhum dos dois, fica o da obra. Sair do cenário
+     * recarrega a obra inteira do banco, então o orçamento da obra volta sozinho. */
+    var vcen=orcVersaoDoCenario(c.id);
+    if(vcen){ ORC_ATIVO=vcen.id; ORC=vcen.orc; }
+    else if(snap.orcamento&&snap.orcamento.itens&&snap.orcamento.itens.length)
       ORC=JSON.parse(JSON.stringify(snap.orcamento));
     adjDirty(); ADJ_PENDING={};
     CENARIO_VISTA=null;              // ver e editar sao modos diferentes; nao ficam ligados juntos
@@ -16445,7 +16456,72 @@
     return {cfg:{base:'custo',bac:0,limiarAtencao:0.95,limiarCritico:0.9,arquivo:'',importadoEm:''},
       secoes:[],meses:[],itens:[],custos:{}};
   }
-  function orcAtual(){ return ORC&&ORC.itens?ORC:(ORC=orcVazio()); }
+  /* ---------------- Versões do orçamento ----------------
+   * Uma obra tem mais de um orçamento ao longo da vida: o que foi vendido, o do
+   * replanejamento, o do aditivo. Guardar um só obrigava a escolher entre perder o anterior
+   * ou manter dois arquivos fora do app — e sem o anterior não há como comparar cenário
+   * nenhum.
+   *
+   * A lista mora na mesma coluna de sempre (obras.orcamento), que passa a guardar
+   * {v:2,versoes:[...],ativo:id}. Orçamento gravado no formato antigo (o objeto solto) vira
+   * a primeira versão na hora de ler — ninguém precisa migrar nada à mão.
+   *
+   * ORC continua sendo o orçamento EM USO e aponta pro mesmo objeto da versão ativa (não
+   * pra uma cópia): editar por ORC edita a versão, que é o que todo o resto do app espera. */
+  var ORCS=[], ORC_ATIVO='';
+  function orcNovoId(){ return 'v'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+  function orcVersaoAtiva(){ return ORCS.filter(function(v){ return v.id===ORC_ATIVO; })[0]||null; }
+  function orcVersaoDoCenario(cid){ return cid?(ORCS.filter(function(v){ return v.cenarioId===cid; })[0]||null):null; }
+  function orcCarregaVersoes(raw){
+    ORCS=[]; ORC_ATIVO='';
+    if(raw&&typeof raw==='object'){
+      if(Array.isArray(raw.versoes)){
+        ORCS=raw.versoes.filter(function(v){ return v&&v.orc&&v.orc.itens&&v.orc.itens.length; })
+          .map(function(v){ return {id:v.id||orcNovoId(),nome:v.nome||'Orçamento',
+                                    cenarioId:v.cenarioId||'',criadoEm:v.criadoEm||'',orc:v.orc}; });
+        ORC_ATIVO=raw.ativo||'';
+      }else if(raw.itens&&raw.itens.length){
+        ORCS=[{id:orcNovoId(),nome:((raw.cfg&&raw.cfg.arquivo)||'Orçamento'),cenarioId:'',
+               criadoEm:(raw.cfg&&raw.cfg.importadoEm)||'',orc:raw}];
+      }
+    }
+    if(ORCS.length&&!ORCS.some(function(v){ return v.id===ORC_ATIVO; }))ORC_ATIVO=ORCS[0].id;
+    var va=orcVersaoAtiva();
+    ORC=va?va.orc:null;
+  }
+  function orcParaGravar(){
+    var va=orcVersaoAtiva();
+    if(va)va.orc=ORC||va.orc;      // ORC é o objeto da versão, mas garante o laço
+    return {v:2,versoes:ORCS,ativo:ORC_ATIVO};
+  }
+  /** Troca a versão em uso. Não grava sozinho: quem grava é o botão de salvar. */
+  function orcUsaVersao(id){
+    var v=ORCS.filter(function(x){ return x.id===id; })[0]; if(!v)return false;
+    ORC_ATIVO=id; ORC=v.orc; orcSujo(); return true;
+  }
+  /** Guarda um orçamento recém-lido como versão nova, ou troca o conteúdo da ativa. */
+  function orcGuardaVersao(novo,nome,comoNova){
+    if(comoNova||!ORCS.length){
+      var v={id:orcNovoId(),nome:nome||'Orçamento',cenarioId:'',criadoEm:new Date().toISOString(),orc:novo};
+      ORCS.push(v); ORC_ATIVO=v.id; ORC=novo;
+    }else{
+      var va=orcVersaoAtiva();
+      if(va){ va.orc=novo; if(nome)va.nome=nome; }
+      ORC=novo;
+    }
+    orcSujo();
+  }
+  function orcAtual(){
+    /* Vendo um cenário, o orçamento é o DELE: o da versão amarrada a ele, ou o que ficou
+     * congelado no snapshot. Sem nenhum dos dois, segue o da obra — é o que ele usou. */
+    if(CENARIO_VISTA){
+      var vc=orcVersaoDoCenario(CENARIO_VISTA.id);
+      if(vc)return vc.orc;
+      var sn=CENARIO_VISTA.snap&&CENARIO_VISTA.snap.orcamento;
+      if(sn&&sn.itens&&sn.itens.length)return sn;
+    }
+    return ORC&&ORC.itens?ORC:(ORC=orcVazio());
+  }
   function orcTem(){ return !!(ORC&&ORC.itens&&ORC.itens.length); }
   function orcSujo(){ ORC_DIRTY=true; var b=document.getElementById('orcSalvar'); if(b)b.disabled=false; }
   function orcNum(v){
@@ -16796,7 +16872,7 @@
       return;
     }
     try{
-      await sbUpdateObra(selectedObra.id,{orcamento:ORC});
+      await sbUpdateObra(selectedObra.id,{orcamento:orcParaGravar()});
       ORC_DIRTY=false; toast('Orçamento salvo.'); go('cad-orc');
     }catch(e){
       alert('Falha ao salvar: '+((e&&e.message)||e)+'\n\nSe a mensagem fala em coluna "orcamento", rode sql/32_orcamento_ava.sql no Supabase.');
@@ -16957,9 +17033,13 @@
       if(antigo&&antigo.custos)alvo.custos=antigo.custos;
       if(antigo&&antigo.cfg){ alvo.cfg.base=antigo.cfg.base||alvo.cfg.base; alvo.cfg.bac=antigo.cfg.bac||0;
         alvo.cfg.limiarAtencao=antigo.cfg.limiarAtencao||0.95; alvo.cfg.limiarCritico=antigo.cfg.limiarCritico||0.9; }
-      ORC=alvo; orcSujo(); fecha(); go('cad-orc');
-      toast(o.estrutura?(alvo.itens.length+' itens importados. Salve pra gravar na obra.')
-                      :('Valores atualizados em cima do orçamento atual. Salve pra gravar na obra.'));
+      /* Trazer a EAP de um arquivo é trazer OUTRO orçamento: entra como versão nova, com o
+       * nome do arquivo, e o anterior continua na lista pra comparar. Atualizar só valores
+       * é mexer no que já está em uso — aí não nasce versão nenhuma. */
+      orcGuardaVersao(alvo,(novo.cfg.arquivo||'Orçamento').replace(/\.xlsx?$/i,''),!!o.estrutura);
+      fecha(); go('cad-orc');
+      toast(o.estrutura?(alvo.itens.length+' itens importados como um novo orçamento na lista. Salve pra gravar na obra.')
+                      :('Valores atualizados no orçamento em uso. Salve pra gravar na obra.'));
     });
   }
   function fmtMoeda(v){
@@ -17005,13 +17085,54 @@
     if(aberto)no.filhos.forEach(function(f){ html+=orcLinhaHTML(f,arv,total); });
     return html;
   }
+  /** O cartão que lista e gerencia os orçamentos da obra. Fica no alto da tela, com a
+   *  mesma ideia da aba de cenários: escolher qual está valendo, dizer a que cenário cada
+   *  um pertence, renomear, duplicar e apagar. */
+  function orcVersoesHTML(){
+    if(!ORCS.length)return '';
+    var ro=isReadOnly();
+    var cenOpts=function(sel){
+      return '<option value=""'+(sel?'':' selected')+'>— nenhum cenário —</option>'+
+        CENARIOS.map(function(c){
+          var rot=(c.tipo==='baseline'?('Linha de base '+(c.revisao||'')):c.nome);
+          return '<option value="'+escAttr(c.id)+'"'+(sel===c.id?' selected':'')+'>'+escAttr(rot)+'</option>';
+        }).join('');
+    };
+    var linhas=ORCS.map(function(v){
+      var emUso=(v.id===ORC_ATIVO);
+      var f=v.orc.itens.filter(function(i){ return i.folha; }).length;
+      var base=(v.orc.cfg&&v.orc.cfg.base==='venda')?'venda':'custo';
+      var tot=0; v.orc.itens.forEach(function(i){ if(i.folha)tot+=orcNum(i[base]); });
+      var cen=v.cenarioId?CENARIOS.filter(function(c){ return c.id===v.cenarioId; })[0]:null;
+      return '<tr'+(emUso?' style="background:var(--elev)"':'')+'>'+
+        '<td style="white-space:nowrap">'+(emUso?'<b>● em uso</b>':'<button class="btn" data-orcusa="'+escAttr(v.id)+'" style="padding:3px 9px;font-size:11.5px">Aplicar</button>')+'</td>'+
+        '<td><b>'+escAttr(v.nome)+'</b>'+(v.criadoEm?('<div class="note" style="margin:0">'+brDate(String(v.criadoEm).slice(0,10))+'</div>'):'')+'</td>'+
+        '<td class="r mono">'+v.orc.itens.length+' itens<div class="note" style="margin:0">'+f+' composições</div></td>'+
+        '<td class="r mono">'+fmtMoedaCurta(tot)+'<div class="note" style="margin:0">'+base+'</div></td>'+
+        '<td><select class="einp" data-orccen="'+escAttr(v.id)+'"'+(ro?' disabled':'')+' style="min-width:170px" '+
+          'title="Ao abrir ou ver esse cenário, é este orçamento que vale">'+cenOpts(v.cenarioId)+'</select>'+
+          (cen?'':'<div class="note" style="margin:0">vale pra obra, fora de cenário</div>')+'</td>'+
+        '<td style="white-space:nowrap;text-align:right">'+(ro?'':(
+          '<button class="iconbtn" data-orcren="'+escAttr(v.id)+'" title="Renomear">✎</button> '+
+          '<button class="iconbtn" data-orcdup="'+escAttr(v.id)+'" title="Duplicar">⧉</button> '+
+          '<button class="iconbtn" data-orcdel="'+escAttr(v.id)+'" title="Excluir">✕</button>'))+'</td>'+
+      '</tr>';
+    }).join('');
+    return '<div class="card" style="margin-bottom:12px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Orçamentos da obra</div>'+
+      '<div class="note" style="margin:0 0 8px">O que está <b>em uso</b> é o que a tela abaixo edita e o que a <b>Curva S</b> e a <b>AVA</b> leem. '+
+        'Amarrar um orçamento a um cenário faz ele valer sempre que esse cenário for aberto ou visto — é assim que o cenário inicial fica com os valores dele.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead><tr>'+
+        '<th></th><th>Orçamento</th><th class="r">Tamanho</th><th class="r">Total</th><th>Cenário</th><th></th>'+
+      '</tr></thead><tbody>'+linhas+'</tbody></table></div></div>';
+  }
   VIEWS['cad-orc']=function(){
     if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
     var O=orcAtual();
     var acoes='<button class="btn" id="orcImp">↥ Importar planilha de orçamento</button>'+
       (orcTem()?'<button class="btn" id="orcExp">↧ Exportar Excel</button><button class="btn" id="orcLimpar">🗑 Limpar</button>':'')+
       '<button class="btn primary" id="orcSalvar"'+(ORC_DIRTY?'':' disabled')+'>💾 Salvar orçamento</button>';
-    var topo=head('Orçamento do projeto','Quadro de quantidades e preços da obra. Dá o peso financeiro de cada atividade para a AVA — não altera o cronograma.',acoes);
+    var topo=head('Orçamento do projeto','Quadro de quantidades e preços da obra. Dá o peso financeiro de cada atividade para a AVA — não altera o cronograma.',acoes)+orcVersoesHTML();
     if(!orcTem())
       return topo+'<div class="card"><div class="eyebrow" style="margin-bottom:4px">Nenhum orçamento importado</div>'+
         '<div class="note">Importe a planilha de composições da obra (PLANILHAS_COMPOR). São lidas duas abas:<br>'+
@@ -17067,13 +17188,61 @@
     return topo+kpis+tabela;
   };
   function orcWire(){
+    document.querySelectorAll('[data-orcusa]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        if(orcUsaVersao(bt.getAttribute('data-orcusa'))){ toast('Orçamento aplicado. Salve pra gravar na obra.'); go('cad-orc'); }
+      });
+    });
+    document.querySelectorAll('[data-orccen]').forEach(function(sel){
+      sel.addEventListener('change',function(){
+        var v=ORCS.filter(function(x){ return x.id===sel.getAttribute('data-orccen'); })[0]; if(!v)return;
+        /* Um cenário só pode ter um orçamento: amarrar aqui solta o que estava amarrado
+         * nele, senão dois orçamentos disputariam o mesmo cenário e a escolha ficaria na
+         * ordem da lista, que ninguém controla. */
+        if(sel.value)ORCS.forEach(function(x){ if(x!==v&&x.cenarioId===sel.value)x.cenarioId=''; });
+        v.cenarioId=sel.value||'';
+        orcSujo(); go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orcren]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        var v=ORCS.filter(function(x){ return x.id===bt.getAttribute('data-orcren'); })[0]; if(!v)return;
+        var n=prompt('Nome deste orçamento:',v.nome); if(n==null)return;
+        v.nome=String(n).trim()||v.nome; orcSujo(); go('cad-orc');
+      });
+    });
+    document.querySelectorAll('[data-orcdup]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        var v=ORCS.filter(function(x){ return x.id===bt.getAttribute('data-orcdup'); })[0]; if(!v)return;
+        var copia={id:orcNovoId(),nome:v.nome+' (cópia)',cenarioId:'',criadoEm:new Date().toISOString(),
+                   orc:JSON.parse(JSON.stringify(v.orc))};
+        ORCS.push(copia); orcSujo(); go('cad-orc');
+        toast('Cópia criada. Ela entra sem cenário amarrado.');
+      });
+    });
+    document.querySelectorAll('[data-orcdel]').forEach(function(bt){
+      bt.addEventListener('click',function(){
+        var id=bt.getAttribute('data-orcdel');
+        var v=ORCS.filter(function(x){ return x.id===id; })[0]; if(!v)return;
+        if(ORCS.length===1&&!confirm('Este é o único orçamento da obra. Excluir deixa a AVA sem peso financeiro. Continuar?'))return;
+        if(ORCS.length>1&&!confirm('Excluir o orçamento "'+v.nome+'"? Isso não dá pra desfazer depois de salvar.'))return;
+        ORCS=ORCS.filter(function(x){ return x.id!==id; });
+        if(ORC_ATIVO===id){ ORC_ATIVO=ORCS.length?ORCS[0].id:''; ORC=ORCS.length?ORCS[0].orc:null; }
+        orcSujo(); go('cad-orc');
+      });
+    });
     var b=document.getElementById('orcImp'); if(b)b.addEventListener('click',orcImportar);
     var s=document.getElementById('orcSalvar'); if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
     var x=document.getElementById('orcExp'); if(x)x.addEventListener('click',function(){ comCarga(exportOrcamentoExcel); });
     var l=document.getElementById('orcLimpar');
     if(l)l.addEventListener('click',function(){
       if(!confirm('Apagar o orçamento importado desta obra? Os vínculos com serviços e os lançamentos da AVA vão junto.'))return;
-      ORC=orcVazio(); orcSujo(); go('cad-orc');
+      /* Limpar é apagar a versão em uso, não esvaziar o conteúdo dela: com lista de
+       * versões, uma versão vazia na lista é só lixo pra escolher por engano. */
+      ORCS=ORCS.filter(function(v){ return v.id!==ORC_ATIVO; });
+      ORC_ATIVO=ORCS.length?ORCS[0].id:'';
+      ORC=ORCS.length?ORCS[0].orc:orcVazio();
+      orcSujo(); go('cad-orc');
     });
     ['orcBase','orcBac','orcLA','orcLC'].forEach(function(id){
       var e=document.getElementById(id); if(!e)return;
