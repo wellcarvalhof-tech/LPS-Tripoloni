@@ -12427,17 +12427,24 @@
       '<button class="btn" id="curvaRefBtn" title="Lê a planilha Curva S da obra (contratual, executiva e realizada, semana a semana)">↥ '+(c?'Reimportar':'Importar')+' Curva S da obra</button>'+
       '<button class="btn" id="pesosBtn" title="Peso de cada serviço na curva geral — os mesmos que a planilha da obra usa">⚖ '+(pesos?'Editar':'Cadastrar')+' pesos da curva</button>'+
     '</div>';
+    /* Antes do atalho de "sem curva importada": o aviso de serviço apontado acima do
+     * cadastro é sobre os APONTAMENTOS, não sobre a curva de referência, e tem que
+     * aparecer mesmo em obra que nunca importou Curva S nenhuma. */
+    var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
+    var anc=null, dCart=null;
+    try{ dCart=curvaSData(); anc=dCart.ancora; }catch(e2){ anc=curvaAncoraInfo(tw); }
+    var acimaCart=(dCart&&dCart.acimaDoCadastro)||[];
+    var avisoAcima=(acimaCart.length        ?('<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div><b>'+acimaCart.length+' serviço(s) com realizado acima da quantidade cadastrada</b> — a curva deles é limitada em 100%, mas o apontado passa disso: '+          escAttr(acimaCart.slice(0,4).map(function(x){ return x.nome+' '+fmtDec(x.pct,0)+'%'; }).join(', '))+(acimaCart.length>4?(' e mais '+(acimaCart.length-4)):'')+          '. Ou o cadastro de quantidades está desatualizado, ou há apontamento a mais.</div></div>'):'');
     if(!c){
       return '<div class="card" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
         '<div><div class="eyebrow" style="margin-bottom:4px">Curva S da obra</div>'+
         '<div class="note" style="margin:0;max-width:620px">A obra já andou antes deste plano. Importe a Curva S da planilha para ver o avanço desde o começo e emendar o previsto daqui no realizado de lá.</div></div>'+
-        botoes+'</div></div>';
+        botoes+'</div>'+avisoAcima+'</div>';
     }
     var ultR=null;
     c.pontos.forEach(function(p){ if(p.r!=null)ultR=p; });
     var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
     // a ancora vem da propria conta da curva, ja com o aviso de quando a emenda nao pegou
-    var anc=null; try{ anc=curvaSData().ancora; }catch(e2){ anc=curvaAncoraInfo(tw); }
     var item=function(rot,val,pe){
       return '<div style="flex:1;min-width:140px"><div class="note" style="margin:0 0 2px">'+rot+'</div>'+
         '<div class="mono" style="font-size:17px;font-weight:700">'+val+'</div>'+
@@ -12463,6 +12470,7 @@
       ((anc&&!anc.semEfeito&&anc.escopo==='saldo'&&anc.vPrev>1)
         ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O cadastro está marcado como <b>só o saldo</b>, mas o plano já acumula '+anc.vPrev.toFixed(1).replace('.',',')+'% até a semana da emenda. Essas semanas ficam de fora e viram um salto na emenda — se o saldo é de hoje, o plano deveria começar na semana da emenda.</div></div>'
         :'')+
+      avisoAcima+
       ((curvaHistFonte()==='orcamento'&&!ultR)        ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O histórico deste orçamento tem <b>previsto</b>, mas nenhum <b>realizado</b>. Por isso o previsto do app começa do zero: não há de onde partir. Carregue o executado em <b>Cadastro → Orçamento → Histórico mensal → ↥ Importar realizado (saldo)</b>.</div></div>'        :'')+
       (pacote||lotViewSet()?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>Com filtro de lotes ou pacote ativo, a curva importada continua sendo a da obra inteira — ela não tem como ser recortada.</div></div>':'')+
     '</div>';
@@ -12481,7 +12489,11 @@
     for(var w=1;w<=tw;w++){
       SERV.forEach(function(s,si){
         accum[si]+=weekly[w][si]||0;
-        series[si].push(totalByServ[si]>0?(accum[si]/totalByServ[si]*100):0);
+        /* Avanço acumulado não passa de 100%: é a fração do escopo que ficou pronta, e mais
+         * de 100% do escopo não existe. A curva geral já limitava por serviço; a curva de UM
+         * serviço não limitava, e passava de 100% sempre que o apontado era maior que a
+         * quantidade cadastrada. O excesso não some calado — o cartão avisa. */
+        series[si].push(totalByServ[si]>0?Math.min(100,accum[si]/totalByServ[si]*100):0);
       });
       if(pesos){
         var v=0;
@@ -12492,7 +12504,9 @@
         totalSeries.push(v*100);
       } else {
         grandAccum+=weekly[w].reduce(function(a,b){return a+b;},0);
-        totalSeries.push(grandTotal>0?(grandAccum/grandTotal*100):0);
+        /* Mesmo limite da curva por serviço: sem pesos a soma crua também pode passar do
+         * total quando algum serviço foi apontado acima do cadastro. */
+        totalSeries.push(grandTotal>0?Math.min(100,grandAccum/grandTotal*100):0);
       }
     }
     return {series:series,totalSeries:totalSeries};
@@ -12668,6 +12682,14 @@
       if(si==null)return;
       realWeekly[w4][si]+=r.qtd||0;
     });
+    /* Serviço apontado acima da quantidade cadastrada: a curva dele é limitada em 100%, mas o
+     * excesso é informação — ou o cadastro está desatualizado, ou há apontamento a mais. */
+    var acimaDoCadastro=[];
+    SERV.forEach(function(sv,si){
+      if(!(totalByServ[si]>0))return;
+      var t=0; for(var wq=1;wq<=tw;wq++)t+=realWeekly[wq][si]||0;
+      if(t>totalByServ[si]*1.001)acimaDoCadastro.push({nome:sv.n,pct:100*t/totalByServ[si]});
+    });
     var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal);
 
     /* A ancora emenda o plano no realizado que veio da planilha: na semana escolhida a curva
@@ -12723,7 +12745,7 @@
         });
       });
     }
-    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode,pacote:pacote,ancora:anc,grupos:grupos};
+    return {tw:tw,hojeW:hojeW,baseline:baseline,cliente:cliente,executivo:executivo,real:real,projetado:projetado,projMode:projMode,pacote:pacote,ancora:anc,grupos:grupos,acimaDoCadastro:acimaDoCadastro};
   }
   /* ================= Níveis da Curva S =================
    * 1º nível: a curva geral da obra.
