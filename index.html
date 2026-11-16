@@ -3738,6 +3738,7 @@
     var listaPend='';
     var acoes='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
       (OFI.ovr?('<button class="btn primary" id="tcmSalvar"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"'):'Salvar cronograma')+'</button>'):'')+
+      (OFI.ovr?botaoSalvarCenarioHTML():'')+
       undoBotoesHTML()+
       '<button class="btn" id="ofiLimpar"'+(segs.length?'':' disabled')+'>Limpar estudo</button>'+
       '<button class="btn" id="ofiArrumar"'+(pend.length?'':' disabled')+' title="Desliza quem está fora de ordem para a primeira semana válida">Arrumar pendências</button>'+
@@ -11229,19 +11230,7 @@
         });
       });
       var novoCn=document.getElementById('cnNovo');
-      if(novoCn)novoCn.addEventListener('click',async function(){
-        if(!selectedObra)return;
-        var nome=prompt('Nome do cenário:','Cenário '+(CENARIOS.filter(function(c){return c.tipo==='rascunho';}).length+1));
-        if(nome==null)return;
-        novoCn.disabled=true;
-        try{
-          var snap=captureLiveSnapshot();
-          var id=await sbCreateCenario(selectedObra.id,{nome:nome||'Cenário',tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
-          CENARIOS.push({id:id,nome:nome||'Cenário',tipo:'rascunho',revisao:null,ativo:false,snap:snap,ordem:CENARIOS.length,congeladoEm:null});
-          go('cr-cenarios'); toast('Cenário salvo.');
-        }catch(e){ alert('Falha ao salvar cenário: '+((e&&e.message)||e)); }
-        novoCn.disabled=false;
-      });
+      if(novoCn)novoCn.addEventListener('click',function(){ salvarComoCenario(novoCn); });
       var liveBase=document.getElementById('cnLiveBase');
       if(liveBase)liveBase.addEventListener('click',function(){ gerarLinhaDeBase(captureLiveSnapshot(),null); });
       var backLive=document.getElementById('cnBackLive');
@@ -14850,6 +14839,44 @@
       var fb=fim(scheduleWithSnapshot(b.snap)), fv=fim(buildScheduleVivo());
       return {base:fb,vivo:fv,dif:fv-fb};
     }catch(e){ return null; }
+  }
+  /** Guarda o que está no editor agora como um cenário novo, sem tocar no cronograma da obra.
+   *  O snapshot sai da memória, então o que ainda não foi salvo entra no cenário do mesmo
+   *  jeito — é justamente pra isso que o botão serve: testar uma montagem, guardá-la e
+   *  continuar mexendo. Um caminho só, usado pela tela de Cenários e pelas barras dos
+   *  editores; antes cada tela teria a sua cópia da mesma gravação. */
+  async function salvarComoCenario(btn){
+    if(!selectedObra){ alert('Abra uma obra antes de salvar um cenário.'); return; }
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    var padrao=ACTIVE_CENARIO?(ACTIVE_CENARIO.nome+' (cópia)')
+      :('Cenário '+(CENARIOS.filter(function(c){ return c.tipo==='rascunho'; }).length+1));
+    var nome=prompt('Nome do cenário:',padrao);
+    if(nome==null)return;
+    nome=(nome||'').replace(/^\s+|\s+$/g,'')||padrao;
+    var rot=btn?btn.innerHTML:null;
+    if(btn){ btn.disabled=true; btn.innerHTML='Salvando…'; }
+    try{
+      var snap=captureLiveSnapshot();
+      var id=await sbCreateCenario(selectedObra.id,{nome:nome,tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
+      CENARIOS.push({id:id,nome:nome,tipo:'rascunho',revisao:null,ativo:false,snap:snap,ordem:CENARIOS.length,congeladoEm:null});
+      if(btn){ btn.disabled=false; btn.innerHTML=rot; }
+      /* Só a tela de cenários precisa ser redesenhada pra mostrar o novo; no meio da montagem,
+       * recarregar a matriz tiraria a pessoa de onde ela estava trabalhando. */
+      if(current==='cr-cenarios')go('cr-cenarios');
+      toast('Cenário "'+nome+'" salvo. O cronograma da obra continua como estava.');
+    }catch(e){
+      if(btn){ btn.disabled=false; btn.innerHTML=rot; }
+      alert('Falha ao salvar cenário: '+((e&&e.message)||e));
+    }
+  }
+  /** O botão, igual nas barras do Tempo-Caminho manual e do Ajuste manual. */
+  function botaoSalvarCenarioHTML(){
+    return '<button class="btn" id="btnSalvarCenario" title="Guarda este cronograma como um cenário, pra comparar depois. Não altera a obra.">'+
+      '🗂 Salvar '+(ACTIVE_CENARIO?'como novo cenário':'como cenário')+'</button>';
+  }
+  function ligaBotaoSalvarCenario(){
+    var b=document.getElementById('btnSalvarCenario');
+    if(b)b.addEventListener('click',function(){ salvarComoCenario(b); });
   }
   /** Sai da visualização de cenário e volta pra referência da obra. */
   function cenarioSair(){
@@ -24302,6 +24329,7 @@
       '<div style="display:flex;gap:8px;white-space:nowrap">'+
         undoBotoesHTML()+'<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
         '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
+        botaoSalvarCenarioHTML()+
       '</div></div>'+
       '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false,buildScheduleVivo(),{novo:true});
     if(tab==='tc'&&tcVistaAtual()==='projecao'){
@@ -24370,7 +24398,7 @@
     undoLigaTeclas(); undoLigaBotoes();
     var vf=document.getElementById('tcmVerFalta');
     if(vf)vf.addEventListener('click',tcmDialogoFalta);
-    refreshTopSaveBtn(); applyReadOnly();
+    refreshTopSaveBtn(); ligaBotaoSalvarCenario(); applyReadOnly();
     if(tcManual()&&(window._cronoTab||'tc')==='tc'){
       ofiDraw();
       var sv=document.getElementById('tcmSalvar');
