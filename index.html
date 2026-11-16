@@ -19331,20 +19331,49 @@
    *  O arquivo é um retrato ACUMULADO até a data de corte, não uma série mensal: por isso o mês
    *  é escolhido na hora, e o valor inteiro entra nele. É a partir dele que a curva e a AVA
    *  passam a contar. */
-  function avImpGruposPorSubgrupo(lido){
-    var por={}, ordem=[];
+  /* ---------------- Importar o realizado casando pelo CÓDIGO do item ----------------
+   *
+   * A planilha de saldo tem a mesma EAP do orçamento — o mesmo "ITEM PMG" em cada linha. Então
+   * não há nada pra perguntar sobre serviço nem sobre agrupamento: o item já está vinculado no
+   * orçamento, e o grupo é o galho dele na própria EAP. Medido com os arquivos de uma obra, 331
+   * de 333 itens acharam o correspondente pelo código.
+   *
+   * A única coisa que o arquivo não diz é QUANDO: ele é um retrato acumulado até a data de
+   * corte. Esse é o único campo do diálogo.
+   *
+   * Importar duas vezes o mesmo arquivo tem que dar o mesmo resultado, não o dobro — por isso o
+   * mês é zerado antes de somar, e o contrato por serviço é recalculado do zero.
+   */
+  function histRealCasaPorCodigo(lido){
+    var O=orcAtual();
+    var porCod={};
+    O.itens.forEach(function(it){ if(it.folha)(porCod[it.cod]=porCod[it.cod]||[]).push(it); });
+    /* Segunda via pro serviço: a coluna SUBGRUPO da planilha traz o nome dele. Serve pro
+     * item que ainda não foi vinculado no orçamento — e é dado da própria planilha, não chute. */
+    var porNomeSvc={};
+    SERV.forEach(function(sv){ porNomeSvc[chaveNomeServ(sv.n)]=sv.id; });
+    var porSvc={}, semItem=[], semSvc=[], nCasou=0, execTot=0, vtTot=0, porSubgrupo=0;
     lido.linhas.forEach(function(x){
-      var nome=x.sub||'(sem subgrupo)';
-      if(!por[nome]){ por[nome]={id:'sg:'+nome,cod:'',nome:nome,secNome:'',total:0,ref:0,meses:{}}; ordem.push(nome); }
-      por[nome].total+=x.exf;
-      por[nome].ref+=x.vt;
+      vtTot+=x.vt; execTot+=x.exf;
+      var c=porCod[x.cod]||[];
+      if(c.length!==1){ semItem.push(x); return; }
+      var it=c[0];
+      nCasou++;
+      var sid=it.svc||null;
+      if(!sid&&x.sub){ sid=porNomeSvc[chaveNomeServ(x.sub)]||null; if(sid)porSubgrupo++; }
+      if(!sid){ semSvc.push(x); return; }
+      var a=porSvc[sid]||(porSvc[sid]={svc:sid,exec:0,contrato:0,itens:0});
+      a.exec+=x.exf; a.contrato+=x.vt; a.itens++;
     });
-    return ordem.map(function(k){ return por[k]; })
-      .sort(function(a,b){ return b.total-a.total; });
+    var nSvc=0, execUsado=0, contratoUsado=0;
+    Object.keys(porSvc).forEach(function(k){ nSvc++; execUsado+=porSvc[k].exec; contratoUsado+=porSvc[k].contrato; });
+    return {porSvc:porSvc,semItem:semItem,semSvc:semSvc,nCasou:nCasou,nSvc:nSvc,porSubgrupo:porSubgrupo,
+            execTot:execTot,vtTot:vtTot,execUsado:execUsado,contratoUsado:contratoUsado};
   }
   function histImportarRealizado(){
     if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
     if(!orcVersaoAtiva()){ alert('Importe ou escolha um orçamento antes: o histórico é dele.'); return; }
+    if(!orcTem()){ alert('O orçamento em uso está vazio — não há itens pra casar com a planilha.'); return; }
     pickExcelFile(function(file){
       readWorkbookFile(file).then(function(wb){
         var lido=avImpLe(wb);
@@ -19353,12 +19382,78 @@
             'Procuro uma aba com as colunas ITEM PMG, DESCRIÇÃO e QTDE. TOTAL, e um bloco "EXECUTADO E MEDIDO" com QTDE e FINANCEIRO.');
           return;
         }
-        var grupos=avImpGruposPorSubgrupo(lido);
-        if(!grupos.length){ alert('O arquivo foi lido, mas não achei valor executado em nenhuma linha.'); return; }
-        histMapaDialogo(grupos,[],file.name,{escolheMes:true,med:'real',
-          rotuloValor:'Executado',rotuloRef:'Do contrato',
-          nota:'O executado acumulado de cada subgrupo entra no histórico do serviço escolhido, no mês escolhido. <b>O orçamento não é alterado.</b>'});
+        var R=histRealCasaPorCodigo(lido);
+        if(!R.nSvc){
+          alert('Nenhum item da planilha achou correspondente vinculado a serviço no orçamento em uso.'+
+            String.fromCharCode(10)+String.fromCharCode(10)+
+            'O casamento é pelo código do item (ITEM PMG). Confira se este é o orçamento certo e se os itens estão vinculados a serviços.');
+          return;
+        }
+        histRealDialogo(R,file.name);
       }).catch(function(e){ alert('Não consegui abrir o arquivo: '+((e&&e.message)||e)); });
+    });
+  }
+  function histRealDialogo(R,nomeArq){
+    var meses=[], vis={};
+    ((orcAtual().meses)||[]).concat(avaMeses()||[]).forEach(function(m){ if(m&&!vis[m]){ vis[m]=1; meses.push(m); } });
+    meses.sort();
+    if(!meses.length)meses=[orcMesKey(new Date())];
+    var foraVt=0;
+    R.semItem.forEach(function(x){ foraVt+=x.vt; });
+    R.semSvc.forEach(function(x){ foraVt+=x.vt; });
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:620px">'+
+      '<div class="eyebrow" style="margin-bottom:2px">Importar realizado</div>'+
+      '<div class="note" style="margin-bottom:12px">'+escAttr(nomeArq)+' — casado pelo <b>código do item</b> com o orçamento em uso. '+
+        'O serviço e o agrupamento vêm do próprio orçamento: não há o que escolher.</div>'+
+      '<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><tbody>'+
+        '<tr><td>Itens na planilha</td><td class="r mono">'+(R.semItem.length+R.nCasou)+'</td></tr>'+
+        '<tr><td>Acharam o item no orçamento</td><td class="r mono">'+R.nCasou+
+          (R.semItem.length?(' <span style="color:var(--warn)">('+R.semItem.length+' não)</span>'):'')+'</td></tr>'+
+        (R.semSvc.length?('<tr><td>Casaram mas sem serviço vinculado</td><td class="r mono" style="color:var(--warn)">'+R.semSvc.length+'</td></tr>'):'')+
+        '<tr><td>Serviços atingidos</td><td class="r mono">'+R.nSvc+'</td></tr>'+
+        (R.porSubgrupo?('<tr><td>Serviço veio da coluna SUBGRUPO</td><td class="r mono">'+R.porSubgrupo+' item(ns)</td></tr>'):'')+
+        '<tr><td>Executado que entra</td><td class="r mono">'+fmtMoeda(R.execUsado)+' de '+fmtMoeda(R.contratoUsado)+
+          ' · <b>'+fmtDec(R.contratoUsado>0?100*R.execUsado/R.contratoUsado:0,2)+'%</b></td></tr>'+
+        (foraVt>0?('<tr><td style="color:var(--warn)">Fica de fora</td><td class="r mono" style="color:var(--warn)">'+fmtMoeda(foraVt)+'</td></tr>'):'')+
+      '</tbody></table></div>'+
+      '<label style="display:block;margin-top:12px;font-size:12.5px">O acumulado entra no mês de'+
+        '<select class="einp" id="hrMes" style="width:100%;margin-top:4px">'+
+          meses.map(function(m,i){ return '<option value="'+m+'"'+(i===meses.length-1?' selected':'')+'>'+orcMesLabel(m)+'</option>'; }).join('')+
+        '</select>'+
+        '<div class="note" style="margin:4px 0 0">O arquivo é um acumulado até a data de corte. Reimportar o mesmo mês <b>substitui</b> o que já estava — não soma em cima.</div></label>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="hrCancel">Cancelar</button>'+
+        '<button class="btn primary" id="hrOk">Importar</button></div></div>';
+    document.body.appendChild(back);
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#hrCancel').addEventListener('click',fecha);
+    back.querySelector('#hrOk').addEventListener('click',function(){
+      var v=orcVersaoAtiva(); if(!v){ fecha(); return; }
+      var h=orcHistGarante(v);
+      var mes=back.querySelector('#hrMes').value;
+      if(h.meses.indexOf(mes)<0)h.meses.push(mes);
+      h.meses.sort();
+      /* Zera o mês e o contrato antes de gravar: reimportar o mesmo arquivo tem que dar o mesmo
+       * resultado, e somar em cima dobraria tudo em silêncio. */
+      var suf='::'+mes;
+      Object.keys(h.real).forEach(function(k){ if(k.slice(-suf.length)===suf)delete h.real[k]; });
+      h.contrato={};
+      var n=0, soma=0;
+      Object.keys(R.porSvc).forEach(function(sid){
+        var a=R.porSvc[sid];
+        h.real[sid+suf]=a.exec;
+        h.contrato[sid]=a.contrato;
+        soma+=a.exec; n++;
+      });
+      h.base=R.contratoUsado;
+      v.fonteDist='orcamento';
+      orcSujo(); fecha();
+      ORC_TAB='hist'; ORC_HIST_MED='real';
+      go('cad-orc');
+      toast(n+' serviço(s) com realizado em '+orcMesLabel(mes)+' ('+fmtMoeda(soma)+'). '+
+        'A curva passa a partir do que já foi executado. Salve pra gravar na obra.');
     });
   }
   function avaLancHTML(D){
