@@ -355,6 +355,9 @@
   table.tcm td.wk{padding:3px 8px;text-align:center;font-weight:600;background:var(--elev);font-family:"IBM Plex Mono",monospace;color:var(--ink-2)}
   table.tcm td.sumname{position:sticky;left:0;z-index:2}
   table.tcm td.cell{padding:0}
+  /* Celula vazia so porque o servico esta filtrado: o risco diz que ali TEM coisa, senao a
+   * matriz filtrada parece ter espaco livre onde nao tem. */
+  table.tcm td.cell.tcm-oculto{background-image:repeating-linear-gradient(45deg,transparent 0 4px,rgba(127,127,127,.20) 4px 8px)}
   .tcm-row{display:flex;min-height:28px;width:100%}
   .tcm-seg{flex:1;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:"IBM Plex Mono",monospace;position:relative;padding:2px 3px;cursor:grab;touch-action:none}
   .tcm-seg:active{cursor:grabbing}
@@ -2950,8 +2953,18 @@
       var rainBadge=f<0.999?' <span class="tcm-rain" title="Praticabilidade reduzida">🌧 '+Math.round(f*100)+'%</span>':'';
       for(var lx=0;lx<lotIdxs.length;lx++){
         var li=lotIdxs[lx];
-        var subs=(cell[w+'::'+li]||[]).filter(function(sc){ return sc.qty>0; });
-        if(!subs.length){ tds+='<td class="cell" data-ofinovo="'+li+'::'+w+'" title="Clique pra colocar um serviço aqui"></td>'; continue; }
+        var todos=(cell[w+'::'+li]||[]).filter(function(sc){ return sc.qty>0; });
+        var subs=todos.filter(function(sc){ return !TC_HIDDEN_SVC[sc.sg.si]; });
+        if(!subs.length){
+          /* Vazia de verdade ou vazia só porque o filtro escondeu o que estava ali: a segunda
+           * leva o risco e diz o que tem, senão a célula convida a desenhar por cima. */
+          var escond={}, nEsc=0;
+          todos.forEach(function(sc){ if(!escond[sc.sg.si]){ escond[sc.sg.si]=1; nEsc++; } });
+          tds+='<td class="cell'+(nEsc?' tcm-oculto':'')+'" data-ofinovo="'+li+'::'+w+'" title="'+
+            (nEsc?escAttr(Object.keys(escond).map(function(si){ return SERV[si]?SERV[si].n:'?'; }).join(', ')+' — escondido pelo filtro de serviços'):'Clique pra colocar um serviço aqui')+
+            '"></td>';
+          continue;
+        }
         var inner=subs.map(function(sc,i){
           return '<div class="tcm-seg" data-ofiedit="'+sc.sg.id+'" style="flex:'+Math.max(sc.qty,1)+' 1 0;background:'+sc.sg.color+';color:'+pickFont(sc.sg.color)+
             (i>0?';border-left:1px dashed rgba(255,255,255,.6)':'')+'" title="'+escAttr(sc.sg.name)+' — '+escAttr(teamLabel(sc.sg.name,sc.sg.team))+' · clique pra mover ou remover">'+
@@ -3766,7 +3779,9 @@
             'Lote que você não colocar simplesmente não entra no cronograma. Lembre de <b>salvar</b>.</p>'+comoMontar,
             (ADJ_DIRTY?' <b style="color:var(--warn);text-transform:none;letter-spacing:0">Há mudanças não salvas.</b>':'')))+
       paleta+acoes+listaPend+cmp+
-      (estudo?'':tcZoomBarHTML())+
+      /* Só no Tempo-Caminho da obra: na Oficina os chips não teriam quem os ligasse
+       * (wireMatrixZoom só roda na tela da matriz). */
+      (estudo?'':svcTogglesHTML()+tcZoomBarHTML())+
       ofiMatrizHTML(segs,lotIdxs,totalWeeks,!estudo)+'</div>';
   };
   function ofiDraw(){
@@ -3775,6 +3790,9 @@
         var v=b.getAttribute('data-ofitinta');
         var si=(v==='')?null:+v;
         OFI.pincel.si=(OFI.pincel.si===si)?null:si;   // clicar de novo no mesmo solta o pincel
+        /* Pegar na mão um serviço que está filtrado o traz de volta: pintar o que não se vê
+         * deixaria blocos invisíveis pela matriz. */
+        if(OFI.pincel.si!=null)delete TC_HIDDEN_SVC[OFI.pincel.si];
         OFI.pincel.team=0;
         ofiRedesenha();
       });
@@ -22372,18 +22390,25 @@
     }
     return '<table class="tcm'+(opts.apontar?' apontar':'')+'"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table>';
   }
+  /** Chips de "quais servicos aparecem na matriz". So visual: esconder um servico nao mexe
+   *  no cronograma nem no que esta desenhado. Vale pra matriz automatica e pra manual --
+   *  numa obra com 15 servicos, olhar um de cada vez e a unica forma de enxergar a sequencia. */
+  function svcTogglesHTML(){
+    if(!SERV.length)return '';
+    var anyHidden=SERV.some(function(s,si){ return !!TC_HIDDEN_SVC[si]; });
+    return '<div class="tc-svctoggle">'+
+      SERV.map(function(sv,si){
+        var hidden=!!TC_HIDDEN_SVC[si];
+        return '<label class="lotchip'+(hidden?' other':' on')+'"><input type="checkbox" data-svcvis="'+si+'"'+(hidden?'':' checked')+'><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+escAttr(sv.n)+'</label>';
+      }).join('')+
+      (anyHidden?'<button class="btn" id="svcShowAll" style="padding:4px 10px;font-size:11.5px">Mostrar todos</button>':'')+
+    '</div>';
+  }
   function matrixTableHTML(withSummary,segsOverride,opts){
     opts=opts||{};
     var tableHtml=matrixTableCore(withSummary,viewLotIdxs(),segsOverride||buildSchedule(),opts);
     if(opts.soLeitura)tableHtml='<div class="tc-soleitura">'+tableHtml+'</div>';
-    var anyHidden=SERV.some(function(s,si){return !!TC_HIDDEN_SVC[si];});
-    var svcToggles=SERV.length?('<div class="tc-svctoggle">'+
-      SERV.map(function(sv,si){
-        var hidden=!!TC_HIDDEN_SVC[si];
-        return '<label class="lotchip'+(hidden?' other':' on')+'"><input type="checkbox" data-svcvis="'+si+'"'+(hidden?'':' checked')+'><span class="swatch" style="background:'+svcColor(sv)+'"></span>'+sv.n+'</label>';
-      }).join('')+
-      (anyHidden?'<button class="btn" id="svcShowAll" style="padding:4px 10px;font-size:11.5px">Mostrar todos</button>':'')+
-    '</div>'):'';
+    var svcToggles=svcTogglesHTML();
     var z=window._matrixZoom||1;
     var zoomBar=tcZoomBarHTML();
     // O zoom vai no conteúdo (tc-zoomin), não no quadro: o quadro (tcWrap) mantém o tamanho e
@@ -22486,6 +22511,8 @@
       cb.addEventListener('change',function(){
         var si=+cb.getAttribute('data-svcvis');
         if(cb.checked)delete TC_HIDDEN_SVC[si]; else TC_HIDDEN_SVC[si]=true;
+        // Esconder o serviço que estava na mão solta o pincel, pelo mesmo motivo.
+        if(TC_HIDDEN_SVC[si]&&OFI&&OFI.pincel&&OFI.pincel.si===si)OFI.pincel.si=null;
         go(current);
       });
     });
