@@ -13005,18 +13005,20 @@
     }
     return {eixo:pre.concat(plano),pre:pre.length};
   }
-  function sCurve(id,data,sel,wSel){
+  function sCurve(id,data,sel,wSel,Eop,Sop){
     var el=document.getElementById(id); if(!el)return;
     var W=700,H=210,pl=30,pr=10,pt=10,pb=18,iw=W-pl-pr,ih=H-pt-pb;
     var afs='style="font-size:7.5px"';
     var tw=data.tw;
     if(!SERV.length||!tw){el.innerHTML='';el.removeAttribute('viewBox');return;}
-    var E=curvaEixo(tw), eixo=E.eixo, pre=E.pre;
+    /* O eixo e as series ja vem prontos de quem chamou: calcular de novo aqui era 15 ms
+     * gastos pra chegar no mesmo resultado, a cada redesenho. */
+    var E=Eop||curvaEixo(tw), eixo=E.eixo, pre=E.pre;
     var n=eixo.length;
 
     /* As mesmas séries que alimentam os cartões, filtradas pelo que está marcado nos chips —
      * gráfico e número saindo da mesma conta. */
-    var S=curvaSeriesNoEixo(data,sel,eixo,pre), vis=curvaVis();
+    var S=Sop||curvaSeriesNoEixo(data,sel,eixo,pre), vis=curvaVis();
     var linhas=CURVAS_DEF.filter(function(c){ return S[c.id]&&vis[c.id]; }).map(function(c){
       return {d:S[c.id],cor:c.cor,w:c.w,dash:c.dash,op:c.ref?0.8:1};
     });
@@ -13101,20 +13103,109 @@
       s+='<path d="'+path(L.d)+'" fill="none" stroke="'+L.cor+'" stroke-width="'+L.w+'"'+
         (L.dash?(' stroke-dasharray="'+L.dash+'"'):'')+(L.op<1?(' opacity="'+L.op+'"'):'')+'/>';
     });
-    /* A linha vertical e o CURSOR do painel: ela marca a semana escolhida no seletor, que e a
-     * mesma que os cartoes estao mostrando. Presa em "hoje" ela nao dizia nada quando se olhava
-     * outro periodo — os numeros mudavam e a linha ficava parada. */
+    /* A linha vertical e o CURSOR do painel: marca o periodo escolhido, o mesmo que os
+     * cartoes, as barras e o IDP estao mostrando. O rotulo e sempre a semana (ou o mes) em
+     * que ela esta: dizer "hoje" escondia justamente a informacao que se procura ao arrastar. */
     var wCur=(wSel!=null&&wSel>0&&wSel<=tw)?wSel:data.hojeW;
     var hi=pre+wCur;
     if(wCur>0&&wCur<=tw&&hi>=i0&&hi<=i1){
       var hx=xx(posPerto(hi));
       var dCur=mondayOf(wCur);
-      var rotCur=(wCur===data.hojeW)?'hoje'
-        :(porMes?(MESES[dCur.getMonth()]+'/'+String(dCur.getFullYear()).slice(2)):rotSem(dCur));
-      s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--ink-2)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
-        '<text x="'+hx+'" y="'+(pt-3)+'" text-anchor="middle" class="axm" '+afs+'>'+rotCur+'</text>';
+      var rotCur=porMes?(MESES[dCur.getMonth()]+'/'+String(dCur.getFullYear()).slice(2)):rotSem(dCur);
+      /* A pilula no topo e a alca: sem ela a linha parece so uma marca de leitura, e nao da
+       * pra adivinhar que ela se arrasta. */
+      var lw=rotCur.length*4.2+10, lx=Math.max(lw/2+1,Math.min(W-lw/2-1,hx));
+      s+='<line x1="'+hx+'" y1="'+pt+'" x2="'+hx+'" y2="'+(pt+ih)+'" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>'+
+        '<rect x="'+(lx-lw/2).toFixed(1)+'" y="0.5" width="'+lw.toFixed(1)+'" height="10" rx="3" fill="var(--accent)"/>'+
+        '<text x="'+lx.toFixed(1)+'" y="7.8" text-anchor="middle" style="font-size:7.5px;font-weight:700" fill="#fff">'+rotCur+'</text>';
     }
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
+    /* O cursor se arrasta: a semana que o painel inteiro mostra passa a ser escolhida no
+     * proprio grafico, nao so no seletor ao lado. */
+    cvCursorArrastavel(el,W,idxs.map(function(ix,k){ return {x:xx(k),w:ix-pre}; })
+      .filter(function(p){ return p.w>0&&p.w<=tw; }),wCur);
+  }
+  /** Deixa o cursor vertical do gráfico ser arrastado — ou clicado — pra qualquer período
+   *  desenhado. `pontos` é [{x em unidades do viewBox, semana do plano}] e `wCur` é onde ele
+   *  está agora. Mudar o cursor redesenha o painel inteiro: cartões, barras e IDP andam junto
+   *  com a linha, porque todos leem a mesma semana.
+   *
+   *  O <svg> sobrevive entre renders (só o innerHTML troca), então os ouvintes entram uma vez
+   *  só e leem o estado de `el._cvCur` — religar a cada desenho empilharia um ouvinte por
+   *  quadro de arrasto. */
+  function cvCursorArrastavel(el,W,pontos,wCur){
+    el._cvCur={W:W,pontos:pontos,w:wCur};
+    if(!pontos.length)return;
+    el.style.cursor='ew-resize';
+    /* pan-y e não none: numa tela de toque o arrasto horizontal é do cursor, mas rolar a
+     * página pra cima e pra baixo em cima do gráfico continua funcionando. */
+    el.style.touchAction='pan-y';
+    if(!el.hasAttribute('tabindex'))el.setAttribute('tabindex','0');
+    if(el._cvLigado)return;
+    el._cvLigado=true;
+    function semanaEm(clientX){
+      var C=el._cvCur; if(!C||!C.pontos.length)return null;
+      var r=el.getBoundingClientRect(); if(!r.width)return null;
+      var vx=(clientX-r.left)*(C.W/r.width), melhor=null, dist=1e9;
+      C.pontos.forEach(function(p){ var d=Math.abs(p.x-vx); if(d<dist){ dist=d; melhor=p.w; } });
+      return melhor;
+    }
+    function vaiPara(w){
+      if(w==null)return;
+      var selEl=document.getElementById('cvWeekSel');
+      if(selEl){
+        /* Na escala mensal o seletor só lista o fechamento de cada mês: parar numa semana do
+         * meio deixaria o seletor em branco — a tela mostrando um período e dizendo outro. */
+        var ops=[], i;
+        for(i=0;i<selEl.options.length;i++){ var v=selEl.options[i].value; if(v!=='auto')ops.push(+v); }
+        if(ops.length){
+          var alvo=ops[0], dist=1e9;
+          ops.forEach(function(v){ var d=Math.abs(v-w); if(d<dist){ dist=d; alvo=v; } });
+          w=alvo;
+        }
+        selEl.value=String(w);
+      }
+      if(window._curvaSWeek===w)return;   // arrasto dentro do mesmo ponto: nada a redesenhar
+      window._curvaSWeek=w;
+      renderCurvaS();
+    }
+    var arrastando=false, pendente=null, quadro=0;
+    el.addEventListener('pointerdown',function(e){
+      if(e.button!=null&&e.button!==0)return;
+      arrastando=true;
+      cvCongela(true);
+      try{ el.setPointerCapture(e.pointerId); }catch(_e){}
+      try{ el.focus({preventScroll:true}); }catch(_e2){}
+      vaiPara(semanaEm(e.clientX));
+      e.preventDefault();
+    });
+    /* Um desenho por quadro: o dedo manda dezenas de pointermove por segundo e redesenhar
+     * em todos sobrava fila pra tras — a linha chegava no lugar depois do dedo. */
+    el.addEventListener('pointermove',function(e){
+      if(!arrastando)return;
+      pendente=semanaEm(e.clientX);
+      if(quadro)return;
+      quadro=requestAnimationFrame(function(){ quadro=0; vaiPara(pendente); });
+    });
+    var solta=function(e){
+      if(!arrastando)return;
+      arrastando=false;
+      if(quadro){ cancelAnimationFrame(quadro); quadro=0; vaiPara(pendente); }
+      cvCongela(false);
+      try{ el.releasePointerCapture(e.pointerId); }catch(_e){}
+    };
+    el.addEventListener('pointerup',solta);
+    el.addEventListener('pointercancel',solta);
+    el.addEventListener('keydown',function(e){
+      var dir=e.key==='ArrowLeft'?-1:(e.key==='ArrowRight'?1:0);
+      if(!dir)return;
+      var C=el._cvCur, k=-1, i;
+      for(i=0;i<C.pontos.length;i++)if(C.pontos[i].w===C.w)k=i;
+      if(k<0)return;
+      var alvo=C.pontos[k+dir];
+      if(alvo)vaiPara(alvo.w);
+      e.preventDefault();
+    });
   }
   function kpiCardCv(colorKey,lab,val,foot){
     var colMap={good:'var(--good)',crit:'var(--crit)',warn:'var(--warn)',mut:'var(--muted)'};
@@ -13176,14 +13267,25 @@
     for(var j=i-1;j>=0;j--){ if(series[j]!=null)return series[j]; }
     return null;
   }
+  /* Enquanto o cursor e arrastado nada muda no plano — so QUAL periodo se esta lendo. O
+   * congelamento guarda a conta pesada (as series no eixo) entre o pointerdown e o
+   * pointerup; sem ele cada quadro refazia 30 ms de conta e a linha patinava atras do dedo.
+   * Vive so durante o arrasto: fora dele nao ha cache nenhum pra ficar velho. */
+  var CV_CONGELADO=null;
+  function cvCongela(liga){
+    if(!liga){ CV_CONGELADO=null; return; }
+    var data=curvaSData(), sel=curvaSelAtual(), E=curvaEixo(data.tw);
+    CV_CONGELADO={data:data,sel:sel,E:E,S:curvaSeriesNoEixo(data,sel,E.eixo,E.pre)};
+  }
   function renderCurvaS(){
     /* A tela de Curva S tem duas abas; com a do realizado aberta os svg nem existem.
      * Desenhar no vazio nao quebra, mas calcular a curva toda pra jogar fora, sim. */
     if(!document.getElementById('scv2'))return;
-    var data=curvaSData();
     var sel=curvaSelAtual();
+    var Z=(CV_CONGELADO&&CV_CONGELADO.sel===sel)?CV_CONGELADO:null;
+    var data=Z?Z.data:curvaSData();
     var wSel=(window._curvaSWeek!=null&&window._curvaSWeek<=data.tw)?window._curvaSWeek:data.hojeW;
-    var E=curvaEixo(data.tw), S=curvaSeriesNoEixo(data,sel,E.eixo,E.pre);
+    var E=Z?Z.E:curvaEixo(data.tw), S=Z?Z.S:curvaSeriesNoEixo(data,sel,E.eixo,E.pre);
     var porMes=(window._curvaSEscala==='mes');
     var MESES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 
@@ -13244,7 +13346,7 @@
         });
       });
     }
-    sCurve('scv2',data,sel,wSel);
+    sCurve('scv2',data,sel,wSel,E,S);
     renderCvBars(data,sel,wSel);
     renderCvIdp(data,sel,wSel);
   }
