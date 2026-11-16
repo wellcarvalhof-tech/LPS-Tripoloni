@@ -14135,6 +14135,26 @@
   function buildSchedule(){
     return refAtiva()?withSnapshot(snapRef(),buildScheduleVivo):buildScheduleVivo();
   }
+  /** O cronograma que a tela do Tempo-Caminho esta mostrando AGORA: a vista escolhida ali em
+   *  cima decide entre a linha de base congelada, o rascunho em edicao e a projecao pelo
+   *  ritmo real. Os relatorios da matriz saem daqui. Exportar a referencia enquanto a tela
+   *  mostrava outra coisa era o motivo de o Excel nao bater com a plataforma, e nada na
+   *  planilha dizia por que. A Curva S, o histograma e a AVA continuam lendo a referencia:
+   *  la o assunto e o previsto da obra, nao o que esta na tela. */
+  function segsDaTelaTC(){
+    var v=tcVistaAtual();
+    if(v==='projecao')return buildProjectedSchedule('historico');
+    if(v==='plano')return buildScheduleVivo();
+    return buildSchedule();
+  }
+  /** Como chamar essa vista por escrito, pra planilha e cabecalho. */
+  function tcVistaRotulo(){
+    var v=tcVistaAtual();
+    if(v==='projecao')return 'projecao pelo ritmo real';
+    if(v==='plano')return 'planejado (em edicao)';
+    var b=activeBaseline();
+    return b?(('linha de base '+(b.revisao||'')).replace(/\s+$/,'')):'planejado';
+  }
   function computeHistogram(modo){
     return refAtiva()?withSnapshot(snapRef(),function(){ return computeHistogramVivo(modo); })
                      :computeHistogramVivo(modo);
@@ -14815,7 +14835,12 @@
     // Dentro de um cenário aberto, "linha de base" não é vista: o que está na tela é o cenário.
     if(ACTIVE_CENARIO||CENARIO_VISTA)return 'plano';
     if(!activeBaseline())return 'plano';              // sem linha de base só existe o plano
-    return (TC_VISTA==='plano')?'plano':'base';
+    if(TC_VISTA==='plano')return 'plano';
+    if(TC_VISTA==='base')return 'base';
+    /* Matriz destravada pra editar: o padrao e o rascunho. Abrir na linha de base poria a
+     * pessoa que acabou de liberar a edicao diante de uma matriz que nao aceita o clique. */
+    if(OVR&&OVR.__editavel)return 'plano';
+    return 'base';
   }
   function tcVistaBotoesHTML(){
     if(soLinhaDeBase())
@@ -15403,7 +15428,8 @@
   async function exportExcel(){
     if(typeof ExcelJS==='undefined'){alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.');return;}
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
-    var segs=buildSchedule();
+    /* Esta aba promete "as mesmas cores e textos da tela": tem que sair da mesma vista. */
+    var segs=segsDaTelaTC();
     var totalWeeks=1; segs.forEach(function(sg){totalWeeks=Math.max(totalWeeks,sg.start+sg.dur-1);});
     var cell={};
     segs.forEach(function(sg){
@@ -20861,7 +20887,7 @@
      * relatório cobre, mas as abas de dados vinham com a obra inteira — o arquivo
      * contradizia o próprio cabeçalho e não batia com a AVA nem com o Financeiro, que
      * respeitam o filtro. */
-    var segs=viewSegs(buildSchedule());
+    var segs=viewSegs(segsDaTelaTC());
     var base=activeBaseline();
     var segsLB=base?viewSegs(scheduleWithSnapshot(base.snap)):null;
     var lotIdxs=viewLotIdxs();
@@ -20884,6 +20910,7 @@
     [['obra',nome,'nome da obra'],
      ['gerado_em',fmtDate(new Date()),'data da exportação'],
      ['modo_cronograma',tcManual()?'manual':'automático','como o cronograma é montado'],
+     ['vista',tcVistaRotulo(),'o que esta planilha mostra — o mesmo da tela do Tempo-Caminho'],
      ['linha_de_base',base?(base.revisao+' — '+(base.nome||'')):'(sem linha de base)','referência de previsto'],
      ['semana_inicio',fmtDate(mondayOf(1)),'segunda-feira da semana 1'],
      ['num_semanas',tw,'horizonte do cronograma'],
@@ -24351,10 +24378,24 @@
       var dv=tcDesvioDaBase();
       var aviso='<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
         '<b>Planejado (em edição).</b> Este é o rascunho da matriz, não a referência da obra. '+
-        'A Curva S, o histograma, a AVA e os relatórios continuam lendo a <b>'+escAttr(refRotulo())+'</b>'+
+        'A Curva S, o histograma e a AVA continuam lendo a <b>'+escAttr(refRotulo())+'</b>'+
         (dv&&dv.dif?(' — hoje o rascunho termina '+Math.abs(dv.dif)+' semana(s) '+(dv.dif>0?'depois':'antes')+' dela'):' — hoje os dois terminam na mesma semana')+
-        '. Pra isto virar o previsto, gere uma nova revisão da linha de base.</div>';
+        '. O relatório do Tempo-Caminho acompanha esta vista — sai o que está na tela, e a aba Meta diz qual é. '+
+        'Pra isto virar o previsto, gere uma nova revisão da linha de base.</div>';
       return fsBarHTML()+aviso+avFalta+(tcManual()?ofiLousaHTML(false):(undoBarraHTML()+matrixTableHTML(true,buildScheduleVivo())));
+    }
+    /* A prancheta do manual desenha SEMPRE o rascunho vivo. Deixa-la responder pela vista da
+     * linha de base mostrava o rascunho debaixo do rotulo da base — e o relatorio, que le a
+     * referencia, saia diferente da tela. Na vista da base o manual mostra a base, como o
+     * automatico ja fazia; pra montar, a vista e "Planejado (em edicao)". */
+    if(tab==='tc'&&tcManual()&&tcVistaAtual()==='base'&&activeBaseline()){
+      var bl2=activeBaseline();
+      return fsBarHTML()+avFalta+
+        '<div class="banner" style="margin-bottom:10px;border-color:var(--accent)">'+
+          '<b>Linha de base '+escAttr(bl2.revisao||'')+'.</b> O retrato congelado que alimenta a Curva S, '+
+          'o histograma, a AVA e os relatorios. Pra ver ou montar o que esta em edicao, abra '+
+          '<b>Planejado (em edicao)</b> aqui em cima.</div>'+
+        matrixTableHTML(true);
     }
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+avFalta+ofiLousaHTML(false); }
     if(tab==='resumo') return fsBarHTML()+avFalta+resumoHTML();
