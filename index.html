@@ -3914,7 +3914,9 @@
     /* Aba que deixou de existir (atalhos e "editar por equipe", removidos): uma sessao aberta
      * desde antes ficaria num conteudo sem botao pra sair dele. */
     if(!{tc:1,ajuste:1,resumo:1}[window._cronoTab])window._cronoTab='tc';
-    if(matBloqueada()&&window._cronoTab==='ajuste')window._cronoTab='tc';
+    /* A aba de ajuste manual nao existe mais: quem tiver esse valor guardado (sessao antiga,
+     * cenario aberto antes da mudanca) cai no Tempo-Caminho. */
+    if(window._cronoTab==='ajuste')window._cronoTab='tc';
     if(isMobile()&&!MOBILE_TAB_MATRIZ[window._cronoTab])window._cronoTab='tc';
     var tabs=cronoTabsHTML('cr-matriz');
 
@@ -6775,12 +6777,12 @@
         '<label><input type="checkbox" data-cfgbool="parallelWithPredecessor" data-si="'+si+'"'+(cfg.parallelWithPredecessor?' checked':'')+'>Pode rodar em paralelo com predecessor (apenas defasagem)</label>'+
         '<label><input type="checkbox" data-cfgbool="pullFromQueue" data-si="'+si+'"'+(queueOn?' checked':'')+'>Equipe livre pega o próximo lote vazio (fila dinâmica)</label>'+
         '<label><input type="checkbox" data-cfgbool="noInterruption" data-si="'+si+'"'+(cfg.noInterruption?' checked':'')+'>Sem paralisações (execução contínua — evita equipe ociosa; chuva ainda reduz produção)</label>'+
-        '<label><input type="checkbox" data-cfgbool="seqManual" data-si="'+si+'"'+(cfg.seqManual?' checked':'')+'>Seguir a sequência de lotes definida (em Ajuste manual) em vez de reordenar automaticamente</label>'+
+        '<label><input type="checkbox" data-cfgbool="seqManual" data-si="'+si+'"'+(cfg.seqManual?' checked':'')+'>Seguir a ordem de cadastro dos lotes em vez de reordenar automaticamente</label>'+
         '<label>Semana do ano de início: <input class="einp" type="text" data-cfgcalweek="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:92px" placeholder="S37-26"> <span style="color:var(--muted)">(não inicia antes desta semana — escreva com o ano, ex.: S37-26)</span></label>'+
         '<label>Semana do ano alvo de término: <input class="einp" type="text" data-cfgcalweek="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:92px" placeholder="S45-27"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
       '</div>'+
       (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
-      (cfg.seqManual?'<div class="note" style="margin-top:6px">Sequência manual ligada: os lotes deste serviço são executados exatamente na ordem definida em <b>Ajuste manual → Lotes e sequência de execução por equipe</b>'+(queueOn?' (a equipe de cada lote continua sendo escolhida pelo app)':'')+'. A equipe pode ficar ociosa esperando um lote liberar — é o preço de fixar a ordem.</div>':'')+
+      (cfg.seqManual?'<div class="note" style="margin-top:6px">Sequência manual ligada: os lotes deste serviço são executados na ordem em que estão em <b>Lotes &amp; Quantidades</b>'+(queueOn?' (a equipe de cada lote continua sendo escolhida pelo app)':'')+'. A equipe pode ficar ociosa esperando um lote liberar — é o preço de fixar a ordem.</div>':'')+
       targetInfo;
   }
   function miniTable(hs,rows){
@@ -15064,7 +15066,7 @@
     adjDirty(); ADJ_PENDING={};
     CENARIO_VISTA=null;              // ver e editar sao modos diferentes; nao ficam ligados juntos
     ACTIVE_CENARIO={id:c.id,nome:c.nome};
-    window._cronoTab='ajuste';
+    window._cronoTab='tc';
     toast('Cenário "'+c.nome+'" aberto no editor — o que você salvar vai pra ele, não pra obra.');
     go('cr-matriz');
   }
@@ -22355,7 +22357,7 @@
         if(tem)semComConteudo[w2]=1;
       });
     }
-    var canDragCols=(window._cronoTab==='ajuste');
+    var canDragCols=false;   // reordenar lote arrastando era do Ajuste manual, que saiu
     var th='<th>Segunda-feira</th><th>Semana</th>'+lotIdxs.map(function(li){return '<th class="lot"'+(canDragCols?' data-lotcol="'+li+'" style="cursor:grab;touch-action:none" title="Arraste pra reordenar"':'')+'>'+LOTS[li]+'</th>';}).join('');
     var periods=calRainPeriods(), wfCache2={};
     var calRows=buildCalendarRows(totalWeeks);
@@ -22537,11 +22539,10 @@
     var h=Math.max(full?240:320,Math.floor(window.innerHeight-top-(full?14:18)));
     wrap.style.maxHeight=h+'px';
   }
-  /** Abre a gaveta de edição quando faz sentido: tela cheia + aba de ajuste + perfil que edita. */
+  /** A gaveta de edição era do Ajuste manual, que saiu: fica sempre fechada. A função
+   *  continua porque o cálculo de altura da matriz depende dela. */
   function abreGavetaAjuste(){
-    var vale=document.body.classList.contains('mat-fullscreen')&&
-             window._cronoTab==='ajuste'&&!matBloqueada();
-    document.body.classList.toggle('assign-open',vale);
+    document.body.classList.remove('assign-open');
     fitMatrixFrameHeight();
     requestAnimationFrame(fitMatrixFrameHeight);
   }
@@ -22581,7 +22582,7 @@
       b.addEventListener('click',function(){
         var salvar=(b.getAttribute('data-fsact')==='save');
         // No manual o botao de salvar e outro (tcmSalvar); a barra de tela cheia so repassa.
-        var alvo=document.getElementById(salvar?(document.getElementById('tcmSalvar')?'tcmSalvar':'saveAdjustsBtn'):'clearAdjustsBtn');
+        var alvo=document.getElementById(salvar?'tcmSalvar':'clearAdjustsBtn');
         if(alvo)alvo.click();
       });
     });
@@ -24350,18 +24351,13 @@
    *  botões do ajuste manual, que ficam fora do bloco do cronograma. */
   function fsBarHTML(){
     var tab=window._cronoTab||'tc';
-    var tabs=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],['resumo','Resumo']]
-      .filter(function(t){ return !(matBloqueada()&&t[0]==='ajuste'); })
+    var tabs=[['tc','Tempo Caminho'],['resumo','Resumo']]
       .map(function(t){ return '<button class="subtab'+(tab===t[0]?' active':'')+'" data-fstab="'+t[0]+'">'+t[1]+'</button>'; }).join('');
     var nome=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'';
     return '<div class="fs-bar">'+
       '<span class="fs-title">'+escAttr(nome)+'</span>'+tabs+
       (tab==='tc'&&tcManual()&&!matBloqueada()?
         '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar cronograma')+'</button>':'')+
-      (tab==='ajuste'&&!matBloqueada()?
-        '<button class="btn" data-fsdrawer="1" title="Abrir/fechar o painel de lotes e sequência por equipe">⚙ Equipes e sequência</button>'+
-        undoBotoesHTML()+'<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
-        '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar ajustes')+'</button>':'')+
       (ACTIVE_CENARIO?'<span class="note" style="color:var(--warn);white-space:nowrap">Editando cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</span>':'')+
       (tab==='tc'?tcmAvisoFaltaHTML(true):'')+
       (ADJ_DIRTY?'<span class="note" style="color:var(--warn);white-space:nowrap">ajustes não salvos</span>':'')+
@@ -24372,11 +24368,10 @@
    *  balanço" leva pra tela própria, e as demais são atalhos pras outras telas.
    *  viewAtual = 'cr-matriz' ou 'cr-lb' (pra marcar a aba ativa certa). */
   function cronoTabsHTML(viewAtual){
-    var TABS=[['tc','Tempo Caminho'],['ajuste','Ajuste manual'],
+    var TABS=[['tc','Tempo Caminho'],
       ['resumo','Resumo'],['gantt','Gantt','cr-gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     return TABS.filter(function(t){
-      if(matBloqueada()&&t[0]==='ajuste')return false;
       if(t[2]&&!canViewTab(t[2]))return false;
       if(isMobile()&&!MOBILE_TAB_MATRIZ[t[0]])return false; // no celular: tempo caminho, resumo e gantt
       return true;
@@ -24464,6 +24459,18 @@
     back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
     back.querySelector('#fxFechar').addEventListener('click',fecha);
   }
+  /** Barra do Tempo-Caminho automatico. Herdou do Ajuste manual, que saiu, a unica coisa que
+   *  continuava sendo precisa ali: apagar os ajustes fixados. Sem isso um pino antigo ficaria
+   *  valendo pra sempre, sem nenhuma tela que o mostre ou o remova. */
+  function tcAutoBarraHTML(){
+    if(isReadOnly())return '';
+    var temAjuste=Object.keys(OVR||{}).some(function(k){ return k.indexOf('__')!==0; });
+    return '<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">'+undoBotoesHTML()+
+      ((temAjuste&&!matBloqueada())
+        ?'<button class="btn" id="clearAdjustsBtn" title="Apaga os ajustes fixados e devolve tudo ao cálculo automático">↺ Limpar ajustes</button>'
+        :'')+
+      '</div>';
+  }
   function undoBarraHTML(){
     if(isReadOnly())return '';
     return '<div style="display:flex;gap:8px;margin-bottom:8px">'+undoBotoesHTML()+'</div>';
@@ -24490,16 +24497,6 @@
         '</div>'+
         matrixTableHTML(true,segsBase,{soLeitura:true});
     }
-    if(tab==='ajuste') return fsBarHTML()+'<div class="tc-head" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
-      '<div><h3>Ajuste manual (arraste para mover)</h3>'+
-      '<p>Arraste verticalmente para alterar a semana de início; lateralmente para outro lote para <b>trocar</b> a equipe de lote. Clique numa <b>célula vazia</b> pra <b>acrescentar</b> um serviço e uma equipe ali, sem tirar a equipe de onde ela está. Duplo clique reseta.'+
-      (ADJ_DIRTY?' <b style="color:var(--warn)">Há ajustes não salvos.</b>':'')+'</p></div>'+
-      '<div style="display:flex;gap:8px;white-space:nowrap">'+
-        undoBotoesHTML()+'<button class="btn" id="clearAdjustsBtn">↺ Limpar ajustes</button>'+
-        '<button class="btn primary" id="saveAdjustsBtn"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?('Salvar no cenário "'+ACTIVE_CENARIO.nome+'"'):'Salvar ajustes')+'</button>'+
-        botaoSalvarCenarioHTML()+
-      '</div></div>'+
-      '<div class="assign" id="assignPanel"></div>'+avFalta+matrixTableHTML(false,buildScheduleVivo(),{novo:true});
     if(tab==='tc'&&tcVistaAtual()==='projecao'){
       var proj=buildProjectedSchedule('historico');
       var fim=0; proj.forEach(function(g){ fim=Math.max(fim,g.start+g.dur-1); });
@@ -24535,11 +24532,11 @@
         (dv&&dv.dif?(' — hoje o rascunho termina '+Math.abs(dv.dif)+' semana(s) '+(dv.dif>0?'depois':'antes')+' dela'):' — hoje os dois terminam na mesma semana')+
         '. O relatório do Tempo-Caminho acompanha esta vista — sai o que está na tela, e a aba Meta diz qual é. '+
         'Pra isto virar o previsto, gere uma nova revisão da linha de base.</div>';
-      return fsBarHTML()+aviso+avFalta+undoBarraHTML()+matrixTableHTML(true,buildScheduleVivo());
+      return fsBarHTML()+aviso+avFalta+tcAutoBarraHTML()+matrixTableHTML(true,buildScheduleVivo());
     }
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+avFalta+ofiLousaHTML(false); }
     if(tab==='resumo') return fsBarHTML()+avFalta+resumoHTML();
-    return fsBarHTML()+avFalta+undoBarraHTML()+matrixTableHTML(true); // 'tc'
+    return fsBarHTML()+avFalta+tcAutoBarraHTML()+matrixTableHTML(true); // 'tc'
   }
   function renderCrono(){
     var c=document.getElementById('cronoContent'); if(!c)return;
@@ -24595,23 +24592,16 @@
         }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); sv.disabled=false; }
       });
     }
-    if((window._cronoTab||'tc')==='ajuste'&&!matBloqueada()){
-      renderAssignPanel(); wireDragMatrix();
-      var clearB=document.getElementById('clearAdjustsBtn');
-      if(clearB)clearB.addEventListener('click',function(){
-        if(!confirm('Remover todos os ajustes manuais deste cronograma? (precisa clicar em "Salvar ajustes" pra valer)'))return;
-        OVR={}; ADJ_PENDING={}; adjDirty(); renderCrono();
-      });
-      var saveB=document.getElementById('saveAdjustsBtn');
-      if(saveB)saveB.addEventListener('click',async function(){
-        saveB.disabled=true; saveB.textContent='Salvando…';
-        try{
-          if(ACTIVE_CENARIO){ await saveIntoActiveCenario(); }
-          else{ await saveOverrides(); ADJ_DIRTY=false; ADJ_PENDING={}; toast('Ajustes salvos.'); renderCrono(); }
-        }
-        catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); saveB.disabled=false; saveB.textContent='💾 Salvar ajustes'; }
-      });
-    }
+    var clearB=document.getElementById('clearAdjustsBtn');
+    if(clearB)clearB.addEventListener('click',function(){
+      if(!confirm('Remover todos os ajustes fixados deste cronograma?'+String.fromCharCode(10)+String.fromCharCode(10)+
+        'Tudo volta ao cálculo automático. Use "Salvar alterações" pra gravar.'))return;
+      /* Só os ajustes por lote × serviço: as chaves com "__" guardam o modo do cronograma e a
+       * liberação da matriz, e zerar OVR inteiro travava a matriz e voltava pro automático
+       * sem ninguém pedir. */
+      Object.keys(OVR).forEach(function(k){ if(k.indexOf('__')!==0)delete OVR[k]; });
+      ADJ_PENDING={}; adjDirty(); renderCrono();
+    });
   }
   // Arraste: só reposiciona visualmente (transform) durante o movimento — não
   // reconstrói a tabela nem grava no banco a cada pixel. O ajuste só entra em
