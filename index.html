@@ -3684,6 +3684,40 @@
   /** A lousa de montagem manual. estudo=true é a Oficina (rascunho na memória); false é o
    *  Tempo-Caminho manual da matriz, que grava nos ajustes da obra. O miolo é o mesmo de
    *  propósito: o que se aprende montando num vale no outro. */
+  /* As chaves do cabecalho do manual. Numa obra com 15 servicos a paleta e o filtro ocupam
+   * quatro linhas antes da matriz comecar — e e na matriz que se trabalha. Fechar e abrir
+   * cada bloco e so visual, e fica guardado no navegador pra nao ter que refechar a cada
+   * visita. localStorage pode falhar (aba anonima, site bloqueado): o padrao e tudo aberto. */
+  var TCM_PAINEL=null;
+  function tcmPainel(){
+    if(!TCM_PAINEL){
+      TCM_PAINEL={paleta:true,filtro:true};
+      try{
+        var r=JSON.parse(localStorage.getItem('lps_tcm_painel')||'null');
+        if(r&&typeof r==='object')TCM_PAINEL={paleta:r.paleta!==false,filtro:r.filtro!==false};
+      }catch(e){}
+    }
+    return TCM_PAINEL;
+  }
+  function tcmPainelVira(k){
+    var p=tcmPainel(); p[k]=!p[k];
+    try{ localStorage.setItem('lps_tcm_painel',JSON.stringify(p)); }catch(e){}
+  }
+  /** As chaves, mais o lembrete de qual servico esta na mao quando a paleta esta fechada —
+   *  sem ele, com a paleta recolhida ninguem sabe o que o proximo clique vai desenhar. */
+  function tcmPainelChavesHTML(sel){
+    var p=tcmPainel();
+    var bt=function(k,rot,dica){
+      return '<button class="btn" data-tcmpainel="'+k+'" title="'+dica+'" style="padding:2px 9px;font-size:11px;font-weight:600">'+
+        (p[k]?'\u2303':'\u2304')+' '+rot+'</button>';
+    };
+    return '<span style="display:inline-flex;gap:6px;align-items:center;margin-left:10px;vertical-align:middle;text-transform:none;letter-spacing:0">'+
+      bt('paleta','Desenhar','Mostrar ou esconder a paleta de serviços')+
+      bt('filtro','Serviços na matriz','Mostrar ou esconder o filtro de serviços da matriz')+
+      (!p.paleta&&sel?('<span class="note" style="white-space:nowrap"><span class="swatch" style="background:'+svcColor(sel)+'"></span>'+
+        escAttr(sel.n)+' na mão <button class="btn" data-ofitinta="" style="padding:1px 7px;font-size:11px;margin-left:4px">soltar</button></span>'):'')+
+    '</span>';
+  }
   function ofiLousaHTML(estudo){
     ofiInit();
     var travado=(!estudo)&&matBloqueada();
@@ -3740,9 +3774,12 @@
       '<span class="note" style="margin-right:2px">Desenhar:</span>'+tintas+equipeSel+
       (sel?'<button class="ofi-tinta" data-ofitinta="" title="Voltar a abrir o diálogo a cada célula">\u2715 soltar</button>':'')+
       '</div>'+
+      /* A versao longa disso vive na bolha do titulo ("como montar"), que e onde se procura
+       * quando se tem duvida. Aqui fica uma linha — tres linhas de texto empurravam a
+       * matriz pra fora da tela toda vez. */
       '<div class="note" style="margin:-4px 0 10px">'+(sel
-        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote, até você escolher outro serviço. Dá pra pintar por cima do que já existe: vários serviços podem dividir a mesma semana no mesmo lote, e uma segunda equipe no mesmo lote rateia a quantidade com a primeira pela produtividade de cada uma. Pra mover ou remover um bloco pelo clique, solte o pincel antes — arrastar funciona sempre.'
-        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra abrir o diálogo e escolher na hora. Clique num bloco pra mover ou remover, arraste-o pra outra célula, ou use o <b>botão direito</b> pra um menu de atalhos. <b>Ctrl+Z</b> desfaz.')+'</div>';
+        ? '<b>'+escAttr(sel.n)+'</b> está na mão — clique nas células e ele vai sendo desenhado, lote após lote. Pra mover ou remover um bloco pelo clique, solte o pincel antes; arrastar funciona sempre.'
+        : 'Escolha um serviço acima pra sair desenhando, ou clique numa célula pra escolher na hora. Clique num bloco pra mover ou remover, <b>botão direito</b> abre atalhos, <b>Ctrl+Z</b> desfaz.')+'</div>';
     var pend=ofiPendencias(segs);
     /* A lista de pendências saiu da tela a pedido: numa obra grande ela enche a página de
      * aviso e empurra a matriz pra baixo, que é onde se trabalha. As pendências continuam
@@ -3777,14 +3814,23 @@
         : titAjuda('Tempo-Caminho manual',
             '<p>Este é o cronograma da obra: o que você desenha aqui alimenta Resumo, Gantt, Curva S, histograma e programação. '+
             'Lote que você não colocar simplesmente não entra no cronograma. Lembre de <b>salvar</b>.</p>'+comoMontar,
+            tcmPainelChavesHTML(sel)+
             (ADJ_DIRTY?' <b style="color:var(--warn);text-transform:none;letter-spacing:0">Há mudanças não salvas.</b>':'')))+
-      paleta+acoes+listaPend+cmp+
+      (estudo||tcmPainel().paleta?paleta:'')+acoes+listaPend+cmp+
       /* Só no Tempo-Caminho da obra: na Oficina os chips não teriam quem os ligasse
        * (wireMatrixZoom só roda na tela da matriz). */
-      (estudo?'':svcTogglesHTML()+tcZoomBarHTML())+
+      (estudo?'':((tcmPainel().filtro?svcTogglesHTML():'')+tcZoomBarHTML()))+
       ofiMatrizHTML(segs,lotIdxs,totalWeeks,!estudo)+'</div>';
   };
   function ofiDraw(){
+    document.querySelectorAll('[data-tcmpainel]').forEach(function(b){
+      b.addEventListener('click',function(){
+        tcmPainelVira(b.getAttribute('data-tcmpainel'));
+        /* renderCrono, nao ofiRedesenha: abrir e fechar um painel nao e mudanca de plano, e
+         * ofiRedesenha reescreve OVR e marcaria o cronograma como sujo. */
+        if(OFI&&OFI.ovr)renderCrono(); else go(current);
+      });
+    });
     document.querySelectorAll('[data-ofitinta]').forEach(function(b){
       b.addEventListener('click',function(){
         var v=b.getAttribute('data-ofitinta');
@@ -24260,6 +24306,7 @@
         undoBotoesHTML()+'<button class="btn" data-fsact="clear">↺ Limpar ajustes</button>'+
         '<button class="btn primary" data-fsact="save"'+(ADJ_DIRTY?'':' disabled')+'>💾 '+(ACTIVE_CENARIO?'Salvar no cenário':'Salvar ajustes')+'</button>':'')+
       (ACTIVE_CENARIO?'<span class="note" style="color:var(--warn);white-space:nowrap">Editando cenário "'+escAttr(ACTIVE_CENARIO.nome)+'"</span>':'')+
+      (tab==='tc'?tcmAvisoFaltaHTML(true):'')+
       (ADJ_DIRTY?'<span class="note" style="color:var(--warn);white-space:nowrap">ajustes não salvos</span>':'')+
       '<button class="btn" data-zoom="full" style="margin-left:auto">✕ Sair da tela cheia</button></div>';
   }
@@ -24319,16 +24366,23 @@
    * some da matriz. Isso é o comportamento certo, mas sumir calado não é: quem está montando um
    * cenário vê a coluna vazia e acha que perdeu a quantidade. O aviso fica dentro do conteúdo,
    * que é o pedaço redesenhado, pra contagem não envelhecer. */
-  function tcmAvisoFaltaHTML(){
+  function tcmAvisoFaltaHTML(compacto){
     if(!tcManual())return '';
     var f=tcmFaltando();
     if(!f.length)return '';
     var lotes={}; f.forEach(function(x){ lotes[x.li]=1; });
+    /* Na tela cheia o recado vira um botao na barra de cima, ao lado do nome do cenario: a
+     * tarja inteira comia uma faixa da tela justamente onde se foi buscar espaco. O texto
+     * completo fica no title, e o clique abre a mesma lista de sempre. */
+    if(compacto)
+      return '<button class="btn" data-tcmverfalta="1" style="white-space:nowrap;border-color:var(--warn);color:var(--warn)" '+
+        'title="No modo manual a matriz mostra só o que foi desenhado. '+f.length+' combinação(ões) lote × serviço têm quantidade cadastrada e ainda não foram colocadas, em '+Object.keys(lotes).length+' lote(s) — por isso essas colunas aparecem vazias. Clique pra ver quais.">'+
+        '\u26A0 '+f.length+' fora da matriz</button>';
     return '<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
       '<b>Modo manual:</b> a matriz mostra só o que foi desenhado. '+
       '<b>'+f.length+'</b> combinação(ões) lote × serviço têm quantidade cadastrada e ainda não foram colocadas, '+
       'em <b>'+Object.keys(lotes).length+'</b> lote(s) — por isso essas colunas aparecem vazias.'+
-      ' <button class="btn" id="tcmVerFalta" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Ver quais</button>'+
+      ' <button class="btn" data-tcmverfalta="1" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Ver quais</button>'+
       '</div>';
   }
   function tcmDialogoFalta(){
@@ -24359,7 +24413,10 @@
   }
   function cronoContent(){
     var tab=window._cronoTab||'tc';
-    var avFalta=tcmAvisoFaltaHTML();
+    /* Em tela cheia o aviso ja esta na barra de cima (fsBarHTML): repetir a tarja aqui
+     * devolveria o espaco que se acabou de ganhar. */
+    var avFalta=(document.body.classList.contains('mat-fullscreen')&&(window._cronoTab||'tc')==='tc')
+      ?'':tcmAvisoFaltaHTML();
     /* A vista "Linha de base" é o retrato congelado, e isso vale TAMBÉM no modo manual. Antes a
      * prancheta de desenho vinha primeiro na ordem, então escolher "Linha de base" com o modo
      * manual ligado abria o editor, com as pendências do rascunho por cima. Retrato não se
@@ -24464,8 +24521,11 @@
     wireMatrixZoom();
     ganttWire();   // os controles do Gantt so existem depois do conteudo montado
     undoLigaTeclas(); undoLigaBotoes();
-    var vf=document.getElementById('tcmVerFalta');
-    if(vf)vf.addEventListener('click',tcmDialogoFalta);
+    /* Dois lugares podem mostrar esse botao (a tarja e a barra de tela cheia, que existe no
+     * DOM mesmo escondida): liga os dois, nao o primeiro. */
+    document.querySelectorAll('[data-tcmverfalta]').forEach(function(vf){
+      vf.addEventListener('click',tcmDialogoFalta);
+    });
     refreshTopSaveBtn(); ligaBotaoSalvarCenario(); applyReadOnly();
     if(tcManual()&&(window._cronoTab||'tc')==='tc'){
       ofiDraw();
