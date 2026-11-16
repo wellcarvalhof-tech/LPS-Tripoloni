@@ -14626,6 +14626,11 @@
    */
   function buildProjectedSchedule(mode){
     var segs=[], startByKey={}, endByKey={};
+    /* A projecao e uma releitura do MESMO cronograma com a produtividade que os apontamentos
+     * mostram — nao um cronograma proprio. Sem olhar o modo, ela montava o automatico mesmo
+     * com a obra no manual: o cenario passava a ter dois cronogramas, e a tela da projecao
+     * mostrava lotes que ninguem desenhou. */
+    var MANUAL=tcManual();
     var order=topoSortServices();
     var periods=calRainPeriods(), wfCache={};
     var hojeW=hojeWeekNumber(1000);
@@ -14651,43 +14656,80 @@
       // mesma equipe eram projetados em paralelo e a projeção saía mais curta que o plano.
       // A ordem da fila é a do próprio plano (início previsto).
       var teamPos={};
+      /* Os pinos do lote: no manual sao eles que dizem quem trabalha, quando e quanto. */
+      var pinosDe=function(li){
+        var o=ovrGet(li,si);
+        if(!(o&&o.pinned&&Array.isArray(o.pins)))return null;
+        var ps=o.pins.filter(function(p){ return p.team>0&&p.team<=teams&&p.startWeek>0; });
+        return ps.length?ps:null;
+      };
+      var primeiroPin=function(li){
+        var ps=pinosDe(li); if(!ps)return 0;
+        var m=0; ps.forEach(function(p){ if(!m||p.startWeek<m)m=p.startWeek; });
+        return m;
+      };
       var ordemLotes=LOTS.map(function(l,li){ return li; })
-        .filter(function(li){ return QTY[li][si]>0; })
+        .filter(function(li){ return QTY[li][si]>0&&(!MANUAL||!!pinosDe(li)); })
         .sort(function(a,b){
-          var sa=startByKey[a+'::'+si], sb=startByKey[b+'::'+si];
-          var pa=(ovrGet(a,si)||{}).startWeek||0, pb=(ovrGet(b,si)||{}).startWeek||0;
+          var pa=MANUAL?primeiroPin(a):((ovrGet(a,si)||{}).startWeek||0);
+          var pb=MANUAL?primeiroPin(b):((ovrGet(b,si)||{}).startWeek||0);
           return (pa||a)-(pb||b);
         });
       ordemLotes.forEach(function(li){
-        var l=LOTS[li];
         var o=ovrGet(li,si);
-        var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
-        var team=(teamsArr&&teamsArr.length)?teamsArr[0]:((o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1));
-        var effProd=(o&&o.productivity>0)?o.productivity:prodDaEquipe(s,teamProds,prod,team,li);
-        var real=realizadoQtyForLoteServ(li,si);
-        var remaining=Math.max(0,QTY[li][si]-real);
+        var pins=MANUAL?pinosDe(li):null;
+        /* No manual, cada pino e um trecho: uma segunda equipe no mesmo lote tem a sua fatia
+         * da quantidade, e projetar o lote inteiro numa equipe so apagaria o rateio que o
+         * desenho definiu. No automatico, o lote continua sendo um trecho so, como antes. */
+        var trabalhos;
+        if(pins){
+          var somaPin=0; pins.forEach(function(p){ somaPin+=Math.max(0,+p.qty||0); });
+          trabalhos=pins.map(function(p){
+            var fatia=somaPin>0?(Math.max(0,+p.qty||0)/somaPin):(1/pins.length);
+            return {team:p.team,fatia:fatia,total:somaPin>0?Math.max(0,+p.qty||0):(QTY[li][si]/pins.length),
+                    pinPos:p.startWeek-1,dur:(p.fix&&p.fix.duration>0)?p.fix.duration:undefined};
+          }).sort(function(a,b){ return a.pinPos-b.pinPos; });
+        } else {
+          var teamsArr=(o&&Array.isArray(o.teams)&&o.teams.length)?o.teams.filter(function(x){return x>0&&x<=teams;}):null;
+          var team0=(teamsArr&&teamsArr.length)?teamsArr[0]:((o&&o.team>0&&o.team<=teams)?o.team:((li%teams)+1));
+          trabalhos=[{team:team0,fatia:1,total:QTY[li][si],
+                      pinPos:(o&&o.startWeek>0)?(o.startWeek-1):0,
+                      dur:(o&&o.duration>0)?o.duration:undefined}];
+        }
+        var realLote=realizadoQtyForLoteServ(li,si);
         var earliestPos=predReadyWeek(s,li)-1;
-        var pin=(o&&o.startWeek>0)?o.startWeek:0, pinPos=pin>0?pin-1:0;
         var svcMin=(s.cfg&&s.cfg.minStartWeek>0)?s.cfg.minStartWeek-1:0;
-        var startPos=Math.max(earliestPos,pinPos,svcMin,teamPos[team]||0);
-        // Nada que ainda não terminou pode ser projetado no passado: o saldo só pode ser feito
-        // desta semana em diante.
-        startPos=Math.max(startPos,hojeW-1);
-        if(real>0){
-          if(mode==='historico'){
+        var iniLote=null, fimLote=null;
+        trabalhos.forEach(function(t){
+          /* O realizado do lote e por lote x serviço, nao por equipe: cada uma leva a mesma
+           * fatia que leva da quantidade. */
+          var real=realLote*t.fatia;
+          var remaining=Math.max(0,t.total-real);
+          var effProd=(o&&o.productivity>0)?o.productivity:prodDaEquipe(s,teamProds,prod,t.team,li);
+          var startPos=Math.max(earliestPos,Math.max(0,t.pinPos),svcMin,teamPos[t.team]||0);
+          // Nada que ainda não terminou pode ser projetado no passado: o saldo só pode ser feito
+          // desta semana em diante.
+          startPos=Math.max(startPos,hojeW-1);
+          if(real>0&&mode==='historico'){
             var fw=firstRealWeekForLoteServ(li,si);
             var weeksElapsed=Math.max(1,hojeW-(fw!=null?fw-1:startPos));
             var rate=real/weeksElapsed;
             if(rate>0)effProd=rate;
           }
-        }
-        var fixedDur=(o&&o.duration>0)?o.duration:undefined;
-        var packed=remaining>0?packSegment(startPos,remaining/effProd,effProd,remaining,periods,wfCache,fixedDur,s.id):null;
-        if(packed)teamPos[team]=packed.endPos;
-        if(packed)segs.push({li:li,si:si,team:team,teams:teams,start:packed.start,dur:packed.duration,qty:remaining,wq:packed.wq,
-          color:teamColor(hex,team,Math.max(1,teams)),name:s.n,real:real,total:QTY[li][si]});
-        startByKey[li+'::'+si]=packed?packed.start:startPos+1;
-        endByKey[li+'::'+si]=packed?(packed.start+packed.duration-1):Math.max(startPos,hojeW);
+          var packed=remaining>0?packSegment(startPos,remaining/effProd,effProd,remaining,periods,wfCache,t.dur,s.id):null;
+          if(packed){
+            teamPos[t.team]=packed.endPos;
+            segs.push({li:li,si:si,team:t.team,teams:teams,start:packed.start,dur:packed.duration,qty:remaining,wq:packed.wq,
+              color:teamColor(hex,t.team,Math.max(1,teams)),name:s.n,real:real,total:t.total});
+            iniLote=(iniLote==null)?packed.start:Math.min(iniLote,packed.start);
+            fimLote=(fimLote==null)?(packed.start+packed.duration-1):Math.max(fimLote,packed.start+packed.duration-1);
+          } else {
+            iniLote=(iniLote==null)?(startPos+1):Math.min(iniLote,startPos+1);
+            fimLote=(fimLote==null)?Math.max(startPos,hojeW):Math.max(fimLote,Math.max(startPos,hojeW));
+          }
+        });
+        startByKey[li+'::'+si]=iniLote!=null?iniLote:1;
+        endByKey[li+'::'+si]=fimLote!=null?fimLote:hojeW;
       });
     });
     return segs;
@@ -25136,6 +25178,16 @@
             (pins?('Os '+pins+' ajuste(s) que você já fixou viram o ponto de partida.')
                  :'Hoje não há nada fixado, então a matriz começa em branco.')+
             String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro automático quando quiser — o que você desenhar fica guardado.'))return;
+        } else {
+          /* O caminho de volta mudava o cronograma da obra inteira com um clique e sem dizer
+           * nada: o app volta a preencher sozinho o que foi deixado de fora, e a Curva S, o
+           * histograma, a AVA e os relatórios passam a ler isso. Quem desenhou à mão deixou
+           * de fora de propósito — tem que ser decisão, não deslize. */
+          var fora=tcmFaltando().length;
+          if(fora&&!confirm('Voltar para o cronograma automático?'+String.fromCharCode(10)+String.fromCharCode(10)+
+            'O que você desenhou continua valendo como ajuste fixo, mas o app volta a preencher sozinho o que ficou de fora — '+
+            fora+' combinação(ões) lote × serviço. A Curva S, o histograma, a AVA e os relatórios passam a ler esse cronograma.'+
+            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro manual quando quiser.'))return;
         }
         tcSetModo(m);
         window._cronoTab='tc';
