@@ -14894,6 +14894,11 @@
    * no ritmo que os apontamentos mostram. Com linha de base ativa, 'base' é o padrão. */
   var TC_VISTA=null;
   function tcVistaAtual(){
+    /* No manual a aba do Tempo-Caminho É a prancheta, e a prancheta desenha o plano: "linha
+     * de base" não é vista aqui. Trocar a prancheta por outra matriz no meio da montagem
+     * tirava da tela exatamente quem estava montando. Quem quer ver a base tem o Gantt, o
+     * Resumo, a Curva S e os relatórios, que leem a referência de qualquer jeito. */
+    if(tcManual())return (TC_VISTA==='projecao'&&!soLinhaDeBase())?'projecao':'plano';
     if(soLinhaDeBase())return 'base';                 // perfil restrito não sai da linha de base
     if(TC_VISTA==='projecao')return 'projecao';
     // Dentro de um cenário aberto, "linha de base" não é vista: o que está na tela é o cenário.
@@ -14907,6 +14912,16 @@
     return 'base';
   }
   function tcVistaBotoesHTML(){
+    /* Sem "linha de base" no manual, pelo mesmo motivo: botão que não muda o que está na
+     * tela é pior do que botão nenhum. */
+    if(tcManual()){
+      var atualM=tcVistaAtual();
+      return (soLinhaDeBase()?[['plano','Planejado']]:[['plano','Planejado'],['projecao','Projeção pelo ritmo real']])
+        .map(function(o){
+          return '<button class="subtab'+(atualM===o[0]?' active':'')+'" data-tcvista="'+o[0]+'" title="'+
+            (o[0]==='plano'?'A matriz que você está montando':'Refaz as datas do saldo com a produtividade que os apontamentos mostram')+'">'+o[1]+'</button>';
+        }).join('');
+    }
     if(soLinhaDeBase())
       return '<button class="subtab active" data-tcvista="base" title="Seu perfil acessa a linha de base da obra">Linha de base</button>';
     var atual=tcVistaAtual(), temBase=!!activeBaseline()&&!ACTIVE_CENARIO&&!CENARIO_VISTA;
@@ -24460,26 +24475,25 @@
     }
     if(tab==='tc'&&tcVistaAtual()==='plano'&&activeBaseline()&&!ACTIVE_CENARIO&&!CENARIO_VISTA){
       var dv=tcDesvioDaBase();
+      if(tcManual()){
+        /* No manual o cabeçalho é disputado: o recado vira uma linha, e só quando há o que
+         * dizer. tcmSync antes de desenhar — a prancheta lê o plano de OVR, e este caminho
+         * não ressincronizava, o que deixava a matriz uma edição atrás. */
+        tcmSync();
+        var notaM=(dv&&dv.dif)
+          ? ('<div class="note" style="margin:0 0 8px;color:var(--warn)">Rascunho em edição — hoje ele termina <b>'+
+             Math.abs(dv.dif)+' semana(s) '+(dv.dif>0?'depois':'antes')+'</b> da '+escAttr(refRotulo())+
+             ', que é o que a Curva S, o histograma e a AVA continuam lendo. O relatório do Tempo-Caminho acompanha esta vista.</div>')
+          : '';
+        return fsBarHTML()+notaM+avFalta+ofiLousaHTML(false);
+      }
       var aviso='<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
         '<b>Planejado (em edição).</b> Este é o rascunho da matriz, não a referência da obra. '+
         'A Curva S, o histograma e a AVA continuam lendo a <b>'+escAttr(refRotulo())+'</b>'+
         (dv&&dv.dif?(' — hoje o rascunho termina '+Math.abs(dv.dif)+' semana(s) '+(dv.dif>0?'depois':'antes')+' dela'):' — hoje os dois terminam na mesma semana')+
         '. O relatório do Tempo-Caminho acompanha esta vista — sai o que está na tela, e a aba Meta diz qual é. '+
         'Pra isto virar o previsto, gere uma nova revisão da linha de base.</div>';
-      return fsBarHTML()+aviso+avFalta+(tcManual()?ofiLousaHTML(false):(undoBarraHTML()+matrixTableHTML(true,buildScheduleVivo())));
-    }
-    /* A prancheta do manual desenha SEMPRE o rascunho vivo. Deixa-la responder pela vista da
-     * linha de base mostrava o rascunho debaixo do rotulo da base — e o relatorio, que le a
-     * referencia, saia diferente da tela. Na vista da base o manual mostra a base, como o
-     * automatico ja fazia; pra montar, a vista e "Planejado (em edicao)". */
-    if(tab==='tc'&&tcManual()&&tcVistaAtual()==='base'&&activeBaseline()){
-      var bl2=activeBaseline();
-      return fsBarHTML()+avFalta+
-        '<div class="banner" style="margin-bottom:10px;border-color:var(--accent)">'+
-          '<b>Linha de base '+escAttr(bl2.revisao||'')+'.</b> O retrato congelado que alimenta a Curva S, '+
-          'o histograma, a AVA e os relatorios. Pra ver ou montar o que esta em edicao, abra '+
-          '<b>Planejado (em edicao)</b> aqui em cima.</div>'+
-        matrixTableHTML(true);
+      return fsBarHTML()+aviso+avFalta+undoBarraHTML()+matrixTableHTML(true,buildScheduleVivo());
     }
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+avFalta+ofiLousaHTML(false); }
     if(tab==='resumo') return fsBarHTML()+avFalta+resumoHTML();
