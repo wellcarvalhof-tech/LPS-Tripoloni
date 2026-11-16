@@ -12471,6 +12471,7 @@
         ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O cadastro está marcado como <b>só o saldo</b>, mas o plano já acumula '+anc.vPrev.toFixed(1).replace('.',',')+'% até a semana da emenda. Essas semanas ficam de fora e viram um salto na emenda — se o saldo é de hoje, o plano deveria começar na semana da emenda.</div></div>'
         :'')+
       avisoAcima+
+      ((curvaHistFonte()==='orcamento'&&ultR&&!curvaBaseExecutada())        ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O histórico tem realizado, mas não guarda o <b>valor de contrato de cada serviço</b> — sem ele não dá pra saber que fatia do contrato já foi executada, e a curva começa do zero. <b>Reimporte a planilha de saldo</b> em Cadastro → Orçamento → Histórico mensal; a partir desta versão ela guarda esse número.</div></div>'        :'')+
       ((curvaHistFonte()==='orcamento'&&!ultR)        ?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>O histórico deste orçamento tem <b>previsto</b>, mas nenhum <b>realizado</b>. Por isso o previsto do app começa do zero: não há de onde partir. Carregue o executado em <b>Cadastro → Orçamento → Histórico mensal → ↥ Importar realizado (saldo)</b>.</div></div>'        :'')+
       (pacote||lotViewSet()?'<div class="banner" style="margin:10px 0 0;color:var(--warn)"><div>Com filtro de lotes ou pacote ativo, a curva importada continua sendo a da obra inteira — ela não tem como ser recortada.</div></div>':'')+
     '</div>';
@@ -12724,6 +12725,73 @@
     }
     return {series:series,totalSeries:totalSeries};
   }
+  /* ---------------- O contrato é o que já foi feito MAIS o que está planejado ----------------
+   *
+   * Quando a obra importa o histórico, o cadastro do app passa a ser o SALDO: o que falta. O
+   * contrato de cada serviço é então
+   *
+   *     contrato(s) = executado(s) + saldo(s)
+   *
+   * e a curva dele não pode começar do zero — ela começa na fatia que já foi executada e sobe
+   * até 100%. O plano daqui não vale 100% da obra: vale os (100 − executado)% que faltam.
+   *
+   *     curva(s,w) = pctExec(s) + (1 − pctExec(s)) × avançoDoPlano(s,w)
+   *
+   * A mesma transformação serve pro previsto e pro realizado, e por isso vale igual pro serviço,
+   * pro grupo do orçamento e pra curva geral: muda só o que entra no avançoDoPlano.
+   *
+   * O contrato por serviço vem da planilha de saldo, que traz as duas colunas lado a lado — o
+   * valor do contrato e o executado. Sem ele não dá pra saber que fatia o executado representa,
+   * e aí a transformação não acontece (histórico importado antes disto não tem esse número:
+   * reimportar resolve).
+   */
+  function curvaBaseExecutada(){
+    var v=orcVersaoAtiva(); if(!v)return null;
+    var h=orcHistDe(v); if(!h||!h.meses.length)return null;
+    var contrato=(h.contrato&&typeof h.contrato==='object')?h.contrato:null;
+    if(!contrato)return null;
+    var pct=[], val=[], algum=false, somaC=0;
+    SERV.forEach(function(sv,si){
+      var c=orcNum(contrato[sv.id]);
+      var e=0;
+      h.meses.forEach(function(m){ e+=orcNum(h.real[sv.id+'::'+m]); });
+      val[si]=c;
+      somaC+=c;
+      if(c>0&&e>0){ pct[si]=Math.max(0,Math.min(1,e/c)); algum=true; }
+      else pct[si]=0;
+    });
+    if(!algum||!(somaC>0))return null;
+    return {pct:pct,contrato:val,somaContrato:somaC};
+  }
+  /** Reescala uma fonte (previsto ou realizado) pra sair do que já foi executado.
+   *  A curva geral é a média das séries ponderada pelo CONTRATO de cada serviço — que é a régua
+   *  certa aqui: quem tem mais contrato pesa mais, tenha ele sido feito antes ou depois. */
+  function aplicaBaseExecutada(src,BE,tw){
+    if(!src)return src;
+    var series={};
+    SERV.forEach(function(sv,si){
+      var p=BE.pct[si]||0, orig=src.series[si]||[];
+      var out=[];
+      for(var w=0;w<=tw;w++){
+        var v=orig[w];
+        out.push(v==null?null:Math.min(100,100*p+(1-p)*v));
+      }
+      series[si]=out;
+    });
+    var totalSeries=[];
+    for(var w2=0;w2<=tw;w2++){
+      var acc=0, peso=0, viu=false;
+      SERV.forEach(function(sv,si){
+        var c=BE.contrato[si]; if(!(c>0))return;
+        var v=series[si][w2];
+        peso+=c;
+        if(v!=null){ acc+=c*v; viu=true; }
+        else acc+=c*100*(BE.pct[si]||0);   // antes do plano, vale o que já estava feito
+      });
+      totalSeries.push(viu&&peso>0?acc/peso:null);
+    }
+    return {series:series,totalSeries:totalSeries,baseExecutada:true};
+  }
   function curvaSData(){
     var pacote=window._curvaSPacote||'';
     var baseline=activeBaseline();
@@ -12782,9 +12850,15 @@
       if(t>totalByServ[si]*1.001)acimaDoCadastro.push({nome:sv.n,pct:100*t/totalByServ[si]});
     });
     var real=cumulativePct(realWeekly,tw,totalByServ,grandTotal);
-    /* Com o histórico do orçamento escolhido, o realizado de CADA serviço vem dele: senão a
-     * curva geral mostra o passado e a do serviço mostra zero, na mesma tela. */
-    if(curvaHistFonte()==='orcamento'){
+    /* O contrato é o executado mais o saldo: com o histórico escolhido, TODA curva — do
+     * serviço, do grupo e a geral — parte da fatia já executada e o plano preenche o resto.
+     * Sem o contrato por serviço (histórico importado antes disso) fica o caminho antigo. */
+    var BE=(curvaHistFonte()==='orcamento')?curvaBaseExecutada():null;
+    if(BE){
+      executivo=aplicaBaseExecutada(executivo,BE,tw);
+      if(cliente)cliente=aplicaBaseExecutada(cliente,BE,tw);
+      real=aplicaBaseExecutada(real,BE,tw);
+    }else if(curvaHistFonte()==='orcamento'){
       var HR=orcHistRealPorServico();
       if(HR)real=realComHistorico(real,HR,tw,totalByServ);
     }
@@ -12792,7 +12866,9 @@
     /* A ancora emenda o plano no realizado que veio da planilha: na semana escolhida a curva
      * do app vale o que a obra ja tinha, e o que falta do plano preenche o que falta ate 100%.
      * Aplicado aqui, e nao so no desenho, pra os cartoes e o IDP contarem a mesma historia. */
-    var anc=curvaAncoraInfo(tw);
+    /* Com a base executada aplicada, a curva já parte do executado: emendar de novo somaria
+     * duas vezes o mesmo passado. */
+    var anc=BE?null:curvaAncoraInfo(tw);
     if(anc){
       /* Quem diz se a emenda pegou e o PREVISTO EXECUTIVO: o realizado quase sempre esta
        * abaixo de 100% na ancora, entao deixar a ultima curva processada decidir daria um
@@ -16741,7 +16817,8 @@
     return {meses:Array.isArray(h.meses)?h.meses.slice().sort():[],
             prev:(h.prev&&typeof h.prev==='object')?h.prev:{},
             real:(h.real&&typeof h.real==='object')?h.real:{},
-            base:+h.base||0};
+            base:+h.base||0,
+            contrato:(h.contrato&&typeof h.contrato==='object')?h.contrato:null};
   }
   function orcHistAtivo(){
     var v=orcVersaoAtiva();
@@ -16754,6 +16831,7 @@
     if(!Array.isArray(v.hist.meses))v.hist.meses=[];
     if(!v.hist.prev)v.hist.prev={};
     if(!v.hist.real)v.hist.real={};
+    if(!v.hist.contrato)v.hist.contrato={};
     return v.hist;
   }
   /** Mes seguinte a 'AAAA-MM'. */
@@ -17695,7 +17773,13 @@
         usados++;
         /* O contrato de onde este realizado saiu é o denominador da curva depois. Sem
          * guardar aqui, dividir o realizado pela soma dele mesmo daria 100% sempre. */
-        if(g.ref>0)h.base=(orcNum(h.base)||0)+g.ref;
+        if(g.ref>0){
+          h.base=(orcNum(h.base)||0)+g.ref;
+          /* O contrato DESTE serviço: é ele que diz que fatia o executado representa, e sem
+           * isso a curva não tem de onde partir. */
+          h.contrato=h.contrato||{};
+          h.contrato[sid]=(orcNum(h.contrato[sid])||0)+g.ref;
+        }
         var porMes=mesUnico?(function(){ var o={}; o[mesUnico]=g.total; return o; })():g.meses;
         Object.keys(porMes).forEach(function(m){
           var k=sid+'::'+m;
