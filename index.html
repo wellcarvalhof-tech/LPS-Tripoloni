@@ -19676,6 +19676,20 @@
     ((orcAtual().meses)||[]).concat(avaMeses()||[]).forEach(function(m){ if(m&&!vis[m]){ vis[m]=1; meses.push(m); } });
     meses.sort();
     if(!meses.length)meses=[orcMesKey(new Date())];
+    /* O acumulado de corte é o que já estava feito QUANDO o planejamento começou: plano abrindo
+     * em novembro, o realizado a carregar é o de outubro. Esse mês nunca esteve na lista — ela
+     * só tinha os meses do orçamento e da AVA, que começam no início do plano — e sem ele não
+     * havia onde pendurar o que veio de antes. */
+    var antes=[], d0=new Date((meses[0]||orcMesKey(new Date()))+'-01T00:00:00');
+    for(var ka=1;ka<=12;ka++){
+      var da=new Date(d0.getTime()); da.setMonth(da.getMonth()-ka);
+      var ma=orcMesKey(da);
+      if(ma&&!vis[ma]){ vis[ma]=1; antes.unshift(ma); }
+    }
+    /* O mês imediatamente anterior ao início é o caso de sempre desta importação: vem escolhido,
+     * e os outros ficam a um clique. */
+    var padrao=antes.length?antes[antes.length-1]:meses[meses.length-1];
+    var opt=function(m){ return '<option value="'+m+'"'+(m===padrao?' selected':'')+'>'+orcMesLabel(m)+'</option>'; };
     var foraVt=0;
     R.semItem.forEach(function(x){ foraVt+=x.vt; });
     R.semSvc.forEach(function(x){ foraVt+=x.vt; });
@@ -19697,9 +19711,11 @@
       '</tbody></table></div>'+
       '<label style="display:block;margin-top:12px;font-size:12.5px">O acumulado entra no mês de'+
         '<select class="einp" id="hrMes" style="width:100%;margin-top:4px">'+
-          meses.map(function(m,i){ return '<option value="'+m+'"'+(i===meses.length-1?' selected':'')+'>'+orcMesLabel(m)+'</option>'; }).join('')+
+          (antes.length?('<optgroup label="Antes do início do planejamento">'+antes.map(opt).join('')+'</optgroup>'):'')+
+          '<optgroup label="No planejamento">'+meses.map(opt).join('')+'</optgroup>'+
         '</select>'+
-        '<div class="note" style="margin:4px 0 0">O arquivo é um acumulado até a data de corte. Reimportar o mesmo mês <b>substitui</b> o que já estava — não soma em cima.</div></label>'+
+        '<div class="note" style="margin:4px 0 0">O arquivo é um acumulado até a data de corte, então em geral ele entra no <b>mês anterior ao início do planejamento</b> — é daí que a curva parte. '+
+          'Reimportar o mesmo mês <b>substitui</b> o que já estava — não soma em cima.</div></label>'+
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
         '<button class="btn" id="hrCancel">Cancelar</button>'+
         '<button class="btn primary" id="hrOk">Importar</button></div></div>';
