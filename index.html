@@ -2542,7 +2542,11 @@
       ocup.push({a:r.pos,b:r.pk.endPos}); ocup.sort(function(x,y){ return x.a-y.a; });
       return {id:it.id,li:it.li,si:it.si,team:it.team,qty:qty,pedida:it.ini,fix:it.fix||null,
               startPos:r.pos,start:r.pk.start,dur:r.pk.duration,endPos:r.pk.endPos,wq:r.pk.wq,
-              color:svcColor(s),name:s.n,divididoEm:times[k].length};
+              /* Mesmo tom por equipe do automático: duas equipes do mesmo serviço lado a lado,
+               * todas na cor cheia, não dizem qual é qual — e é pela cor que se enxerga uma
+               * frente andando ao longo dos lotes. */
+              color:teamColor(svcColor(s),it.team,Math.max(1,s.eq||1)),
+              name:s.n,divididoEm:times[k].length};
     }).filter(Boolean);
   }
   /** Primeira semana >= desejada em que dá pra começar: predecessoras concluídas NESTE lote e a
