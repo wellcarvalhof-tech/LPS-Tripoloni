@@ -5854,6 +5854,7 @@
      * dia), apontamento do realizado, quantidades, relatório do período, curva ABC e, por último,
      * o previsto × realizado por serviço. */
     return head('Histograma','Recursos (funções e equipamentos) mobilizados ao longo do cronograma — previsto × realizado.',impBtn())+
+      histFonteHTML()+
       cadastro+grafico+realizadoHTML(hist)+totais+relatorioPeriodoHTML(hist)+abcHTML(hist)+servicoPR;
   };
 
@@ -11628,6 +11629,7 @@
     }
     if(view==='cad-equipes'){var g=document.getElementById('gotoServ');if(g)g.addEventListener('click',function(){go('cad-serv');});}
     if(view==='cr-hist'){
+      wireHistFonte();
       renderHistChart();
       document.querySelectorAll('[data-histtoggle]').forEach(function(b){
         b.addEventListener('click',function(){
@@ -25175,19 +25177,20 @@
       });
     });
   }
-  function wireModoTC(){
-    document.querySelectorAll('[data-tcmodo]').forEach(function(b){
-      b.addEventListener('click',function(){
-        var m=b.getAttribute('data-tcmodo');
-        if((m==='manual')===tcManual())return;
-        if(matBloqueada()){ toast(motivoBloqueio()); return; }
+  /** Troca o modo do cronograma, perguntando o que precisa ser perguntado. Devolve se a
+   *  troca aconteceu. Vive aqui, e nao dentro do clique, porque o Histograma mostra a mesma
+   *  chave — e tem que ser a mesma chave, nao uma segunda configuracao com o mesmo nome. */
+  function tcTrocaModo(m){
+    if((m==='manual')===tcManual())return false;
+    if(matBloqueada()){ toast(motivoBloqueio()); return false; }
+    {
         if(m==='manual'){
           var pins=tcmLeOvr().length;
           if(!confirm('Passar para o Tempo-Caminho manual?'+String.fromCharCode(10)+String.fromCharCode(10)+
             'A partir daí só entra no cronograma o que você desenhar. '+
             (pins?('Os '+pins+' ajuste(s) que você já fixou viram o ponto de partida.')
                  :'Hoje não há nada fixado, então a matriz começa em branco.')+
-            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro automático quando quiser — o que você desenhar fica guardado.'))return;
+            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro automático quando quiser — o que você desenhar fica guardado.'))return false;
         } else {
           /* O caminho de volta mudava o cronograma da obra inteira com um clique e sem dizer
            * nada: o app volta a preencher sozinho o que foi deixado de fora, e a Curva S, o
@@ -25197,14 +25200,45 @@
           if(fora&&!confirm('Voltar para o cronograma automático?'+String.fromCharCode(10)+String.fromCharCode(10)+
             'O que você desenhou continua valendo como ajuste fixo, mas o app volta a preencher sozinho o que ficou de fora — '+
             fora+' combinação(ões) lote × serviço. A Curva S, o histograma, a AVA e os relatórios passam a ler esse cronograma.'+
-            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro manual quando quiser.'))return;
+            String.fromCharCode(10)+String.fromCharCode(10)+'Dá pra voltar pro manual quando quiser.'))return false;
         }
-        tcSetModo(m);
+    }
+    tcSetModo(m);
+    return true;
+  }
+  function wireModoTC(){
+    document.querySelectorAll('[data-tcmodo]').forEach(function(b){
+      b.addEventListener('click',function(){
+        if(!tcTrocaModo(b.getAttribute('data-tcmodo')))return;
         window._cronoTab='tc';
         document.querySelectorAll('[data-tcmodo]').forEach(function(x){
           x.classList.toggle('active',(x.getAttribute('data-tcmodo')==='manual')===tcManual());
         });
         renderCrono();
+      });
+    });
+  }
+  /** De onde o Histograma tira o previsto. Nao e configuracao propria da tela: e o mesmo
+   *  cronograma que a obra inteira usa, mostrado aqui porque e aqui que a duvida aparece —
+   *  um pico de equipe num mes e coisa muito diferente se veio do automatico ou do que foi
+   *  desenhado a mao. Os botoes mexem na chave de verdade, com as mesmas perguntas. */
+  function histFonteHTML(){
+    return '<div class="banner" style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+      '<b>Previsto calculado do cronograma</b>'+
+      '<span style="display:inline-flex;gap:4px">'+
+        '<button class="subtab'+(tcManual()?'':' active')+'" data-histmodo="auto" title="O app distribui os lotes pelas equipes sozinho">Automático</button>'+
+        '<button class="subtab'+(tcManual()?' active':'')+'" data-histmodo="manual" title="Só o que foi desenhado na matriz entra">Manual</button>'+
+      '</span>'+
+      '<span class="note">referência: <b>'+escAttr(refRotulo())+'</b></span>'+
+      '<span class="note" style="flex-basis:100%;margin:0">É a mesma chave do Tempo-Caminho: trocar aqui troca lá, e com ela mudam também a Curva S, a AVA e os relatórios. '+
+        'O realizado não vem daqui — vem dos apontamentos.</span>'+
+    '</div>';
+  }
+  function wireHistFonte(){
+    document.querySelectorAll('[data-histmodo]').forEach(function(b){
+      b.addEventListener('click',function(){
+        if(!tcTrocaModo(b.getAttribute('data-histmodo')))return;
+        go('cr-hist');
       });
     });
   }
