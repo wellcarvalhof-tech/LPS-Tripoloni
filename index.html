@@ -15409,7 +15409,7 @@
       }
     });
     if(apoIni<0){ apoIni=0; apoFim=tw-1; }   // sem serviço nenhum: não há janela pra cortar
-    var totalByApoio={}, totalByApoioResource={}, grandTotalIndireto=0;
+    var totalByApoio={}, totalByApoioResource={}, grandTotalIndireto=0, janelaApoio={};
     APOIO.forEach(function(a){
       var crew=(a.cfg&&a.cfg.crew)||[], apoTotal=0, perRes={};
       crew.forEach(function(item){
@@ -15420,6 +15420,11 @@
         var arr=byResource[item.resourceId], arrI=byResourceIndireto[item.resourceId];
         var j=janelaItem(item,tw);
         var de=Math.max(apoIni+1,j.ini), ate=Math.min(apoFim+1,j.fim);
+        /* A janela JÁ RECORTADA pela da obra é o que vale de verdade, e quem exporta precisa
+         * dela: a janela crua do cadastro diria uma coisa e o gráfico mostraria outra. Item
+         * repetido no mesmo apoio alarga a janela em vez de sobrescrever. */
+        var kj=a.id+'::'+item.resourceId, ja=janelaApoio[kj];
+        janelaApoio[kj]=ja?{de:Math.min(ja.de,de),ate:Math.max(ja.ate,ate)}:{de:de,ate:ate};
         for(var i=de;i<=ate&&i<=arr.length;i++){ arr[i-1]+=qty; arrI[i-1]+=qty; }
       });
       totalByApoioResource[a.id]=perRes; totalByApoio[a.id]=apoTotal; grandTotalIndireto+=apoTotal;
@@ -15428,7 +15433,7 @@
     RECURSOS.forEach(function(r){ var arr=byResource[r.id]||[]; peakByResource[r.id]=arr.reduce(function(m,v){return Math.max(m,v);},0); });
     return {isHoliday:isHoliday,byResource:byResource,byResourceDireto:byResourceDireto,byResourceIndireto:byResourceIndireto,
       totalByService:totalByService,totalByServiceResource:totalByServiceResource,
-      totalByApoio:totalByApoio,totalByApoioResource:totalByApoioResource,
+      totalByApoio:totalByApoio,totalByApoioResource:totalByApoioResource,janelaApoio:janelaApoio,
       totalByMacro:totalByMacro,totalByMacroResource:totalByMacroResource,janelaMacro:janelaMacro,
       peakByResource:peakByResource,grandTotal:grandTotal+grandTotalIndireto,grandTotalDireto:grandTotal,grandTotalIndireto:grandTotalIndireto,tw:tw};
   }
@@ -21062,6 +21067,45 @@
       });
     });
     if(wsE.rowCount===1)wsE.addRow(['(nenhuma equipe típica montada)']);
+
+    /* ---- Apoio administrativo ----
+     * O apoio não tem lote nem frente: entra por janela de mobilização e some no indireto do
+     * gráfico, somado ao resto. Numa aba própria dá pra ver de quem é cada cabeça — que é a
+     * pergunta que ninguém conseguia responder olhando só a curva. */
+    var wsA=wb.addWorksheet('Apoio administrativo',{views:[{state:'frozen',ySplit:1}]});
+    relCabecalho(wsA,['Nível 1','Nível 2','Nível 3','Recurso','Tipo','Mão de obra',
+      'Qtd mobilizada','Semana início','Semana fim','Semanas','Recurso × semana'],
+      [26,24,24,30,14,16,15,14,13,10,17]);
+    var apoTotQ=0, apoTotRS=0;
+    APOIO.forEach(function(a){
+      ((a.cfg&&a.cfg.crew)||[]).forEach(function(item){
+        var rc=RECURSOS.filter(function(x){ return x.id===item.resourceId; })[0];
+        if(!rc)return;
+        var q=+item.qtyPerTeam||0;
+        var j=(D.hist.janelaApoio||{})[a.id+'::'+item.resourceId];
+        var sem=(j&&j.ate>=j.de)?(j.ate-j.de+1):0, rs=q*sem;
+        apoTotQ+=q; apoTotRS+=rs;
+        /* Janela vazia é janela que começa depois do fim da obra (ou acaba antes do começo):
+         * esse apoio não entra no gráfico, e escrever "de S49 até S48" só confundiria. */
+        var de=sem?relRotSem(j.de):'fora do período da obra', ate=sem?relRotSem(j.ate):'';
+        var r=wsA.addRow([a.n1||'',a.n2||'',a.n3||'',rc.n,
+          (rc.tipo==='equipamento'?'Equipamento':'Mão de obra'),rc.cat||'',
+          q,de,ate,sem,rs]);
+        r.font={size:10}; num(r,7,7); num(r,10,11);
+        if(!sem)r.getCell(8).font={size:10,color:{argb:'FFC98A2B'},italic:true};
+      });
+    });
+    if(wsA.rowCount===1)wsA.addRow(['(nenhum apoio administrativo cadastrado)']);
+    else{
+      var rTot=wsA.addRow(['TOTAL','','','','','',apoTotQ,'','','',apoTotRS]);
+      rTot.font={size:10,bold:true}; num(rTot,7,7); num(rTot,10,11);
+      rTot.eachCell(function(c){ c.border={top:{style:'thin'}}; });
+    }
+    wsA.addRow([]);
+    var notaA=wsA.addRow(['O apoio não trabalha por frente: a quantidade já é o total mobilizado, sem multiplicar por equipes. '+
+      'A janela é a do cadastro recortada pelo período em que a obra tem serviço — é ela que o gráfico usa. '+
+      'Recurso × semana = quantidade × semanas da janela, e soma com o indireto das outras abas.']);
+    notaA.font={size:9,italic:true};
 
     /* ---- Gráficos ---- */
     var GW=940, GH=270;
