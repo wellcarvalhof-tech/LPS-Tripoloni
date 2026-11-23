@@ -840,11 +840,21 @@
     return id;
   }
   async function sbDeleteObra(id){ var r=await SB.from('obras').delete().eq('id',id); if(r.error)throw r.error; }
-  async function sbUpdateObra(id,patch){
+  /* O PostgREST nao reclama de um UPDATE que nao pegou linha nenhuma: sem permissao de
+   * escrita (RLS), ou com um id que nao existe mais, a resposta volta limpa — e o app diz
+   * "salvo" sobre coisa que nao foi gravada. So o proximo carregamento revela, e ai parece
+   * que o trabalho voltou sozinho pro formato anterior. Pedir as linhas de volta com
+   * .select() transforma esse silencio em erro na hora. */
+  async function sbUpdateVerificado(tabela,id,patch,oque){
     await sbRequireSession();
-    var r=await SB.from('obras').update(patch).eq('id',id);
+    var r=await SB.from(tabela).update(patch).eq('id',id).select('id');
     if(r.error)throw r.error;
+    if(!r.data||!r.data.length)
+      throw new Error('O banco não gravou '+oque+': nenhuma linha foi alterada. '+
+        'Normalmente é permissão de escrita nesta obra — confira seu acesso e tente de novo. '+
+        'Não feche a aba: o que está na tela ainda não foi perdido.');
   }
+  async function sbUpdateObra(id,patch){ await sbUpdateVerificado('obras',id,patch,'a obra'); }
   /* ---- Acessos (obra_membros / obra_convites — migração 14) ---- */
   async function sbMyUserId(){
     var s=await SB.auth.getSession();
@@ -966,11 +976,7 @@
     if(r.error)throw r.error;
     return id;
   }
-  async function sbUpdateServico(id,patch){
-    await sbRequireSession();
-    var r=await SB.from('servicos').update(patch).eq('id',id);
-    if(r.error)throw r.error;
-  }
+  async function sbUpdateServico(id,patch){ await sbUpdateVerificado('servicos',id,patch,'o serviço'); }
   async function sbDeleteServico(id){
     await sbRequireSession();
     var r=await SB.from('servicos').delete().eq('id',id);
@@ -983,11 +989,7 @@
     if(r.error)throw r.error;
     return id;
   }
-  async function sbUpdateLote(id,patch){
-    await sbRequireSession();
-    var r=await SB.from('lotes').update(patch).eq('id',id);
-    if(r.error)throw r.error;
-  }
+  async function sbUpdateLote(id,patch){ await sbUpdateVerificado('lotes',id,patch,'o lote'); }
   /** Atualiza a "ordem" de vários lotes numa chamada só (upsert só na coluna ordem, por id) —
    * em vez de uma requisição sequencial por lote. Reordenar um lote arrastando desloca a ordem
    * de todos os lotes entre a posição de origem e a de destino; com dezenas/centenas de lotes,
@@ -1107,11 +1109,7 @@
     var r=await SB.from('estaca_apontamentos').upsert(Object.assign({obra_id:selectedObra.id,lote_id:loteId,estaca_id:estacaId,servico_id:servicoId},patch),{onConflict:'estaca_id,servico_id'});
     if(r.error)throw r.error;
   }
-  async function sbUpdateProducao(id,patch){
-    await sbRequireSession();
-    var r=await SB.from('producao_diaria').update(patch).eq('id',id);
-    if(r.error)throw r.error;
-  }
+  async function sbUpdateProducao(id,patch){ await sbUpdateVerificado('producao_diaria',id,patch,'a produção'); }
   async function sbCreateRecurso(obraId,patch){
     await sbRequireSession();
     var id=newUuid();
@@ -1119,11 +1117,7 @@
     if(r.error)throw r.error;
     return id;
   }
-  async function sbUpdateRecurso(id,patch){
-    await sbRequireSession();
-    var r=await SB.from('recursos').update(patch).eq('id',id);
-    if(r.error)throw r.error;
-  }
+  async function sbUpdateRecurso(id,patch){ await sbUpdateVerificado('recursos',id,patch,'o recurso'); }
   async function sbDeleteRecurso(id){
     await sbRequireSession();
     var r=await SB.from('recursos').delete().eq('id',id);
@@ -1136,11 +1130,7 @@
     if(r.error)throw r.error;
     return id;
   }
-  async function sbUpdateApoio(id,patch){
-    await sbRequireSession();
-    var r=await SB.from('apoio_admin').update(patch).eq('id',id);
-    if(r.error)throw r.error;
-  }
+  async function sbUpdateApoio(id,patch){ await sbUpdateVerificado('apoio_admin',id,patch,'o apoio administrativo'); }
   async function sbDeleteApoio(id){
     await sbRequireSession();
     var r=await SB.from('apoio_admin').delete().eq('id',id);
@@ -1166,11 +1156,7 @@
     if(r.error)throw r.error;
     return id;
   }
-  async function sbUpdateCenario(id,patch){
-    await sbRequireSession();
-    var r=await SB.from('cenarios').update(patch).eq('id',id);
-    if(r.error)throw r.error;
-  }
+  async function sbUpdateCenario(id,patch){ await sbUpdateVerificado('cenarios',id,patch,'o cenário'); }
   async function sbDeleteCenario(id){
     await sbRequireSession();
     var r=await SB.from('cenarios').delete().eq('id',id);
@@ -1706,19 +1692,28 @@
     if(!selectedObra||!SB){ toast('Abra uma obra antes.'); return; }
     if(OFFLINE_MODE){ toast('Sem sinal — a tela está mostrando o retrato offline da obra.'); return; }
     var NL=String.fromCharCode(10);
-    var sujo=hasAnyDirty(), cen=ACTIVE_CENARIO||CENARIO_VISTA;
-    if(sujo||cen){
-      var m='Recarregar os dados desta obra do servidor?'+NL+NL;
-      if(sujo)m+='\u2022 O que você ainda não salvou nesta sessão será perdido.'+NL;
-      if(cen)m+='\u2022 O cenário "'+cen.nome+'" será fechado — ele continua salvo, é só reabrir.'+NL;
+    var sujo=hasAnyDirty();
+    if(sujo){
+      var m='Recarregar os dados desta obra do servidor?'+NL+NL+
+        'O que você ainda não salvou nesta sessão será perdido.';
       if(!confirm(m))return;
     }
     var b=document.getElementById('topReloadBtn');
     if(b){ b.disabled=true; b.classList.add('girando'); }
+    /* Recarregar não pode largar quem estava dentro de um cenário: aplicarCadastro zera
+     * ACTIVE_CENARIO, e a tela voltava pro cronograma da obra — que, pra quem estava
+     * editando o cenário, parece o trabalho ter sumido. */
+    var voltarPara=ACTIVE_CENARIO?{id:ACTIVE_CENARIO.id,editando:true}
+                  :(CENARIO_VISTA?{id:CENARIO_VISTA.id,editando:false}:null);
     try{
       await sbLoadCadastro(selectedObra.id);
-      go(current||'torre');
-      toast('Dados da obra recarregados.');
+      var c2=voltarPara?CENARIOS.filter(function(x){ return x.id===voltarPara.id; })[0]:null;
+      if(c2&&voltarPara.editando)cenarioAbreNoEditor(c2);
+      else{
+        if(c2)CENARIO_VISTA={id:c2.id,nome:c2.nome,snap:c2.snap||null};
+        go(current||'torre');
+      }
+      toast('Dados da obra recarregados'+(c2?(' — de volta no cenário "'+c2.nome+'".'):'.'));
     }catch(e){ alert('Falha ao recarregar: '+((e&&e.message)||e)); }
     b=document.getElementById('topReloadBtn');   // go() redesenha a tela, mas a barra fica
     if(b){ b.disabled=false; b.classList.remove('girando'); }
@@ -14239,6 +14234,8 @@
    *  planilha dizia por que. A Curva S, o histograma e a AVA continuam lendo a referencia:
    *  la o assunto e o previsto da obra, nao o que esta na tela. */
   function segsDaTelaTC(){
+    /* Vendo um cenário, a tela inteira mostra ELE — e o relatório tem que sair do mesmo. */
+    if(CENARIO_VISTA)return buildSchedule();
     var v=tcVistaAtual();
     if(v==='projecao')return buildProjectedSchedule('historico');
     if(v==='plano')return buildScheduleVivo();
@@ -24631,6 +24628,12 @@
         'Pra isto virar o previsto, gere uma nova revisão da linha de base.</div>';
       return fsBarHTML()+aviso+avFalta+tcAutoBarraHTML()+matrixTableHTML(true,buildScheduleVivo());
     }
+    /* Vendo um cenário, a prancheta não serve: ela desenha SEMPRE o rascunho vivo da obra,
+     * enquanto as curvas, o histograma e os relatórios mostram o cenário. Dava pra abrir
+     * "Ver" e "Editar" no mesmo cenário e enxergar dois cronogramas diferentes — e nem dá
+     * pra desenhar aqui, porque ver é só leitura. */
+    if(tab==='tc'&&tcManual()&&CENARIO_VISTA)
+      return fsBarHTML()+avFalta+matrixTableHTML(true,buildSchedule(),{soLeitura:true});
     if(tab==='tc'&&tcManual()){ tcmSync(); return fsBarHTML()+avFalta+ofiLousaHTML(false); }
     if(tab==='resumo') return fsBarHTML()+avFalta+resumoHTML();
     return fsBarHTML()+avFalta+tcAutoBarraHTML()+matrixTableHTML(true); // 'tc'
