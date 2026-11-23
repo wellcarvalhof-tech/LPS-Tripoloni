@@ -99,6 +99,8 @@
   .tc-soleitura .tcm-seg{cursor:default}
   body.ro #cronoToolbar [data-act^="imp"],body.ro #cronoToolbar [data-act="rev00"]{display:none!important}
   .top-right{margin-left:auto;display:flex;align-items:center;gap:9px}
+  @keyframes lps-gira{to{transform:rotate(360deg)}}
+  #topReloadBtn.girando{animation:lps-gira .8s linear infinite}
   .icon-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);display:grid;place-items:center;cursor:pointer}
   .icon-btn:hover{border-color:var(--accent);color:var(--ink)}
   .avatar{width:34px;height:34px;border-radius:99px;background:linear-gradient(140deg,var(--c4),var(--c1));display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
@@ -748,6 +750,7 @@
       <div class="crumb" id="crumb"></div>
       <div class="top-right">
         <button class="btn primary" id="topSaveBtn" style="display:none" title="Salvar todas as alterações pendentes nesta obra">💾 Salvar alterações</button>
+        <button class="icon-btn" id="topReloadBtn" title="Recarregar os dados desta obra do servidor" aria-label="atualizar" style="display:none">⟳</button>
         <button class="icon-btn" id="presBtn" title="Quem está no app agora" style="display:none;width:auto;padding:0 10px;gap:6px">👥 <b id="presCount">0</b></button>
         <span class="pill warn" id="roleBadge" style="display:none;align-items:center"></span>
         <div class="obra-sel" id="lotViewBtn" title="Filtrar quais lotes aparecem na matriz, no histograma e nas curvas (o cronograma continua calculado com todos)" style="display:none"><span class="k">Lotes</span><b id="lotViewName">Todos</b><span style="opacity:.5">▾</span></div>
@@ -1690,8 +1693,35 @@
       Object.keys(APOIO_DIRTY||{}).length>0 || !!LB_DIRTY || !!EQMACRO_DIRTY || !!RSEM_DIRTY;
   }
   function refreshTopSaveBtn(){
+    var rb=document.getElementById('topReloadBtn');
+    if(rb)rb.style.display=(selectedObra&&!OFFLINE_MODE)?'grid':'none';
     var b=document.getElementById('topSaveBtn'); if(!b)return;
     b.style.display=(selectedObra&&hasAnyDirty())?'inline-flex':'none';
+  }
+  /** Rele a obra do servidor. Serve pra quem trabalha junto: o outro salvou e esta tela
+   *  continua mostrando o de antes, porque o app nao fica escutando mudanca no banco.
+   *  Recarregar e comecar de novo do banco — aplicarCadastro zera os pendentes e fecha o
+   *  cenario aberto —, entao avisa antes quando ha o que perder. */
+  async function recarregarObra(){
+    if(!selectedObra||!SB){ toast('Abra uma obra antes.'); return; }
+    if(OFFLINE_MODE){ toast('Sem sinal — a tela está mostrando o retrato offline da obra.'); return; }
+    var NL=String.fromCharCode(10);
+    var sujo=hasAnyDirty(), cen=ACTIVE_CENARIO||CENARIO_VISTA;
+    if(sujo||cen){
+      var m='Recarregar os dados desta obra do servidor?'+NL+NL;
+      if(sujo)m+='\u2022 O que você ainda não salvou nesta sessão será perdido.'+NL;
+      if(cen)m+='\u2022 O cenário "'+cen.nome+'" será fechado — ele continua salvo, é só reabrir.'+NL;
+      if(!confirm(m))return;
+    }
+    var b=document.getElementById('topReloadBtn');
+    if(b){ b.disabled=true; b.classList.add('girando'); }
+    try{
+      await sbLoadCadastro(selectedObra.id);
+      go(current||'torre');
+      toast('Dados da obra recarregados.');
+    }catch(e){ alert('Falha ao recarregar: '+((e&&e.message)||e)); }
+    b=document.getElementById('topReloadBtn');   // go() redesenha a tela, mas a barra fica
+    if(b){ b.disabled=false; b.classList.remove('girando'); }
   }
   async function saveAllPending(){
     var b=document.getElementById('topSaveBtn');
@@ -25640,6 +25670,7 @@
     root.setAttribute('data-theme',dark?'light':'dark');
     if(selectedObra) go(current); else renderLanding(document.getElementById('obraSearch').value);
   }
+  document.getElementById('topReloadBtn').addEventListener('click',recarregarObra);
   document.getElementById('themeBtn').addEventListener('click',toggleTheme);
   document.getElementById('themeBtn2').addEventListener('click',toggleTheme);
   document.getElementById('menuBtn').addEventListener('click',function(){document.getElementById('side').classList.toggle('open');});
