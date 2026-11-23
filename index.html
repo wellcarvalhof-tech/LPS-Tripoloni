@@ -1149,10 +1149,24 @@
     }
     if(r.error)throw r.error;
   }
+  var SEM_COL_CRIADOPOR=false;  // true enquanto a migração 37 não rodar
   async function sbCreateCenario(obraId,patch){
     await sbRequireSession();
     var id=patch.id||newUuid();
-    var r=await SB.from('cenarios').insert(Object.assign({},patch,{id:id,obra_id:obraId}));
+    var base=Object.assign({},patch,{id:id,obra_id:obraId});
+    /* Quem criou fica gravado na linha: é o que permite depois dizer que a linha de base só
+     * sai pela mão de quem a gerou. Banco sem a migração 37 recusa a coluna — nesse caso
+     * grava sem ela, e o cenário nasce sem dono (só o desenvolvedor apaga). */
+    if(!SEM_COL_CRIADOPOR&&base.criado_por===undefined){
+      try{ base.criado_por=await sbMyUserId(); }catch(e){}
+    }
+    if(SEM_COL_CRIADOPOR)delete base.criado_por;
+    var r=await SB.from('cenarios').insert(base);
+    if(r.error&&/criado_por/.test(r.error.message||'')){
+      SEM_COL_CRIADOPOR=true;
+      delete base.criado_por;
+      r=await SB.from('cenarios').insert(base);
+    }
     if(r.error)throw r.error;
     return id;
   }
@@ -1220,7 +1234,7 @@
       REALIZADO_REC[k]=Number(r.quantidade)||0;
       REALIZADO_TERC[k]=Number(r.quantidade_terceiro)||0;
     });
-    CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em};});
+    CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em,criadoPor:r.criado_por||null};});
     window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
     APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
     /* Equipe por macro-grupo (migração 36). Coluna ausente = recurso ainda não disponível;
@@ -1385,6 +1399,7 @@
      abas em permissoes. Se o perfil não puder ser carregado (migração ainda não rodada, ou
      admin global sem linha em obra_membros), o app segue como planejador — igual era antes. */
   var MY_ROLE={papel:'planejador',permissoes:['*']};
+  var MY_UID=null;   // id do usuário logado, pra tela saber o que é dele sem ir à rede
   var IS_APP_ADMIN=false; // desenvolvedor: acesso total a todas as obras (migração 17)
   function isPlanejador(){ return IS_APP_ADMIN||MY_ROLE.papel==='planejador'; }
   /* Sem sinal o app abre pelo retrato guardado. Como não dá pra gravar, ele entra em só
@@ -5907,7 +5922,12 @@
       var acoes='<button class="btn'+(vendo?' primary':'')+'" data-cnver="'+c.id+'" title="Mostra este cenário na matriz e nos relatórios sem alterar nada da obra">'+(vendo?'● Vendo':'👁 Ver')+'</button>'+
         '<button class="btn" data-cnload="'+c.id+'" title="Abre o cenário no editor — o que você salvar vai pra ele, não pra obra">✎ Editar</button><button class="btn" data-cndup="'+c.id+'">Duplicar</button>'+
         '<button class="btn" style="color:var(--crit)" data-cnapply="'+c.id+'" title="Substitui o cronograma ao vivo da obra por este cenário">⬆ Aplicar ao cronograma ao vivo</button>'+
-        (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button><button class="iconbtn" data-cndel="'+c.id+'">✕</button>':'');
+        (c.tipo==='rascunho'?'<button class="btn primary" data-cnbase="'+c.id+'">❄ Gerar linha de base</button>':'')+
+        /* O botão aparece sempre; quando não pode, vem desabilitado dizendo por quê — some
+         * sem explicação é pior do que não ter. */
+        (podeApagarCenario(c)
+          ?('<button class="iconbtn" data-cndel="'+c.id+'" title="Apagar '+(c.tipo==='baseline'?('a linha de base '+escAttr(c.revisao||'')):'este cenário')+'">✕</button>')
+          :('<button class="iconbtn" disabled title="'+escAttr(motivoNaoApaga(c))+'" style="opacity:.4;cursor:not-allowed">✕</button>'));
       return '<tr'+(isActive?' style="outline:2px solid var(--accent);outline-offset:-2px"':'')+'><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
     }).join('');
     return head('Cenários','Salve alternativas completas (calendário, chuvas, produtividade, número de equipes e ajustes manuais), compare prazo e pico de recursos, e gere linhas de base (REV00, REV01...) ao longo da obra.',impBtn()+'<button class="btn primary" id="cnNovo">+ Cenário</button>')+
@@ -11373,14 +11393,8 @@
         });
       });
       document.querySelectorAll('[data-cndel]').forEach(function(b){
-        b.addEventListener('click',async function(){
-          var id=b.getAttribute('data-cndel');
-          if(!confirm('Excluir este cenário (rascunho)?'))return;
-          try{
-            await sbDeleteCenario(id);
-            CENARIOS=CENARIOS.filter(function(x){return x.id!==id;});
-            go('cr-cenarios');
-          }catch(e){ alert('Falha ao excluir: '+((e&&e.message)||e)); }
+        b.addEventListener('click',function(){
+          apagarCenario(CENARIOS.filter(function(x){ return x.id===b.getAttribute('data-cndel'); })[0],b);
         });
       });
     }
@@ -15167,6 +15181,67 @@
       CENARIO_VISTA=null;
       cenarioAbreNoEditor(c);
     });
+  }
+  /** Quem pode apagar um cenário. Rascunho é trabalho de planejamento: quem edita a obra
+   *  apaga. Linha de base é o compromisso da obra — some só pela mão do desenvolvedor ou de
+   *  quem a gerou. Cenário criado antes da migração 37 não tem dono gravado: fica só com o
+   *  desenvolvedor, que é o lado seguro do erro. O banco aplica a mesma regra (RLS); aqui é
+   *  pra tela não oferecer um botão que vai falhar. */
+  function podeApagarCenario(c){
+    if(!c||isReadOnly())return false;
+    if(c.tipo!=='baseline')return isPlanejador();
+    if(IS_APP_ADMIN)return true;
+    return !!(c.criadoPor&&MY_UID&&c.criadoPor===MY_UID);
+  }
+  function motivoNaoApaga(c){
+    if(isReadOnly())return 'Seu perfil é só de visualização.';
+    if(c&&c.tipo==='baseline')
+      return c.criadoPor?'Só o desenvolvedor ou quem gerou esta revisão pode apagá-la.'
+                        :'Esta revisão foi gerada antes do app guardar quem a criou — só o desenvolvedor pode apagá-la.';
+    return 'Seu perfil não apaga cenários.';
+  }
+  /** Apaga um cenário. A linha de base pede um aviso maior: ela é a referência que alimenta
+   *  a Curva S, o histograma, a AVA e os relatórios, e apagar a que está ATIVA deixaria a
+   *  obra sem previsto — por isso a revisão anterior assume no lugar. Se a tela deixar
+   *  passar alguém sem direito, o banco recusa (RLS da migração 37) e o erro aparece aqui. */
+  async function apagarCenario(c,btn){
+    if(!c)return;
+    if(!podeApagarCenario(c)){ alert(motivoNaoApaga(c)); return; }
+    var NL=String.fromCharCode(10);
+    var base=c.tipo==='baseline';
+    var herdeira=null;
+    if(base&&c.ativo){
+      CENARIOS.forEach(function(x){
+        if(x.id===c.id||x.tipo!=='baseline')return;
+        if(!herdeira||String(x.revisao||'')>String(herdeira.revisao||''))herdeira=x;
+      });
+    }
+    var m=base
+      ?('Apagar a linha de base '+(c.revisao||'')+' — "'+c.nome+'"?'+NL+NL+
+        'Ela é a referência da obra: é dela que saem o previsto da Curva S, o histograma, a AVA e os relatórios. Isso não volta atrás.'+NL+
+        (c.ativo?(herdeira?('A revisão '+(herdeira.revisao||'')+' passa a ser a ativa.'+NL)
+                          :('A obra fica SEM linha de base — o previsto passa a ser o cronograma ao vivo.'+NL)):''))
+      :('Apagar o cenário "'+c.nome+'"?'+NL+NL+'Isso não volta atrás.');
+    if(!confirm(m))return;
+    var rot=btn?btn.innerHTML:null;
+    if(btn){ btn.disabled=true; btn.innerHTML='…'; }
+    try{
+      await sbDeleteCenario(c.id);
+      if(herdeira){
+        await sbUpdateCenario(herdeira.id,{ativo:true});
+        herdeira.ativo=true;
+      }
+      CENARIOS=CENARIOS.filter(function(x){ return x.id!==c.id; });
+      if(ACTIVE_CENARIO&&ACTIVE_CENARIO.id===c.id)ACTIVE_CENARIO=null;
+      if(CENARIO_VISTA&&CENARIO_VISTA.id===c.id)CENARIO_VISTA=null;
+      go('cr-cenarios');
+      toast((base?('Linha de base '+(c.revisao||'')):('Cenário "'+c.nome+'"'))+' apagado'+
+        (herdeira?(' — '+(herdeira.revisao||'')+' é a nova ativa.'):'.'));
+    }catch(e){
+      if(btn){ btn.disabled=false; btn.innerHTML=rot; }
+      alert('Falha ao apagar: '+((e&&e.message)||e)+NL+NL+
+        'Se a mensagem fala em permissão, a linha de base só sai pelo desenvolvedor ou por quem a gerou.');
+    }
   }
   function activeBaseline(){
     return CENARIOS.filter(function(c){return c.tipo==='baseline'&&c.ativo;})[0]||null;
@@ -25640,6 +25715,7 @@
     try{
       if(OFFLINE_MODE)throw new Error('offline');   // sem rede não dá pra conferir o perfil
       if(!IS_APP_ADMIN)IS_APP_ADMIN=await sbIsAppAdmin(); // entrou direto numa obra, sem passar pela lista
+      try{ MY_UID=await sbMyUserId(); }catch(e2){}
       var role=await sbLoadMyRole(id);
       // Desenvolvedor não é rebaixado pelo papel que tiver (ou não tiver) nesta obra.
       if(role&&role.papel&&!IS_APP_ADMIN)MY_ROLE={papel:role.papel,permissoes:Array.isArray(role.permissoes)?role.permissoes:[]};
