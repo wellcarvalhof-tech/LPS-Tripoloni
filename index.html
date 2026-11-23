@@ -5886,8 +5886,9 @@
       return '<tr'+(isActive?' style="outline:2px solid var(--accent);outline-offset:-2px"':'')+'><td><b>'+c.nome+'</b></td><td>'+estado+'</td><td class="r mono">'+st.tw+' sem</td><td class="r mono">'+st.peak+' equipes</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+acoes+'</td></tr>';
     }).join('');
     return head('Cenários','Salve alternativas completas (calendário, chuvas, produtividade, número de equipes e ajustes manuais), compare prazo e pico de recursos, e gere linhas de base (REV00, REV01...) ao longo da obra.',impBtn()+'<button class="btn primary" id="cnNovo">+ Cenário</button>')+
-    (ACTIVE_CENARIO?'<div class="banner" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">Você está editando o cenário <b>"'+ACTIVE_CENARIO.nome+'"</b> — mexa no Calendário, Serviços ou Ajuste Manual à vontade, e volte aqui pra salvar ou trocar de cenário.</div>':'')+
-    '<div class="card" style="margin-bottom:14px"><div class="note" style="margin-bottom:8px">Um cenário guarda uma cópia completa: calendário/chuvas, produtividade e nº de equipes de cada serviço, e os ajustes manuais do Tempo-Caminho. "Carregar" abre o cenário pra edição (Calendário, Serviços, Ajuste Manual). "Duplicar" cria uma cópia independente. A linha destacada mostra o que está aberto no editor agora.</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
+    (ACTIVE_CENARIO?('<div class="banner" style="margin-bottom:14px;background:var(--accent-soft);border-color:var(--accent)">Você está editando o cenário <b>"'+escAttr(ACTIVE_CENARIO.nome)+'"</b> — mexa no Calendário, nos Serviços ou no Tempo-Caminho à vontade, e volte aqui pra salvar ou trocar de cenário.'+
+      botaoDuplicarAtualHTML()+'</div>'):'')+
+    '<div class="card" style="margin-bottom:14px"><div class="note" style="margin-bottom:8px">Um cenário guarda uma cópia completa: calendário/chuvas, produtividade e nº de equipes de cada serviço, e os ajustes manuais do Tempo-Caminho. "Carregar" abre o cenário pra edição (Calendário, Serviços, Tempo-Caminho). "Duplicar" cria uma cópia independente. A linha destacada mostra o que está aberto no editor agora.</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Cenário</th><th>Estado</th><th class="r">Prazo</th><th class="r">Pico simultâneo</th><th></th></tr></thead><tbody>'+
       liveRow+rows+'</tbody></table></div>'+
       (CENARIOS.length?'':'<div class="note" style="margin-top:8px">Nenhum cenário salvo ainda. Clique em "+ Cenário" pra guardar um snapshot do cronograma atual, ou em "❄ Gerar linha de base" na linha acima pra criar a primeira revisão (REV00).</div>')+
     '</div>'+
@@ -6786,7 +6787,7 @@
         '<label>Semana do ano de início: <input class="einp" type="text" data-cfgcalweek="minStartWeek" data-si="'+si+'" value="'+minStartVal+'" style="width:92px" placeholder="S37-26"> <span style="color:var(--muted)">(não inicia antes desta semana — escreva com o ano, ex.: S37-26)</span></label>'+
         '<label>Semana do ano alvo de término: <input class="einp" type="text" data-cfgcalweek="targetEndWeek" data-si="'+si+'" value="'+targetVal+'" style="width:92px" placeholder="S45-27"> <span style="color:var(--muted)">(mostra alerta se passar da meta — não altera datas)</span></label>'+
       '</div>'+
-      (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (em Ajuste Manual) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
+      (queueOn?'<div class="note" style="margin-top:6px">Com fila dinâmica ligada, a atribuição manual de equipe (fixada na matriz) é ignorada para este serviço — só a sequência dos lotes é respeitada.</div>':'')+
       (cfg.seqManual?'<div class="note" style="margin-top:6px">Sequência manual ligada: os lotes deste serviço são executados na ordem em que estão em <b>Lotes &amp; Quantidades</b>'+(queueOn?' (a equipe de cada lote continua sendo escolhida pelo app)':'')+'. A equipe pode ficar ociosa esperando um lote liberar — é o preço de fixar a ordem.</div>':'')+
       targetInfo;
   }
@@ -11335,17 +11336,11 @@
         });
       });
       document.querySelectorAll('[data-cndup]').forEach(function(b){
-        b.addEventListener('click',async function(){
-          var c=CENARIOS.filter(function(x){return x.id===b.getAttribute('data-cndup');})[0]; if(!c||!selectedObra)return;
-          var nome=prompt('Nome da cópia:',c.nome+' (cópia)'); if(nome==null)return;
-          try{
-            var snap=JSON.parse(JSON.stringify(c.snap||{}));
-            var id=await sbCreateCenario(selectedObra.id,{nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
-            CENARIOS.push({id:id,nome:nome||(c.nome+' (cópia)'),tipo:'rascunho',revisao:null,ativo:false,snap:snap,ordem:CENARIOS.length,congeladoEm:null});
-            go('cr-cenarios'); toast('Cenário duplicado.');
-          }catch(e){ alert('Falha ao duplicar: '+((e&&e.message)||e)); }
+        b.addEventListener('click',function(){
+          duplicarCenarioDoSnap(CENARIOS.filter(function(x){ return x.id===b.getAttribute('data-cndup'); })[0],b);
         });
       });
+      ligaDuplicarAtual();
       document.querySelectorAll('[data-cnbase]').forEach(function(b){
         b.addEventListener('click',function(){
           var id=b.getAttribute('data-cnbase'), c=CENARIOS.filter(function(x){return x.id===id;})[0]; if(!c)return;
@@ -15023,6 +15018,54 @@
       alert('Falha ao salvar cenário: '+((e&&e.message)||e));
     }
   }
+  /** Copia um cenário a partir do retrato guardado nele. É o que a linha da lista faz; o botão
+   *  do topo usa isto quando se está apenas VENDO um cenário, porque aí o que está ao vivo é da
+   *  obra, não do cenário. */
+  async function duplicarCenarioDoSnap(c,btn){
+    if(!c||!selectedObra)return;
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    var padrao=c.nome+' (cópia)';
+    var nome=prompt('Nome da cópia:',padrao);
+    if(nome==null)return;
+    nome=(nome||'').replace(/^\s+|\s+$/g,'')||padrao;
+    var rot=btn?btn.innerHTML:null;
+    if(btn){ btn.disabled=true; btn.innerHTML='Duplicando…'; }
+    try{
+      var snap=JSON.parse(JSON.stringify(c.snap||{}));
+      var id=await sbCreateCenario(selectedObra.id,{nome:nome,tipo:'rascunho',ativo:false,ajustes_manuais:snap,ordem:CENARIOS.length});
+      CENARIOS.push({id:id,nome:nome,tipo:'rascunho',revisao:null,ativo:false,snap:snap,ordem:CENARIOS.length,congeladoEm:null});
+      if(btn){ btn.disabled=false; btn.innerHTML=rot; }
+      go('cr-cenarios'); toast('Cenário "'+nome+'" criado a partir de "'+c.nome+'".');
+    }catch(e){
+      if(btn){ btn.disabled=false; btn.innerHTML=rot; }
+      alert('Falha ao duplicar: '+((e&&e.message)||e));
+    }
+  }
+  /** Duplica o cenário que está aberto agora, sem ter que procurar a linha dele na lista.
+   *  Editando: a cópia sai do que está na tela, com as mudanças ainda não salvas — é pra isso que
+   *  se duplica no meio do trabalho, pra seguir por dois caminhos a partir daqui. Só vendo: sai
+   *  do retrato guardado, que é o único lugar onde esse cenário existe. */
+  function duplicarCenarioAtual(btn){
+    if(ACTIVE_CENARIO)return salvarComoCenario(btn);
+    var c=CENARIO_VISTA?CENARIOS.filter(function(x){ return x.id===CENARIO_VISTA.id; })[0]:null;
+    if(!c){ alert('Nenhum cenário aberto pra duplicar. Abra um em Cenários, ou use "Salvar como cenário" pra guardar o cronograma ao vivo.'); return; }
+    duplicarCenarioDoSnap(c,btn);
+  }
+  function botaoDuplicarAtualHTML(){
+    if(!(ACTIVE_CENARIO||CENARIO_VISTA))return '';
+    return '<button class="btn" data-cndupatual="1" style="margin-left:6px;padding:3px 10px;font-size:11.5px" '+
+      'title="Cria um cenário novo a partir deste'+(ACTIVE_CENARIO?', com o que está na tela agora':'')+'">⧉ Duplicar este cenário</button>';
+  }
+  function ligaDuplicarAtual(){
+    document.querySelectorAll('[data-cndupatual]').forEach(function(b){
+      /* Na tela de Cenários as duas tarjas podem aparecer juntas, e quem liga passa duas vezes:
+       * sem a marca, um clique abriria dois diálogos de nome. O elemento é novo a cada desenho,
+       * então a marca não sobrevive e não precisa ser limpa. */
+      if(b._dupLigado)return;
+      b._dupLigado=true;
+      b.addEventListener('click',function(){ duplicarCenarioAtual(b); });
+    });
+  }
   /** O botão, igual nas barras do Tempo-Caminho manual e do Ajuste manual. */
   function botaoSalvarCenarioHTML(){
     return '<button class="btn" id="btnSalvarCenario" title="Guarda este cronograma como um cenário, pra comparar depois. Não altera a obra.">'+
@@ -15083,11 +15126,13 @@
       'A obra não foi alterada. '+
       '<button class="btn" id="cnSair" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Sair do cenário</button>'+
       '<button class="btn" id="cnEditar" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Editar este cenário</button>'+
+      botaoDuplicarAtualHTML()+
       '</div>';
   }
   function cenarioBannerWire(){
     var a=document.getElementById('cnSair');
     if(a)a.addEventListener('click',cenarioSair);
+    ligaDuplicarAtual();
     var b=document.getElementById('cnEditar');
     if(b)b.addEventListener('click',function(){
       var c=CENARIOS.filter(function(x){return x.id===CENARIO_VISTA.id;})[0];
@@ -22234,7 +22279,7 @@
     var adjApplied=importAjustesSection(wb);
 
     go(current);
-    var resumo='Importado: '+rServ.createdServ+' serviço(s) novo(s), '+rServ.updatedServ+' atualizado(s), '+rLot.createdLot+' lote(s) novo(s), '+rLot.qtyCount+' quantidade(s)'+(rCal.calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar ajustes" no Ajuste Manual pra confirmar':'')+'.';
+    var resumo='Importado: '+rServ.createdServ+' serviço(s) novo(s), '+rServ.updatedServ+' atualizado(s), '+rLot.createdLot+' lote(s) novo(s), '+rLot.qtyCount+' quantidade(s)'+(rCal.calChanged?', calendário atualizado':'')+(adjApplied>0?', '+adjApplied+' ajuste(s) manual(is) — clique em "Salvar alterações" pra confirmar':'')+'.';
     var avisoQ=avisoQuantidades(rLot);
     if(avisoQ)alert(resumo+avisoQ); else toast(resumo);
   }
