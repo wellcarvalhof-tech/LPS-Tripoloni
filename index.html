@@ -5800,7 +5800,10 @@
       '</div>'
     ):'';
     var apoioAloc=sectionCard('apoioaloc','Alocação de Apoio Administrativo',null,
-      '<button class="btn" id="gotoApoio">Cadastrar itens →</button>',
+      '<button class="btn" id="gotoApoio">Cadastrar itens →</button>'+
+      '<button class="btn" id="apoioModelo">Modelo apoio</button>'+
+      '<button class="btn" id="apoioImportar">↥ Importar apoio</button>'+
+      '<button class="btn" id="apoioExportar">↧ Exportar apoio</button>',
       (!APOIO.length?'<div class="note">Nenhum item cadastrado ainda em Apoio Administrativo. Clique em "Cadastrar itens" pra adicionar (manualmente ou importando uma planilha).</div>':
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+apoioSelHtml+'</div>'+
         (!apoCrew.length?'<div class="note">Nenhum recurso alocado neste item ainda. Busque abaixo pra adicionar.</div>':
@@ -11790,6 +11793,17 @@
       if(impEquipes)impEquipes.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importEquipesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       var gotoApoio=document.getElementById('gotoApoio');
       if(gotoApoio)gotoApoio.addEventListener('click',function(){go('cad-apoio');});
+      var apoMod=document.getElementById('apoioModelo');
+      if(apoMod)apoMod.addEventListener('click',downloadApoioModelo);
+      var apoExp=document.getElementById('apoioExportar');
+      if(apoExp)apoExp.addEventListener('click',exportApoioWorkbook);
+      var apoImp=document.getElementById('apoioImportar');
+      if(apoImp)apoImp.addEventListener('click',function(){
+        pickExcelFile(function(file){
+          readWorkbookFile(file).then(importApoioWorkbook)
+            .catch(function(err){ alert('Falha ao ler o arquivo: '+((err&&err.message)||err)); });
+        });
+      });
       var apoioSelEl=document.getElementById('histApoioSel');
       if(apoioSelEl)apoioSelEl.addEventListener('change',function(){window._histApoioSel=+apoioSelEl.value; go('cr-hist');});
       document.querySelectorAll('[data-apoiocrewres]').forEach(function(inp){
@@ -21637,6 +21651,125 @@
   /** Modelo/exportação/importação da composição de equipe (função+qtd, equipamento+qtd) por
    * serviço, em formato longo (uma linha por recurso) — mais fácil de editar em massa e
    * reimportar do que a matriz "Equipe típica" célula a célula. */
+  /* ---- Alocação do apoio por planilha ----
+   * O mesmo trio da equipe típica (modelo / importar / exportar), só que a linha é identificada
+   * pelos três níveis do apoio em vez do nome do serviço. Como na equipe típica, nada é criado:
+   * se um item de apoio ou um recurso da planilha não existe no cadastro, a importação para e
+   * diz quais — nome digitado diferente viraria cadastro duplicado, que é pior que o erro.
+   *
+   * Diferença de propósito: no apoio a JANELA é o que coloca a equipe no tempo (não há frente
+   * pra isso), então ela entra e sai pela planilha junto. Planilha sem as colunas de janela não
+   * mexe nas janelas que já existem — modelo antigo não apaga em silêncio o que foi cadastrado
+   * na tela. */
+  var APOIO_HEADER=['Nivel 1','Nivel 2','Nivel 3','Tipo','Recurso','Quantidade','Mobiliza (semana)','Desmobiliza (semana)'];
+  function apoioChave(n1,n2,n3){
+    return [n1,n2,n3].map(function(x){ return String(x==null?'':x).trim().toLowerCase(); }).join('::');
+  }
+  function downloadApoioModelo(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var a=APOIO[0];
+    var n1=a?a.n1:'Escritório de obra', n2=a?a.n2:'Engenharia', n3=a?a.n3:'';
+    var rows=[APOIO_HEADER,
+      [n1,n2,n3,'Função','Engenheiro de planejamento',1,'',''],
+      [n1,n2,n3,'Função','Técnico de segurança',2,5,40],
+      [n1,n2,n3,'Equipamento','Caminhonete',1,'','']];
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Apoio');
+    XLSX.writeFile(wb,'modelo-apoio-alocacao.xlsx');
+    toast('Modelo exportado.');
+  }
+  function exportApoioWorkbook(){
+    if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
+    var rows=[APOIO_HEADER];
+    APOIO.forEach(function(a){
+      ((a.cfg&&a.cfg.crew)||[]).forEach(function(item){
+        var r=RECURSOS.filter(function(x){ return x.id===item.resourceId; })[0]; if(!r)return;
+        rows.push([a.n1||'',a.n2||'',a.n3||'',r.tipo==='funcao'?'Função':'Equipamento',r.n,
+                   item.qtyPerTeam||0,(+item.mob>0)?+item.mob:'',(+item.demob>0)?+item.demob:'']);
+      });
+    });
+    if(rows.length===1){ alert('Nenhum recurso alocado no apoio ainda.'); return; }
+    var wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Apoio');
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    XLSX.writeFile(wb,nome+'_apoio.xlsx');
+    toast('Alocação do apoio exportada.');
+  }
+  function importApoioWorkbook(wb){
+    if(!selectedObra){alert('Abra uma obra antes de importar.');return;}
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    var ws=wb.Sheets['Apoio']||wb.Sheets[wb.SheetNames[0]];
+    if(!ws){alert('Planilha vazia.');return;}
+    var aoa=sheetRows(ws);
+    if(aoa.length<2){alert('Planilha vazia.');return;}
+    /* As colunas de janela são opcionais: o cabeçalho decide se a planilha manda nelas. */
+    var cab=(aoa[0]||[]).map(function(x){ return normName(x); });
+    var temJanelaCols=cab.some(function(t){ return /MOBILIZ/.test(t); })&&cab.some(function(t){ return /DESMOBILIZ/.test(t); });
+    var apoByKey={};
+    APOIO.forEach(function(a,ai){ apoByKey[apoioChave(a.n1,a.n2,a.n3)]=ai; });
+    var recByKey={}; RECURSOS.forEach(function(r){ recByKey[r.tipo+'::'+r.n.trim().toLowerCase()]=r; });
+    var rows=aoa.slice(1).map(function(r,idx){ return {row:r,line:idx+2}; })
+      .filter(function(x){ return x.row&&String(x.row[4]==null?'':x.row[4]).trim()!==''; });
+    if(!rows.length){alert('Nenhuma linha com recurso na planilha.');return;}
+
+    var apoProblems=[], recProblems=[], vistoA={}, vistoR={};
+    rows.forEach(function(x){
+      var row=x.row;
+      var k=apoioChave(row[0],row[1],row[2]);
+      if(apoByKey[k]==null&&!vistoA[k]){
+        vistoA[k]=true;
+        apoProblems.push('Linha '+x.line+': item de apoio "'+[row[0],row[1],row[2]].filter(Boolean).join(' › ')+'" não encontrado em Apoio Administrativo');
+      }
+      var tipo=String(row[3]||'').trim().toLowerCase().indexOf('eq')===0?'equipamento':'funcao';
+      var rk=tipo+'::'+String(row[4]).trim().toLowerCase();
+      if(recByKey[rk]==null&&!vistoR[rk]){
+        vistoR[rk]=true;
+        recProblems.push('Linha '+x.line+': '+(tipo==='funcao'?'função':'equipamento')+' "'+String(row[4]).trim()+'" não encontrado(a) no catálogo de '+(tipo==='funcao'?'Funções':'Equipamentos'));
+      }
+    });
+    if(apoProblems.length||recProblems.length){
+      var NL=String.fromCharCode(10);
+      var msg='A planilha tem nomes que não batem com o que já está cadastrado nesta obra. '+
+        'O nome precisa ser idêntico ao cadastrado (sem contar maiúsculas/minúsculas) — ou cadastre o item que falta antes de importar. Nada foi importado ainda.'+NL;
+      if(apoProblems.length)msg+=NL+'ITENS DE APOIO não encontrados:'+NL+apoProblems.join(NL)+NL;
+      if(recProblems.length)msg+=NL+'FUNÇÕES/EQUIPAMENTOS não encontrados:'+NL+recProblems.join(NL);
+      alert(msg);
+      return;
+    }
+
+    var NL2=String.fromCharCode(10);
+    if(!confirm('Importar esta planilha de apoio?'+NL2+NL2+
+      'Para cada item de apoio citado, a alocação é SUBSTITUÍDA pela da planilha. Item não citado não é tocado.'+NL2+
+      (temJanelaCols?'As colunas de janela mandam: em branco, o recurso passa a valer a obra inteira.'
+                    :'A planilha não traz colunas de janela, então as janelas já cadastradas ficam como estão.')))return;
+
+    var tocados={}, aplicadas=0;
+    rows.forEach(function(x){
+      var row=x.row;
+      var ai=apoByKey[apoioChave(row[0],row[1],row[2])];
+      var tipo=String(row[3]||'').trim().toLowerCase().indexOf('eq')===0?'equipamento':'funcao';
+      var r=recByKey[tipo+'::'+String(row[4]).trim().toLowerCase()];
+      var qty=Math.max(0,+row[5]||0); if(qty<=0)return;
+      var a=APOIO[ai];
+      var anterior=((a.cfg&&a.cfg.crew)||[]).filter(function(c){ return c.resourceId===r.id; })[0];
+      if(!tocados[ai]){ a.cfg=Object.assign({},a.cfg,{crew:[]}); tocados[ai]=true; }
+      var crew=a.cfg.crew.filter(function(c){ return c.resourceId!==r.id; });
+      var novo={resourceId:r.id,qtyPerTeam:qty};
+      if(temJanelaCols){
+        if(+row[6]>0)novo.mob=+row[6];
+        if(+row[7]>0)novo.demob=+row[7];
+      } else if(anterior){
+        if(+anterior.mob>0)novo.mob=+anterior.mob;
+        if(+anterior.demob>0)novo.demob=+anterior.demob;
+      }
+      crew.push(novo);
+      a.cfg=Object.assign({},a.cfg,{crew:crew});
+      APOIO_DIRTY[ai]=true;
+      aplicadas++;
+    });
+    go('cr-hist');
+    toast('Importado: '+aplicadas+' alocação(ões) em '+Object.keys(tocados).length+' item(ns) de apoio. Clique em "Salvar alterações" pra confirmar.');
+  }
   var EQUIPES_HEADER=['Servico','Tipo','Recurso','Quantidade por equipe'];
   function downloadEquipesModelo(){
     if(typeof XLSX==='undefined'){alert('Biblioteca de planilha não carregou.');return;}
