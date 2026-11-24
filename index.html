@@ -14866,8 +14866,13 @@
     LOTS.forEach(function(_,li){
       var loteId=ids[li]; if(!loteId)return;
       SERV.forEach(function(sv,si){
-        var v=orcNum((QTY[li]||[])[si]);
-        if(v)q[loteId+'::'+sv.id]=v;
+        /* ZERO É SALDO: quer dizer "este serviço não entra neste lote", e precisa ser
+         * gravado. Omitindo, quem lê o snapshot (aplicaQuantidadesDoSnap e withSnapshot)
+         * trata o par como ausente e cai no saldo DA OBRA — então o zero que a pessoa
+         * digitou no cenário voltava como o número antigo no próximo carregamento, e o
+         * botão de salvar parecia não funcionar. Par ausente continua querendo dizer o que
+         * sempre quis: lote ou serviço que nem existia quando o cenário foi guardado. */
+        q[loteId+'::'+sv.id]=orcNum((QTY[li]||[])[si])||0;
       });
     });
     return q;
