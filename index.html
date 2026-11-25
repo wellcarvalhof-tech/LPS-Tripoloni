@@ -1251,6 +1251,7 @@
     /* Entrar na obra é entrar na linha de base: vista 'base' (TC_VISTA null), aba do tempo-
      * caminho, sem cenário carregado e sem vista de cenário de uma sessão anterior. */
     ADJ_DIRTY=false; ADJ_PENDING={}; ACTIVE_CENARIO=null; CENARIO_VISTA=null; TC_VISTA=null;
+    MOTOR=MOTOR_ATUAL;   // sair do cenario (ou recarregar) volta pro motor da obra
     window._cronoTab='tc';
     SVC_DIRTY={}; LOT_NAME_DIRTY={}; QTY_DIRTY={}; LOT_PACOTE_DIRTY={}; CAL_DIRTY=false; LOT_SELECTED={};
     ESTACAS={}; ESTACA_QTY={}; ESTACA_QTY_DIRTY={}; ESTACA_AVANCO={}; ESTACA_VOL={}; EST_OPEN={};
@@ -14888,7 +14889,9 @@
        * dinheiro de hoje — medir o passado com a régua do presente, que é justamente o
        * que faz o cenário inicial não bater com o que foi vendido. */
       orcamento:(ORC&&ORC.itens&&ORC.itens.length)?JSON.parse(JSON.stringify(ORC)):null,
-      motor:MOTOR_ATUAL
+      /* O motor em vigor, nao o mais novo: salvar um cenario antigo com o motor de hoje o
+       * promoveria em silencio, e o plano mudaria sozinho no proximo "Ver". */
+      motor:MOTOR
     };
   }
   /** Normaliza cenarios.ajustes_manuais: formato novo ({ovr,feriados,servicos}) ou o formato
@@ -14927,7 +14930,9 @@
     if(snap.servicos&&snap.servicos.length){
       SERV=snap.servicos.map(function(sc){
         var orig=savedSERV.filter(function(x){return x.id===sc.id;})[0]||{};
-        return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:sc.config||{}};
+        /* grupo vem do cadastro vivo, igual o editor faz: sem ele o macro-grupo nao e
+         * reconhecido e o histograma do cenario VISTO contava equipe que o EDITADO nao conta. */
+        return {id:sc.id,n:sc.nome,u:sc.unidade,c:orig.c,hex:sc.cor,eq:sc.eq,p:String(sc.produtividade),lag:sc.lag,cfg:sc.config||{},grupo:orig.grupo||''};
       });
     }
     /* O saldo entra DEPOIS dos serviços e é montado na ordem do SERV que vai valer: a coluna de
@@ -15162,6 +15167,12 @@
       });
     }
     window._OBRA=Object.assign({},window._OBRA,{feriados:JSON.parse(JSON.stringify(snap.feriados||{holidayWeeks:[],rainPeriods:[]}))});
+    /* O MOTOR e parte do cenario: withSnapshot (o caminho do "Ver" e da lista) ja usava o do
+     * snapshot, e o editor ficava no motor atual — o mesmo cenario dava um plano no Ver e
+     * outro no Editar, e num cenario antigo (sem o campo, que normaliza pra 1) a diferenca
+     * chegava a dobrar o prazo. Volta pro motor da obra em aplicarCadastro, que e por onde
+     * se sai do cenario. */
+    MOTOR=(+snap.motor>0)?+snap.motor:1;
     aplicaQuantidadesDoSnap(snap);   // o saldo do cenário entra na edição junto com o resto
     /* O orçamento do cenário entra como entra o resto: vira o orçamento vivo enquanto o
      * cenário está aberto. Primeiro a versão amarrada a ele na tela de orçamentos, que é a
