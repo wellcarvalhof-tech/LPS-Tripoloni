@@ -11483,6 +11483,12 @@
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
     if(view==='cr-gantt'){
       grafWire();
+      document.querySelectorAll('[data-tcleixo]').forEach(function(b){
+        b.addEventListener('click',function(){ TCL_EIXO=b.getAttribute('data-tcleixo'); go('cr-gantt'); });
+      });
+      document.querySelectorAll('[data-tclpor]').forEach(function(b){
+        b.addEventListener('click',function(){ TCL_POR=b.getAttribute('data-tclpor'); go('cr-gantt'); });
+      });
       if(GRAF_TAB==='gantt')ganttWire();
       var gls=document.getElementById('grafLbSvc');
       if(gls)gls.addEventListener('change',function(){ lbRoot().servicoSel=gls.value; go('cr-gantt'); });
@@ -24473,63 +24479,125 @@
    *  de cada serviço como uma linha que desce pelos lotes. Linha mais deitada é frente mais
    *  lenta; linhas que se cruzam são frentes que vão se encontrar no mesmo lote. É a mesma
    *  informação da matriz, lida de uma vez só. */
+  /* O gráfico de tempo-caminho tem duas escolhas, e as duas mudam o que se enxerga:
+   *   eixos — "como a matriz" (lote na horizontal, tempo subindo na vertical, igual à prancheta)
+   *           ou deitado (tempo na horizontal), que é como a maioria dos livros desenha.
+   *   por   — uma linha por SERVIÇO (a leitura de resumo: por onde o serviço passou e quando)
+   *           ou uma por EQUIPE (a leitura de frente: quem está onde). */
+  var TCL_EIXO='matriz', TCL_POR='servico';
+  /** As frentes a desenhar, já na forma que o desenho usa: nome, cor e os trechos
+   *  {lote, semana inicial, semana final}. */
+  function tcLinhasFrentes(segs,posDoLote){
+    var out=[];
+    if(TCL_POR==='equipe'){
+      var porEq={};
+      segs.forEach(function(g){ (porEq[g.si+'::'+g.team]||(porEq[g.si+'::'+g.team]=[])).push(g); });
+      Object.keys(porEq).forEach(function(k){
+        var lista=porEq[k].slice().sort(function(a,b){ return a.start-b.start; });
+        var g0=lista[0], sv=SERV[g0.si]; if(!sv)return;
+        out.push({nome:sv.n+' · '+teamLabel(sv.n,g0.team),
+          cor:g0.color||teamColor(svcColor(sv),g0.team,Math.max(1,sv.eq||1)),
+          trechos:lista.map(function(g){ return {li:g.li,de:g.start,ate:g.start+g.dur}; })});
+      });
+      return out;
+    }
+    /* Por serviço: um trecho por LOTE, do primeiro começo ao último fim de qualquer equipe ali.
+     * Ligar os segmentos na ordem em que começaram faria a linha voltar atrás quando duas
+     * equipes trabalham em lotes distantes ao mesmo tempo — aqui ela segue a ordem dos lotes,
+     * que é o que a pergunta "por onde esse serviço passou" quer dizer. */
+    var porSvc={};
+    segs.forEach(function(g){
+      var m=porSvc[g.si]||(porSvc[g.si]={});
+      var a=m[g.li];
+      if(!a)m[g.li]={li:g.li,de:g.start,ate:g.start+g.dur};
+      else{ a.de=Math.min(a.de,g.start); a.ate=Math.max(a.ate,g.start+g.dur); }
+    });
+    Object.keys(porSvc).forEach(function(si){
+      var sv=SERV[si]; if(!sv)return;
+      var trechos=Object.keys(porSvc[si]).map(function(li){ return porSvc[si][li]; })
+        .sort(function(a,b){ return posDoLote[a.li]-posDoLote[b.li]; });
+      out.push({nome:sv.n,cor:svcColor(sv),trechos:trechos});
+    });
+    return out;
+  }
   function tcLinhasSVG(){
     var segs=viewSegs(segsDaTelaTC()).filter(function(g){ return !TC_HIDDEN_SVC[g.si]&&g.dur>0; });
     if(!segs.length)return '<div class="note">Nada desenhado ainda neste cronograma.</div>';
     var lotIdxs=viewLotIdxs();
     var posDoLote={}; lotIdxs.forEach(function(li,i){ posDoLote[li]=i; });
+    segs=segs.filter(function(g){ return posDoLote[g.li]!=null; });
+    if(!segs.length)return '<div class="note">Nada desenhado nos lotes em exibição.</div>';
     var tw=1; segs.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
-    var nL=lotIdxs.length;
-    var W=940, pl=118, pr=18, pt=16, pb=34;
-    var H=Math.max(260,pt+pb+nL*26), iw=W-pl-pr, ih=H-pt-pb;
-    var xx=function(semana){ return pl+iw*(semana-1)/Math.max(1,tw); };
-    var yy=function(pos){ return pt+ih*pos/Math.max(1,nL); };
+    var nL=lotIdxs.length, comoMatriz=(TCL_EIXO==='matriz');
+    var pl=comoMatriz?62:118, pr=18, pt=comoMatriz?34:16, pb=comoMatriz?30:34;
+    var W=comoMatriz?Math.max(680,120+nL*84):940;
+    var H=comoMatriz?Math.max(360,pt+pb+tw*12):Math.max(260,pt+pb+nL*26);
+    var iw=W-pl-pr, ih=H-pt-pb;
+    /* Um ponto do desenho é sempre (posição do lote, semana); quem decide onde isso cai na tela
+     * é só esta função — trocar os eixos não mexe em mais nada. */
+    var eixoL=function(p){ return (comoMatriz?pl:pt)+(comoMatriz?iw:ih)*p/Math.max(1,nL); };
+    var eixoT=function(w){
+      var f=(w-1)/Math.max(1,tw);
+      return comoMatriz?(pt+ih-ih*f):(pl+iw*f);   // como a matriz, o tempo sobe
+    };
+    var proj=function(p,w){ return comoMatriz?[eixoL(p),eixoT(w)]:[eixoT(w),eixoL(p)]; };
     var s='';
-    /* As faixas dos lotes sao o eixo Y de verdade: sem elas a linha nao diz por onde passa. */
     lotIdxs.forEach(function(li,i){
-      var y0=yy(i), y1=yy(i+1);
-      if(i%2===0)s+='<rect x="'+pl+'" y="'+y0.toFixed(1)+'" width="'+iw+'" height="'+(y1-y0).toFixed(1)+'" fill="var(--elev)" opacity="0.5"/>';
-      s+='<line x1="'+pl+'" y1="'+y0.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+y0.toFixed(1)+'" stroke="var(--line-2)"/>';
-      s+='<text class="axm" style="font-size:9px" x="'+(pl-6)+'" y="'+((y0+y1)/2+3).toFixed(1)+'" text-anchor="end">'+escAttr(LOTS[li]||'')+'</text>';
+      var a=eixoL(i), b=eixoL(i+1);
+      if(i%2===0)s+=comoMatriz
+        ? '<rect x="'+a.toFixed(1)+'" y="'+pt+'" width="'+(b-a).toFixed(1)+'" height="'+ih+'" fill="var(--elev)" opacity="0.5"/>'
+        : '<rect x="'+pl+'" y="'+a.toFixed(1)+'" width="'+iw+'" height="'+(b-a).toFixed(1)+'" fill="var(--elev)" opacity="0.5"/>';
+      s+=comoMatriz
+        ? '<line x1="'+a.toFixed(1)+'" y1="'+pt+'" x2="'+a.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>'
+        : '<line x1="'+pl+'" y1="'+a.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+a.toFixed(1)+'" stroke="var(--line-2)"/>';
+      s+=comoMatriz
+        ? '<text class="axm" style="font-size:9px" x="'+((a+b)/2).toFixed(1)+'" y="'+(pt-10)+'" text-anchor="middle">'+escAttr(LOTS[li]||'')+'</text>'
+        : '<text class="axm" style="font-size:9px" x="'+(pl-6)+'" y="'+((a+b)/2+3).toFixed(1)+'" text-anchor="end">'+escAttr(LOTS[li]||'')+'</text>';
     });
-    s+='<line x1="'+pl+'" y1="'+(pt+ih)+'" x2="'+(W-pr)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>';
-    var passo=Math.max(1,Math.ceil(tw/14));
+    var passo=Math.max(1,Math.ceil(tw/(comoMatriz?22:14)));
     for(var w=1;w<=tw;w+=passo){
-      var x=xx(w);
-      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-dasharray="2 4"/>'+
-         '<text class="axm" style="font-size:9px" x="'+x.toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+rotSem(mondayOf(w))+'</text>';
+      var t=eixoT(w);
+      s+=comoMatriz
+        ? '<line x1="'+pl+'" y1="'+t.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+t.toFixed(1)+'" stroke="var(--line-2)" stroke-dasharray="2 4"/>'+
+          '<text class="axm" style="font-size:9px" x="'+(pl-6)+'" y="'+(t+3).toFixed(1)+'" text-anchor="end">'+rotSem(mondayOf(w))+'</text>'
+        : '<line x1="'+t.toFixed(1)+'" y1="'+pt+'" x2="'+t.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-dasharray="2 4"/>'+
+          '<text class="axm" style="font-size:9px" x="'+t.toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+rotSem(mondayOf(w))+'</text>';
     }
-    /* Uma linha por EQUIPE, nao por servico: duas equipes do mesmo servico sao duas frentes em
-     * lugares diferentes, e junta-las numa linha so inventaria um ziguezague que ninguem faz. */
-    var porFrente={};
-    segs.forEach(function(g){
-      if(posDoLote[g.li]==null)return;
-      (porFrente[g.si+'::'+g.team]||(porFrente[g.si+'::'+g.team]=[])).push(g);
-    });
-    var usados=[];
-    Object.keys(porFrente).forEach(function(k){
-      var lista=porFrente[k].slice().sort(function(a,b){ return a.start-b.start; });
-      var g0=lista[0], sv=SERV[g0.si]; if(!sv)return;
-      var cor=g0.color||teamColor(svcColor(sv),g0.team,Math.max(1,sv.eq||1));
-      var pts=[], titulo=sv.n+' · '+teamLabel(sv.n,g0.team);
-      lista.forEach(function(g){
-        var p=posDoLote[g.li];
-        pts.push([xx(g.start),yy(p)]);
-        pts.push([xx(g.start+g.dur),yy(p+1)]);
+    var frentes=tcLinhasFrentes(segs,posDoLote);
+    frentes.forEach(function(f){
+      var pts=[];
+      f.trechos.forEach(function(tr){
+        var p=posDoLote[tr.li];
+        pts.push(proj(p,tr.de));
+        pts.push(proj(p+1,tr.ate));
       });
       s+='<polyline points="'+pts.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ')+
-        '" fill="none" stroke="'+cor+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>'+escAttr(titulo)+'</title></polyline>';
-      lista.forEach(function(g){
-        var p=posDoLote[g.li];
-        s+='<circle cx="'+xx(g.start).toFixed(1)+'" cy="'+yy(p).toFixed(1)+'" r="2.6" fill="'+cor+'"><title>'+
-          escAttr(titulo+' · '+(LOTS[g.li]||'')+' · '+rotSem(mondayOf(g.start))+' a '+rotSem(mondayOf(g.start+g.dur-1)))+'</title></circle>';
+        '" fill="none" stroke="'+f.cor+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>'+escAttr(f.nome)+'</title></polyline>';
+      f.trechos.forEach(function(tr){
+        var q=proj(posDoLote[tr.li],tr.de);
+        s+='<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="2.6" fill="'+f.cor+'"><title>'+
+          escAttr(f.nome+' · '+(LOTS[tr.li]||'')+' · '+rotSem(mondayOf(tr.de))+' a '+rotSem(mondayOf(Math.max(tr.de,tr.ate-1))))+'</title></circle>';
       });
-      usados.push({nome:titulo,cor:cor});
     });
-    var leg='<div class="legend" style="margin-top:8px">'+usados.map(function(u){
-      return '<span><span class="swatch" style="background:'+u.cor+'"></span>'+escAttr(u.nome)+'</span>';
+    var leg='<div class="legend" style="margin-top:8px">'+frentes.map(function(f){
+      return '<span><span class="swatch" style="background:'+f.cor+'"></span>'+escAttr(f.nome)+'</span>';
     }).join('')+'</div>';
-    return '<div class="tc-wrap"><svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:900px">'+s+'</svg></div>'+leg;
+    return '<div class="tc-wrap"><svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:'+Math.min(W,900)+'px">'+s+'</svg></div>'+leg;
+  }
+  function tcLinhasCtlHTML(){
+    var b=function(attr,v,atual,rot,dica){
+      return '<button class="subtab'+(atual===v?' active':'')+'" data-'+attr+'="'+v+'" title="'+escAttr(dica)+'">'+rot+'</button>';
+    };
+    return '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'+
+      '<span class="note" style="margin:0">Eixos</span><div style="display:flex;gap:4px">'+
+        b('tcleixo','matriz',TCL_EIXO,'Como a matriz','Lote na horizontal e tempo subindo na vertical, igual à prancheta do Tempo-Caminho')+
+        b('tcleixo','tempo',TCL_EIXO,'Tempo na horizontal','O desenho deitado, como na maioria dos livros')+
+      '</div>'+
+      '<span style="width:10px"></span>'+
+      '<span class="note" style="margin:0">Uma linha por</span><div style="display:flex;gap:4px">'+
+        b('tclpor','servico',TCL_POR,'Serviço','Por onde cada serviço passou e quando — a leitura de resumo')+
+        b('tclpor','equipe',TCL_POR,'Equipe','Uma linha por frente: quem está onde')+
+      '</div></div>';
   }
   function grafTabsHTML(){
     var b=function(v,rot,dica){
@@ -24554,9 +24622,12 @@
            :'Cronograma em barras: tarefa, início, término e duração.';
     var corpo;
     if(GRAF_TAB==='gantt')corpo=ganttCardHTML();
-    else if(GRAF_TAB==='tc')corpo='<div class="card">'+tcLinhasSVG()+
-      '<div class="note" style="margin-top:8px">Uma linha por equipe de cada serviço, na ordem executiva dos lotes. '+
-      'Quanto mais deitada a linha, mais devagar a frente anda; onde duas se cruzam, as frentes se encontram no mesmo lote. '+
+    else if(GRAF_TAB==='tc')corpo='<div class="card">'+tcLinhasCtlHTML()+tcLinhasSVG()+
+      '<div class="note" style="margin-top:8px">'+
+      (TCL_POR==='equipe'
+        ? 'Uma linha por equipe: cada frente e por onde ela anda. '
+        : 'Uma linha por serviço, na ordem dos lotes: por onde ele passou e quando. Linha que volta atrás é serviço feito fora da ordem dos lotes, por frentes diferentes. ')+
+      'Linha mais deitada é avanço mais devagar; onde duas se cruzam, elas se encontram no mesmo lote. '+
       'Sai do mesmo cronograma que a matriz mostra, e respeita o filtro de lotes e os serviços escondidos.</div></div>';
     else{
       var cLB=lbSvc();
