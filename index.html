@@ -8286,12 +8286,28 @@
     if(!r.data||!r.data.length)
       throw new Error('O banco não apagou a semana: nenhuma linha foi removida. Normalmente é permissão de escrita nesta obra.');
   }
+  var SEM_COL_PROGDATAS=false;   // true enquanto a migração 38 não rodar
+  var PROG_COLS='id,servico_id,etapa,grupo,lote_id,lote_fim_id,detalhamento,quantidade_prevista,quantidade_realizada,status,causa_id,origem,ordem,descricao';
   async function sbProgItens(planoId){
-    var r=await SB.from('compromissos').select('id,servico_id,etapa,grupo,lote_id,lote_fim_id,detalhamento,quantidade_prevista,quantidade_realizada,status,causa_id,origem,ordem,descricao').eq('plano_id',planoId).order('ordem',{ascending:true});
+    /* Banco sem a migração 38 recusa as colunas de data — nesse caso lê sem elas e a tela
+     * esconde os campos, em vez de a programação inteira parar de abrir. */
+    var cols=PROG_COLS+(SEM_COL_PROGDATAS?'':',data_inicio,data_fim');
+    var r=await SB.from('compromissos').select(cols).eq('plano_id',planoId).order('ordem',{ascending:true});
+    if(r.error&&/data_inicio|data_fim/.test(r.error.message||'')){
+      SEM_COL_PROGDATAS=true;
+      r=await SB.from('compromissos').select(PROG_COLS).eq('plano_id',planoId).order('ordem',{ascending:true});
+    }
     if(r.error)throw r.error; return r.data||[];
   }
   async function sbProgSalvarItem(item){
-    var r=await SB.from('compromissos').upsert(item,{onConflict:'id'});
+    var env=item;
+    if(SEM_COL_PROGDATAS){ env=Object.assign({},item); delete env.data_inicio; delete env.data_fim; }
+    var r=await SB.from('compromissos').upsert(env,{onConflict:'id'});
+    if(r.error&&/data_inicio|data_fim/.test(r.error.message||'')){
+      SEM_COL_PROGDATAS=true;
+      env=Object.assign({},item); delete env.data_inicio; delete env.data_fim;
+      r=await SB.from('compromissos').upsert(env,{onConflict:'id'});
+    }
     if(r.error)throw r.error;
   }
   async function sbProgApagarItem(id){
@@ -8400,6 +8416,7 @@
     var acoes='<button class="btn" id="progNova">+ Nova semana</button>'+
       (PROG_PLANO?'<button class="btn" id="progPuxar" title="Traz o que o Tempo-Caminho e a Linha de Balanço preveem pra esta semana — depois é só editar">↓ Puxar sugestões</button>'+
         '<button class="btn primary" id="progAdd">+ Linha</button>'+
+        '<button class="btn" id="progExportar" title="Gera o arquivo pra distribuir aos encarregados: lista e quadro da semana">↓ Exportar semana</button>'+
         '<button class="btn" id="progApagar" style="color:var(--crit);border-color:var(--crit)" title="Apaga esta semana e as linhas dela">✕ Apagar semana</button>':'');
     var semSel=PROG_PLANOS.length?('<select class="esel" id="progSel" style="min-width:220px">'+PROG_PLANOS.map(function(p){
         var dm=function(iso){ var d=String(iso||'').split('-'); return d.length===3?(d[2]+'/'+d[1]):iso; };
@@ -8436,6 +8453,8 @@
           '<td>'+progLoteSel(it,'lote_id')+'</td>'+
           '<td>'+progLoteSel(it,'lote_fim_id')+'</td>'+
           '<td><input class="einp" data-pitem="'+it.id+'" data-pcampo="detalhamento" value="'+escAttr(it.detalhamento||'')+'" placeholder="o que será feito" style="width:230px"></td>'+
+          (SEM_COL_PROGDATAS?'':('<td><input class="einp" type="date" data-pitem="'+it.id+'" data-pcampo="data_inicio" value="'+escAttr(it.data_inicio||'')+'" min="'+escAttr(PROG_PLANO.data_inicio)+'" max="'+escAttr(PROG_PLANO.data_fim)+'" title="Primeiro dia de execução — em branco vale a semana inteira" style="width:130px"></td>'+
+            '<td><input class="einp" type="date" data-pitem="'+it.id+'" data-pcampo="data_fim" value="'+escAttr(it.data_fim||'')+'" min="'+escAttr(PROG_PLANO.data_inicio)+'" max="'+escAttr(PROG_PLANO.data_fim)+'" title="Último dia de execução — em branco vale a semana inteira" style="width:130px"></td>'))+
           '<td><input class="einp" type="number" step="0.01" data-pitem="'+it.id+'" data-pcampo="quantidade_prevista" value="'+(it.quantidade_prevista==null?'':it.quantidade_prevista)+'" style="width:90px"></td>'+
           '<td><select class="esel" data-pitem="'+it.id+'" data-pcampo="status" style="width:130px">'+PROG_STATUS.map(function(st){ return '<option value="'+st[0]+'"'+(it.status===st[0]?' selected':'')+'>'+st[1]+'</option>'; }).join('')+'</select></td>'+
           '<td><input class="einp" type="number" step="0.01" data-pitem="'+it.id+'" data-pcampo="quantidade_realizada" value="'+(it.quantidade_realizada==null?'':it.quantidade_realizada)+'" style="width:90px"></td>'+
@@ -8448,7 +8467,7 @@
           var itens=porGrupo[g], aberto=!PROG_GRUPO_FECHADO[g];
           var prev=0, real=0, ok=0;
           itens.forEach(function(it){ prev+=(+it.quantidade_prevista||0); real+=(+it.quantidade_realizada||0); if(it.status==='concluido')ok++; });
-          linhas+='<tr style="background:var(--elev)"><td colspan="6" style="font-weight:700">'+
+          linhas+='<tr style="background:var(--elev)"><td colspan="'+(SEM_COL_PROGDATAS?6:8)+'" style="font-weight:700">'+
             '<button class="iconbtn" data-pgrupo="'+escAttr(g)+'" style="margin-right:6px">'+(aberto?'▾':'▸')+'</button>'+escAttr(g)+
             ' <span class="note">'+itens.length+' linha(s)'+(prev>0?(' · previsto '+fmtBR(prev)):'')+'</span></td>'+
             '<td class="note">'+ok+'/'+itens.length+' concluído(s)</td>'+
@@ -8457,8 +8476,9 @@
         });
       }
       corpo='<div class="tbl-wrap"><table class="edtbl" style="font-size:12.5px"><thead>'+
-        '<tr><th colspan="6" style="text-align:center;background:var(--elev)">Previsto</th><th colspan="3" style="text-align:center;background:var(--elev)">Acompanhamento</th><th></th></tr>'+
-        '<tr><th>Serviço / etapa</th><th>Grupo</th><th>Lote início</th><th>Lote fim</th><th>Detalhamento</th><th class="r">Qtd prevista</th>'+
+        '<tr><th colspan="'+(SEM_COL_PROGDATAS?6:8)+'" style="text-align:center;background:var(--elev)">Previsto</th><th colspan="3" style="text-align:center;background:var(--elev)">Acompanhamento</th><th></th></tr>'+
+        '<tr><th>Serviço / etapa</th><th>Grupo</th><th>Lote início</th><th>Lote fim</th><th>Detalhamento</th>'+
+        (SEM_COL_PROGDATAS?'':'<th>Início</th><th>Fim</th>')+'<th class="r">Qtd prevista</th>'+
         '<th>Status</th><th class="r">Qtd realizada</th><th>Causa (se não cumpriu)</th><th></th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
         '<div class="note" style="margin-top:8px">As sugestões (TC/LB) viram linhas comuns da programação — mudar aqui não altera o Tempo-Caminho nem a Linha de Balanço.</div>';
     }
@@ -8471,6 +8491,147 @@
         '</div>'+corpo+
       '</div>';
   };
+  /** Os sete dias da semana do plano, de segunda a domingo. */
+  function progDiasDaSemana(p){
+    var out=[];
+    if(!p||!p.data_inicio)return out;
+    var d=new Date(p.data_inicio+'T00:00:00');
+    for(var i=0;i<7;i++){
+      var x=new Date(d.getTime()); x.setDate(x.getDate()+i);
+      out.push(x.toISOString().slice(0,10));
+    }
+    return out;
+  }
+  var PROG_DIA_NOME=['segunda','terça','quarta','quinta','sexta','sábado','domingo'];
+  /** A linha acontece neste dia? Sem datas preenchidas ela vale a semana inteira — é como a
+   *  programação funcionava antes das colunas existirem, e continua valendo. */
+  function progItemNoDia(it,diaIso,p){
+    var ini=it.data_inicio||null, fim=it.data_fim||null;
+    if(!ini&&!fim)return true;
+    if(ini&&diaIso<ini)return false;
+    if(fim&&diaIso>fim)return false;
+    return true;
+  }
+  function progNomeServico(it){
+    var s=SERV.filter(function(x){ return x.id===it.servico_id; })[0];
+    var n=s?s.n:(it.etapa||it.descricao||'(livre)');
+    return it.etapa?(n+' · '+it.etapa):n;
+  }
+  function progNomeLote(it){
+    var ids=window._LOTIDS||[];
+    var a=ids.indexOf(it.lote_id), b=ids.indexOf(it.lote_fim_id);
+    if(a<0&&b<0)return '';
+    if(b<0||b===a)return LOTS[a]||'';
+    return (LOTS[a]||'')+' → '+(LOTS[b]||'');
+  }
+  function progUnidade(it){
+    var s=SERV.filter(function(x){ return x.id===it.servico_id; })[0];
+    return s?s.u:'';
+  }
+  /** Exporta a semana aberta pros encarregados, em duas leituras no mesmo arquivo:
+   *  LISTA (uma linha por compromisso, pra conferir e assinar) e MATRIZ (um serviço por linha,
+   *  um dia por coluna, pra pendurar na parede). São o mesmo dado — quem distribui escolhe. */
+  async function progExportarExcel(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou. Verifique a internet e recarregue a página.'); return; }
+    var p=PROG_PLANO;
+    if(!p){ alert('Abra uma semana pra exportar.'); return; }
+    if(!PROG_ITENS.length){ alert('Esta semana não tem linhas pra exportar.'); return; }
+    var obra=(window._OBRA&&window._OBRA.nome)||(selectedObra&&selectedObra.nome)||'Obra';
+    var dias=progDiasDaSemana(p);
+    var wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+    var dm=function(iso){ var d=String(iso||'').split('-'); return d.length===3?(d[2]+'/'+d[1]):(iso||''); };
+    var cabFill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1F3864'}};
+
+    /* ---- Lista ---- */
+    var wsL=wb.addWorksheet('Programação (lista)',{views:[{state:'frozen',ySplit:3}]});
+    wsL.columns=[{width:30},{width:16},{width:22},{width:34},{width:13},{width:8},{width:12},{width:12},{width:16}];
+    var t1=wsL.addRow([obra+' — programação da semana '+p.semana_iso]);
+    t1.font={bold:true,size:14};
+    var t2=wsL.addRow([dm(p.data_inicio)+' a '+dm(p.data_fim)+' · '+PROG_ITENS.length+' linha(s)']);
+    t2.font={size:10,italic:true,color:{argb:'FF666666'}};
+    var cabL=wsL.addRow(['Serviço / etapa','Grupo','Lote','Detalhamento','Qtd prevista','Un','Início','Fim','Responsável']);
+    cabL.height=20;
+    cabL.eachCell(function(c){
+      c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+      c.alignment={horizontal:'center',vertical:'middle'};
+      c.fill=cabFill;
+    });
+    PROG_ITENS.forEach(function(it){
+      var r=wsL.addRow([progNomeServico(it),it.grupo||'',progNomeLote(it),it.detalhamento||'',
+        it.quantidade_prevista==null?null:+it.quantidade_prevista,progUnidade(it),
+        it.data_inicio?dm(it.data_inicio):'semana toda',it.data_fim?dm(it.data_fim):'',
+        '']);
+      r.font={size:10};
+      r.getCell(5).numFmt='#,##0.##';
+      r.getCell(4).alignment={wrapText:true,vertical:'top'};
+      r.getCell(9).border={bottom:{style:'dotted',color:{argb:'FF999999'}}};
+    });
+    wsL.addRow([]);
+    var notaL=wsL.addRow(['Linha sem data vale a semana inteira. A coluna Responsável fica em branco de propósito — é pra preencher à mão na distribuição.']);
+    notaL.font={size:9,italic:true};
+
+    /* ---- Matriz ---- */
+    var wsM=wb.addWorksheet('Programação (matriz)',{views:[{state:'frozen',xSplit:1,ySplit:3}]});
+    wsM.columns=[{width:30}].concat(dias.map(function(){ return {width:22}; }));
+    var m1=wsM.addRow([obra+' — semana '+p.semana_iso]);
+    m1.font={bold:true,size:14};
+    var m2=wsM.addRow([dm(p.data_inicio)+' a '+dm(p.data_fim)]);
+    m2.font={size:10,italic:true,color:{argb:'FF666666'}};
+    var cabM=wsM.addRow(['Serviço'].concat(dias.map(function(d,i){ return PROG_DIA_NOME[i]+String.fromCharCode(10)+dm(d); })));
+    cabM.height=30;
+    cabM.eachCell(function(c){
+      c.font={bold:true,size:10,color:{argb:'FFFFFFFF'}};
+      c.alignment={horizontal:'center',vertical:'middle',wrapText:true};
+      c.fill=cabFill;
+    });
+    /* Uma linha por serviço: é assim que o encarregado lê — "o que a minha frente faz esta
+     * semana". O lote e a quantidade vão dentro da célula do dia. */
+    var porServico=[], vistos={};
+    PROG_ITENS.forEach(function(it){
+      var k=(it.servico_id||'')+'::'+(it.etapa||'');
+      if(vistos[k]==null){ vistos[k]=porServico.length; porServico.push({nome:progNomeServico(it),itens:[]}); }
+      porServico[vistos[k]].itens.push(it);
+    });
+    var borda={top:{style:'thin',color:{argb:'FFD9D9D9'}},left:{style:'thin',color:{argb:'FFD9D9D9'}},
+               bottom:{style:'thin',color:{argb:'FFD9D9D9'}},right:{style:'thin',color:{argb:'FFD9D9D9'}}};
+    porServico.forEach(function(g){
+      var cels=dias.map(function(d){
+        var txt=[];
+        g.itens.forEach(function(it){
+          if(!progItemNoDia(it,d,p))return;
+          var lote=progNomeLote(it);
+          var q=(it.quantidade_prevista==null)?'':(fmtBR(+it.quantidade_prevista)+' '+progUnidade(it));
+          var linha=[lote,q].filter(Boolean).join(' · ');
+          txt.push(linha||(it.detalhamento||'previsto'));
+        });
+        return txt.join(String.fromCharCode(10));
+      });
+      var r=wsM.addRow([g.nome].concat(cels));
+      r.height=Math.max(22,18*Math.max.apply(null,cels.map(function(t){ return (t.match(/\n/g)||[]).length+1; }).concat([1])));
+      r.getCell(1).font={size:10,bold:true};
+      r.getCell(1).alignment={vertical:'middle',wrapText:true};
+      r.eachCell(function(c,i){
+        c.border=borda;
+        if(i===1)return;
+        c.font={size:9};
+        c.alignment={vertical:'top',wrapText:true};
+        if(c.value)c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEAF3DE'}};
+      });
+    });
+    wsM.addRow([]);
+    var notaM=wsM.addRow(['Cada célula traz o lote e a quantidade prevista daquele dia. Linha sem data de início/fim aparece em todos os dias da semana.']);
+    notaM.font={size:9,italic:true};
+
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url;
+    a.download='programacao_'+p.semana_iso.replace(/[^\w-]+/g,'')+'_'+(obra.replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra')+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },2000);
+    toast('Programação da semana '+p.semana_iso+' exportada — lista e matriz no mesmo arquivo.');
+  }
   async function progCarregar(planoId){
     if(!selectedObra)return;
     PROG_ERRO=''; PROG_CARREGANDO=true; if(current==='lp-semana')go('lp-semana');
@@ -8578,6 +8739,7 @@
     var pux=document.getElementById('progPuxar'); if(pux)pux.addEventListener('click',progPuxarSugestoes);
     var add=document.getElementById('progAdd'); if(add)add.addEventListener('click',progAddLinha);
     var apg=document.getElementById('progApagar'); if(apg)apg.addEventListener('click',progApagarSemana);
+    var exp=document.getElementById('progExportar'); if(exp)exp.addEventListener('click',function(){ comCarga(progExportarExcel); });
     var chave=document.getElementById('progSemChave');
     if(chave)chave.addEventListener('click',function(){ PROG_SEM_ABERTA=!PROG_SEM_ABERTA; go('lp-semana'); });
     document.querySelectorAll('[data-pgrupo]').forEach(function(b){
@@ -8594,13 +8756,17 @@
         var v=el.value;
         if(campo==='quantidade_prevista'||campo==='quantidade_realizada')v=(v===''?null:Math.max(0,parseFloat(v)||0));
         if(campo==='servico_id'||campo==='lote_id'||campo==='lote_fim_id'||campo==='causa_id')v=v||null;
+        /* Data em branco é "a semana inteira", não string vazia: o banco recusaria '' numa
+         * coluna date, e a leitura trata null como sem janela. */
+        if(campo==='data_inicio'||campo==='data_fim')v=v||null;
         it[campo]=v;
         if(campo==='status'&&v!=='nao_concluido'&&v!=='parcial')it.causa_id=null;
         try{
           await sbProgSalvarItem({id:it.id,obra_id:selectedObra.id,plano_id:PROG_PLANO.id,servico_id:it.servico_id||null,etapa:it.etapa||null,
             grupo:it.grupo||null,lote_id:it.lote_id||null,lote_fim_id:it.lote_fim_id||null,detalhamento:it.detalhamento||null,
             quantidade_prevista:it.quantidade_prevista,quantidade_realizada:it.quantidade_realizada,status:it.status||'planejado',
-            causa_id:it.causa_id||null,origem:it.origem||'manual',ordem:it.ordem||0,descricao:progNomeItem(it)});
+            causa_id:it.causa_id||null,origem:it.origem||'manual',ordem:it.ordem||0,descricao:progNomeItem(it),
+            data_inicio:it.data_inicio||null,data_fim:it.data_fim||null});
           if(campo==='status')go('lp-semana');
         }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
       });
