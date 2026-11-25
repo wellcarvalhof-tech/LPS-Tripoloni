@@ -1385,7 +1385,7 @@
       ['cad-obra','Obra'],['cad-eap','EAP de serviços'],['cad-orc','Orçamento do projeto'],['cad-apoio','Apoio Administrativo'],['cad-quant','Quantidades'],
       ['cad-acessos','Acessos'],['cad-log','Histórico de alterações']]},
     {id:'crono', label:'Tempo Caminho', icon:'chart', items:[
-      ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cr-gantt','Gantt'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
+      ['cr-matriz','Matriz Tempo-Caminho'],['cr-lb','Linha de Balanço'],['cr-gantt','Gráficos do cronograma'],['cad-serv','Serviços'],['cad-lotes','Lotes & Quantidades'],
       ['cr-prod','Produtividade'],['cad-cal','Calendário'],['cr-hist','Histograma'],['cr-cenarios','Cenários'],
       ['cr-massas','Distribuição de massas'],['cr-reti','Retigráfico'],['cr-oficina','Oficina (estudo)']]},
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
@@ -1396,7 +1396,7 @@
   var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
     'cad-obra':['Cadastro','Obra'],'cad-eap':['Cadastro','EAP de serviços'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-quant':['Cadastro','Quantidades'],'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
-    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gantt'],'cr-reti':['Tempo Caminho','Retigráfico'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
+    'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gráficos do cronograma'],'cr-reti':['Tempo Caminho','Retigráfico'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
     'cr-prod':['Tempo Caminho','Produtividade'],'cr-massas':['Tempo Caminho','Distribuição de massas'],
     'cr-oficina':['Tempo Caminho','Oficina — montagem manual (estudo)'],
     'ac-curvas':['Acompanhamento','Curva S'],'ac-ava':['Acompanhamento','AVA — Análise do Valor Agregado'],
@@ -11481,7 +11481,15 @@
     if(view==='cad-quant')massasAutoCarga();   // pra poder resumir a cubação já gravada
     if(view==='torre-rel'){execReportDraw();}
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
-    if(view==='cr-gantt'){ wireCronoTabs(); ganttWire(); }
+    if(view==='cr-gantt'){
+      grafWire();
+      if(GRAF_TAB==='gantt')ganttWire();
+      var gls=document.getElementById('grafLbSvc');
+      if(gls)gls.addEventListener('change',function(){ lbRoot().servicoSel=gls.value; go('cr-gantt'); });
+      document.querySelectorAll('[data-nav]').forEach(function(a){
+        a.addEventListener('click',function(){ go(a.getAttribute('data-nav')); });
+      });
+    }
     if(view==='ac-curvas'){
       document.querySelectorAll('#cvTabs .subtab').forEach(function(b){
         b.addEventListener('click',function(){
@@ -24454,12 +24462,117 @@
   }
   /** Gantt como tela propria, no menu de Tempo Caminho. Mesma barra de abas da matriz,
    *  pra ir e voltar num clique. */
+  /* ================= Gráficos do cronograma =================
+   * Três leituras do mesmo cronograma, cada uma respondendo a uma pergunta:
+   *   Gantt         — quando cada tarefa começa e termina (a leitura de contrato)
+   *   Linha de balanço — como as etapas de UM serviço marcham pelos lotes
+   *   Tempo-caminho — como TODAS as frentes marcham, no mesmo par de eixos
+   * A terceira é a que faltava: o resumo em linhas da matriz. */
+  var GRAF_TAB='gantt';
+  /** O tempo-caminho em linhas: tempo no eixo X, lotes no Y (na ordem executiva), e cada equipe
+   *  de cada serviço como uma linha que desce pelos lotes. Linha mais deitada é frente mais
+   *  lenta; linhas que se cruzam são frentes que vão se encontrar no mesmo lote. É a mesma
+   *  informação da matriz, lida de uma vez só. */
+  function tcLinhasSVG(){
+    var segs=viewSegs(segsDaTelaTC()).filter(function(g){ return !TC_HIDDEN_SVC[g.si]&&g.dur>0; });
+    if(!segs.length)return '<div class="note">Nada desenhado ainda neste cronograma.</div>';
+    var lotIdxs=viewLotIdxs();
+    var posDoLote={}; lotIdxs.forEach(function(li,i){ posDoLote[li]=i; });
+    var tw=1; segs.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
+    var nL=lotIdxs.length;
+    var W=940, pl=118, pr=18, pt=16, pb=34;
+    var H=Math.max(260,pt+pb+nL*26), iw=W-pl-pr, ih=H-pt-pb;
+    var xx=function(semana){ return pl+iw*(semana-1)/Math.max(1,tw); };
+    var yy=function(pos){ return pt+ih*pos/Math.max(1,nL); };
+    var s='';
+    /* As faixas dos lotes sao o eixo Y de verdade: sem elas a linha nao diz por onde passa. */
+    lotIdxs.forEach(function(li,i){
+      var y0=yy(i), y1=yy(i+1);
+      if(i%2===0)s+='<rect x="'+pl+'" y="'+y0.toFixed(1)+'" width="'+iw+'" height="'+(y1-y0).toFixed(1)+'" fill="var(--elev)" opacity="0.5"/>';
+      s+='<line x1="'+pl+'" y1="'+y0.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+y0.toFixed(1)+'" stroke="var(--line-2)"/>';
+      s+='<text class="axm" style="font-size:9px" x="'+(pl-6)+'" y="'+((y0+y1)/2+3).toFixed(1)+'" text-anchor="end">'+escAttr(LOTS[li]||'')+'</text>';
+    });
+    s+='<line x1="'+pl+'" y1="'+(pt+ih)+'" x2="'+(W-pr)+'" y2="'+(pt+ih)+'" stroke="var(--line)"/>';
+    var passo=Math.max(1,Math.ceil(tw/14));
+    for(var w=1;w<=tw;w+=passo){
+      var x=xx(w);
+      s+='<line x1="'+x.toFixed(1)+'" y1="'+pt+'" x2="'+x.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-dasharray="2 4"/>'+
+         '<text class="axm" style="font-size:9px" x="'+x.toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+rotSem(mondayOf(w))+'</text>';
+    }
+    /* Uma linha por EQUIPE, nao por servico: duas equipes do mesmo servico sao duas frentes em
+     * lugares diferentes, e junta-las numa linha so inventaria um ziguezague que ninguem faz. */
+    var porFrente={};
+    segs.forEach(function(g){
+      if(posDoLote[g.li]==null)return;
+      (porFrente[g.si+'::'+g.team]||(porFrente[g.si+'::'+g.team]=[])).push(g);
+    });
+    var usados=[];
+    Object.keys(porFrente).forEach(function(k){
+      var lista=porFrente[k].slice().sort(function(a,b){ return a.start-b.start; });
+      var g0=lista[0], sv=SERV[g0.si]; if(!sv)return;
+      var cor=g0.color||teamColor(svcColor(sv),g0.team,Math.max(1,sv.eq||1));
+      var pts=[], titulo=sv.n+' · '+teamLabel(sv.n,g0.team);
+      lista.forEach(function(g){
+        var p=posDoLote[g.li];
+        pts.push([xx(g.start),yy(p)]);
+        pts.push([xx(g.start+g.dur),yy(p+1)]);
+      });
+      s+='<polyline points="'+pts.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ')+
+        '" fill="none" stroke="'+cor+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>'+escAttr(titulo)+'</title></polyline>';
+      lista.forEach(function(g){
+        var p=posDoLote[g.li];
+        s+='<circle cx="'+xx(g.start).toFixed(1)+'" cy="'+yy(p).toFixed(1)+'" r="2.6" fill="'+cor+'"><title>'+
+          escAttr(titulo+' · '+(LOTS[g.li]||'')+' · '+rotSem(mondayOf(g.start))+' a '+rotSem(mondayOf(g.start+g.dur-1)))+'</title></circle>';
+      });
+      usados.push({nome:titulo,cor:cor});
+    });
+    var leg='<div class="legend" style="margin-top:8px">'+usados.map(function(u){
+      return '<span><span class="swatch" style="background:'+u.cor+'"></span>'+escAttr(u.nome)+'</span>';
+    }).join('')+'</div>';
+    return '<div class="tc-wrap"><svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:900px">'+s+'</svg></div>'+leg;
+  }
+  function grafTabsHTML(){
+    var b=function(v,rot,dica){
+      return '<button class="subtab'+(GRAF_TAB===v?' active':'')+'" data-graftab="'+v+'" title="'+escAttr(dica)+'">'+rot+'</button>';
+    };
+    return '<div class="subtabs">'+
+      b('gantt','Gantt','Barras por tarefa: início, término e duração')+
+      b('lb','Gráfico da linha de balanço','As etapas de um serviço marchando pelos lotes')+
+      b('tc','Gráfico de tempo-caminho','Todas as frentes no mesmo par de eixos: tempo × lote')+
+    '</div>';
+  }
+  function grafWire(){
+    document.querySelectorAll('[data-graftab]').forEach(function(b){
+      b.addEventListener('click',function(){ GRAF_TAB=b.getAttribute('data-graftab'); go('cr-gantt'); });
+    });
+  }
   VIEWS['cr-gantt']=function(){
     if(!LOTS.length||!SERV.length)
-      return head('Gantt','',null)+'<div class="card"><div class="note">Cadastre os servicos e os lotes da obra primeiro (Tempo Caminho &rarr; Servicos / Lotes &amp; Quantidades).</div></div>';
-    return head('Gantt','Cronograma em barras, no formato de cronograma: tarefa, inicio, termino e duracao.','')+
-      '<div class="card" style="margin-bottom:14px"><div class="subtabs" id="cronoTabs">'+cronoTabsHTML('cr-gantt')+'</div></div>'+
-      ganttCardHTML();
+      return head('Gráficos do cronograma','',null)+'<div class="card"><div class="note">Cadastre os serviços e os lotes da obra primeiro (Tempo Caminho &rarr; Serviços / Lotes &amp; Quantidades).</div></div>';
+    var sub=(GRAF_TAB==='lb')?'As etapas de um serviço marchando pelos lotes.'
+           :(GRAF_TAB==='tc')?'Tempo no eixo horizontal, lotes no vertical: cada linha é uma frente andando pela obra.'
+           :'Cronograma em barras: tarefa, início, término e duração.';
+    var corpo;
+    if(GRAF_TAB==='gantt')corpo=ganttCardHTML();
+    else if(GRAF_TAB==='tc')corpo='<div class="card">'+tcLinhasSVG()+
+      '<div class="note" style="margin-top:8px">Uma linha por equipe de cada serviço, na ordem executiva dos lotes. '+
+      'Quanto mais deitada a linha, mais devagar a frente anda; onde duas se cruzam, as frentes se encontram no mesmo lote. '+
+      'Sai do mesmo cronograma que a matriz mostra, e respeita o filtro de lotes e os serviços escondidos.</div></div>';
+    else{
+      var cLB=lbSvc();
+      var temLB=!!(cLB&&cLB.etapas&&cLB.etapas.length&&cLB.lotes&&cLB.lotes.length);
+      var selLB='<select class="esel" id="grafLbSvc" style="min-width:220px">'+SERV.map(function(x,i){
+          return '<option value="'+escAttr(lbSvcId(i))+'"'+(lbSvcId(i)===lbRoot().servicoSel?' selected':'')+'>'+escAttr(x.n)+'</option>';
+        }).join('')+'</select>';
+      corpo='<div class="card"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+        '<span class="note" style="margin:0">Serviço</span>'+selLB+
+        '<button class="btn" data-nav="cr-lb" style="margin-left:auto">Editar a linha de balanço →</button></div>'+
+        (temLB?lbSVG(false)
+              :'<div class="note">Este serviço ainda não tem etapas e lotes na Linha de Balanço. Monte lá e o gráfico aparece aqui.</div>')+
+      '</div>';
+    }
+    return head('Gráficos do cronograma',sub,'')+
+      '<div class="card" style="margin-bottom:14px">'+grafTabsHTML()+'</div>'+corpo;
   };
   VIEWS['cr-lb']=function(){
     if(!LOTS.length||!SERV.length)return head('Linha de Balanço','',null)+'<div class="card"><div class="note">Cadastre os serviços e os lotes da obra primeiro (Tempo Caminho → Serviços / Lotes & Quantidades).</div></div>';
@@ -24965,7 +25078,7 @@
    *  viewAtual = 'cr-matriz' ou 'cr-lb' (pra marcar a aba ativa certa). */
   function cronoTabsHTML(viewAtual){
     var TABS=[['tc','Tempo Caminho'],
-      ['resumo','Resumo'],['gantt','Gantt','cr-gantt'],['curvas','Curva S','ac-curvas'],
+      ['resumo','Resumo'],['gantt','Gráficos','cr-gantt'],['curvas','Curva S','ac-curvas'],
       ['serv','Serviços','cad-serv'],['lotes','Lotes','cad-lotes'],['cal','Calendário','cad-cal']];
     return TABS.filter(function(t){
       if(t[2]&&!canViewTab(t[2]))return false;
