@@ -92,6 +92,21 @@
   .obra-sel.active{border-color:var(--accent);background:var(--accent-soft)}
   /* modo somente leitura (visualizador) */
   body.ro #topSaveBtn{display:none!important}
+  /* Modo "vendo um cenario". A moldura e FIXA na janela, nao no conteudo: presa ao
+   * conteudo ela sumia na primeira rolagem, que e exatamente quando a pessoa esquece em
+   * que modo esta. pointer-events:none pra ela nao comer clique nenhum. */
+  #vendoMoldura{display:none}
+  body.vendo #vendoMoldura{display:block;position:fixed;inset:0;border:3px solid var(--accent);
+    border-radius:4px;pointer-events:none;z-index:60}
+  body.vendo #topSaveBtn{display:none!important}
+  .vendo-chip{display:none;align-items:center;gap:6px;background:var(--accent-soft);color:var(--accent);
+    border:1px solid var(--accent);border-radius:9px;padding:6px 12px;font-size:13px;white-space:nowrap}
+  body.vendo .vendo-chip{display:flex}
+  .vendo-faixa{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;
+    background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--radius);padding:7px 12px}
+  /* Campo que nao aceita digitacao nao pode ter cara de campo. */
+  body.vendo #content input:disabled,body.vendo #content select:disabled,body.vendo #content textarea:disabled{
+    background:transparent;border-color:transparent;color:var(--ink-2);opacity:1;cursor:default}
   body.ro .tcm-seg{cursor:default}
   body.ro .tcm-grip{display:none}
   /* Matriz da linha de base: retrato, não prancheta. Sem alça de arrasto e sem cursor de mão. */
@@ -743,6 +758,7 @@
 
   <!-- MAIN -->
   <div class="main">
+    <div id="vendoMoldura" aria-hidden="true"></div>
     <div class="topbar">
       <button class="icon-btn menu-toggle" id="menuBtn" aria-label="menu">☰</button>
       <button class="icon-btn nav-toggle" id="navToggleBtn" title="Recolher/expandir menu lateral" aria-label="recolher menu">«</button>
@@ -754,6 +770,7 @@
         <button class="icon-btn" id="presBtn" title="Quem está no app agora" style="display:none;width:auto;padding:0 10px;gap:6px">👥 <b id="presCount">0</b></button>
         <span class="pill warn" id="roleBadge" style="display:none;align-items:center"></span>
         <div class="obra-sel" id="lotViewBtn" title="Filtrar quais lotes aparecem na matriz, no histograma e nas curvas (o cronograma continua calculado com todos)" style="display:none"><span class="k">Lotes</span><b id="lotViewName">Todos</b><span style="opacity:.5">▾</span></div>
+        <div class="vendo-chip" id="vendoChip" title="Você está vendo um cenário — a obra não é alterada"><span aria-hidden="true">&#128065;</span><b id="vendoChipNome" style="font-weight:600"></b></div>
         <div class="obra-sel" id="obraSel" title="Trocar obra"><span class="k">Obra</span><b id="obraSelName">—</b><span style="opacity:.5">▾</span></div>
         <button class="icon-btn" id="themeBtn" title="Tema">◐</button>
         <div class="avatar" title="Conta"></div>
@@ -1539,13 +1556,22 @@
    *  render. Filtros de visualização (selects com id, checkboxes de comparação) continuam ativos. */
   function applyReadOnly(){
     document.body.classList.toggle('ro',isReadOnly());
-    if(!isReadOnly())return;
+    /* Vendo um cenário a tela inteira é leitura, e não só a matriz (que já era bloqueada):
+     * digitar num cadastro aqui gravaria NA OBRA enquanto a tela mostra o cenário — a troca
+     * mais confusa que havia. Agora os campos nem aceitam, e o chip e a moldura dizem por quê. */
+    var vendo=!!CENARIO_VISTA;
+    document.body.classList.toggle('vendo',vendo);
+    var chip=document.getElementById('vendoChipNome');
+    if(chip)chip.textContent=vendo?CENARIO_VISTA.nome:'';
+    if(!isReadOnly()&&!vendo)return;
     var c=document.getElementById('content'); if(!c)return;
     c.querySelectorAll('input.einp,input.inp,textarea,input[type=color],input[data-cfgbool],input[data-teamprod],input[data-crewres],input[data-apoiocrewres],input[data-realres],input[data-svcvis],select:not([id])').forEach(function(el){ el.disabled=true; });
     var rx=/salvar|importar|adicionar|excluir|gerar linha|carregar|duplicar|aplicar|remover|limpar|modelo|exportar equipes|reiniciar|\+ /i;
     c.querySelectorAll('button').forEach(function(b){
       var t=(b.textContent||'').trim();
-      if(b.classList.contains('iconbtn')&&/✕|↑|↓|⋮/.test(t))b.style.display='none';
+      /* As saídas do modo leitura ficam: são elas que tiram a pessoa daqui. */
+      if(b.id==='cnSair'||b.id==='cnEditar'||b.hasAttribute('data-cndupatual'))return;
+      if(b.classList.contains('iconbtn')&&/✕|↑|↓|⋮|✎|📏/.test(t))b.style.display='none';
       else if(rx.test(t)&&!/ajustar à tela|mostrar todos/i.test(t))b.style.display='none';
     });
   }
@@ -11232,7 +11258,9 @@
     'ac-curvas':1,'ac-ava':1,'cr-massas':1,'cr-prod':1,'lp-medio':1};
   /** Controles do Gantt (agrupamento e 'só os resumos'). */
   function afterRender(view){
-    if(CENARIO_VISTA&&VIEWS_COM_CENARIO[view]){
+    /* A faixa segue o modo, nao a lista de telas: desde que a tela inteira virou leitura,
+     * cair num cadastro sem o botao de sair deixava a pessoa presa olhando campos mortos. */
+    if(CENARIO_VISTA){
       var c=document.getElementById('content');
       if(c&&!document.getElementById('cnSair')){
         var d=document.createElement('div');
@@ -15190,15 +15218,18 @@
     toast('Cenário "'+c.nome+'" aberto no editor — o que você salvar vai pra ele, não pra obra.');
     go('cr-matriz');
   }
+  /* A tarja virou faixa: o que diz em QUE cenário você está agora é o chip da barra do topo,
+   * que não sai de vista ao rolar. Aqui ficam o aviso curto e as saídas. */
   function cenarioBannerHTML(){
     if(!CENARIO_VISTA)return '';
-    return '<div class="banner" style="margin-bottom:12px;border-color:var(--accent)">'+
-      '<b>Vendo o cenário "'+escAttr(CENARIO_VISTA.nome)+'".</b> Matriz, curvas, histograma e relatórios estão mostrando ele. '+
-      'A obra não foi alterada. '+
-      '<button class="btn" id="cnSair" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Sair do cenário</button>'+
-      '<button class="btn" id="cnEditar" style="margin-left:6px;padding:3px 10px;font-size:11.5px">Editar este cenário</button>'+
-      botaoDuplicarAtualHTML()+
-      '</div>';
+    return '<div class="vendo-faixa">'+
+      '<span style="font-size:12.5px;color:var(--accent)"><b>Só leitura</b> — matriz, curvas, histograma e relatórios mostram o cenário "'+
+        escAttr(CENARIO_VISTA.nome)+'". A obra não é alterada.</span>'+
+      '<span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">'+
+        '<button class="btn" id="cnEditar" style="padding:3px 10px;font-size:11.5px">Editar este cenário</button>'+
+        botaoDuplicarAtualHTML()+
+        '<button class="btn" id="cnSair" style="padding:3px 10px;font-size:11.5px">Sair do cenário</button>'+
+      '</span></div>';
   }
   function cenarioBannerWire(){
     var a=document.getElementById('cnSair');
