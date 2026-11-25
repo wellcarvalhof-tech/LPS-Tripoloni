@@ -8276,6 +8276,16 @@
     var r=await SB.from('planos_semanais').insert({id:id,obra_id:obraId,semana_iso:semanaIso,data_inicio:ini,data_fim:fim});
     if(r.error)throw r.error; return id;
   }
+  async function sbProgApagarPlano(id){
+    /* As linhas da semana saem junto: compromissos.plano_id tem ON DELETE CASCADE (migração
+     * 01). O .select() e a conferência existem pelo mesmo motivo do update verificado — um
+     * DELETE barrado por permissão volta limpo, e a semana reapareceria no próximo
+     * carregamento como se nada tivesse acontecido. */
+    var r=await SB.from('planos_semanais').delete().eq('id',id).select('id');
+    if(r.error)throw r.error;
+    if(!r.data||!r.data.length)
+      throw new Error('O banco não apagou a semana: nenhuma linha foi removida. Normalmente é permissão de escrita nesta obra.');
+  }
   async function sbProgItens(planoId){
     var r=await SB.from('compromissos').select('id,servico_id,etapa,grupo,lote_id,lote_fim_id,detalhamento,quantidade_prevista,quantidade_realizada,status,causa_id,origem,ordem,descricao').eq('plano_id',planoId).order('ordem',{ascending:true});
     if(r.error)throw r.error; return r.data||[];
@@ -8389,7 +8399,8 @@
     if(!selectedObra)return head('Programação Semanal','',null)+'<div class="card"><div class="note">Abra uma obra.</div></div>';
     var acoes='<button class="btn" id="progNova">+ Nova semana</button>'+
       (PROG_PLANO?'<button class="btn" id="progPuxar" title="Traz o que o Tempo-Caminho e a Linha de Balanço preveem pra esta semana — depois é só editar">↓ Puxar sugestões</button>'+
-        '<button class="btn primary" id="progAdd">+ Linha</button>':'');
+        '<button class="btn primary" id="progAdd">+ Linha</button>'+
+        '<button class="btn" id="progApagar" style="color:var(--crit);border-color:var(--crit)" title="Apaga esta semana e as linhas dela">✕ Apagar semana</button>':'');
     var semSel=PROG_PLANOS.length?('<select class="esel" id="progSel" style="min-width:220px">'+PROG_PLANOS.map(function(p){
         var dm=function(iso){ var d=String(iso||'').split('-'); return d.length===3?(d[2]+'/'+d[1]):iso; };
         return '<option value="'+p.id+'"'+((PROG_PLANO&&PROG_PLANO.id===p.id)?' selected':'')+'>'+escAttr(p.semana_iso)+' ('+dm(p.data_inicio)+' a '+dm(p.data_fim)+')</option>';
@@ -8472,6 +8483,31 @@
     PROG_CARREGANDO=false; PROG_LIDO=true;
     if(current==='lp-semana')go('lp-semana');
   }
+  /** Apaga a semana aberta, com as linhas dela. Vale avisar quanto se perde: a semana guarda
+   *  o que foi programado E o que foi apontado como feito, e isso alimenta o PPC. */
+  async function progApagarSemana(){
+    var p=PROG_PLANO; if(!p)return;
+    if(isReadOnly()){ toast('Seu perfil é só de visualização.'); return; }
+    var NL=String.fromCharCode(10);
+    var n=PROG_ITENS.length;
+    var feitas=PROG_ITENS.filter(function(x){ return x.status||x.quantidade_realizada>0; }).length;
+    if(!confirm('Apagar a semana '+p.semana_iso+'?'+NL+NL+
+      (n?('Vão junto '+n+' linha(s) programada(s)'+(feitas?(', '+feitas+' delas já com apontamento — o PPC desta semana some com elas'):'')+'.'+NL)
+        :'A semana não tem linhas.'+NL)+
+      'Isso não volta atrás.'))return;
+    var b=document.getElementById('progApagar');
+    if(b){ b.disabled=true; b.textContent='Apagando…'; }
+    try{
+      await sbProgApagarPlano(p.id);
+      PROG_PLANOS=PROG_PLANOS.filter(function(x){ return x.id!==p.id; });
+      PROG_PLANO=null; PROG_ITENS=[];
+      await progCarregar(PROG_PLANOS.length?PROG_PLANOS[0].id:null);
+      toast('Semana '+p.semana_iso+' apagada.');
+    }catch(e){
+      if(b){ b.disabled=false; b.textContent='✕ Apagar semana'; }
+      alert('Falha ao apagar a semana: '+((e&&e.message)||e));
+    }
+  }
   function progNovaSemana(){
     var tw=1; try{ buildSchedule().forEach(function(sg){ tw=Math.max(tw,sg.start+sg.dur-1); }); }catch(e){}
     tw=Math.max(tw,1);
@@ -8541,6 +8577,7 @@
     var nova=document.getElementById('progNova'); if(nova)nova.addEventListener('click',progNovaSemana);
     var pux=document.getElementById('progPuxar'); if(pux)pux.addEventListener('click',progPuxarSugestoes);
     var add=document.getElementById('progAdd'); if(add)add.addEventListener('click',progAddLinha);
+    var apg=document.getElementById('progApagar'); if(apg)apg.addEventListener('click',progApagarSemana);
     var chave=document.getElementById('progSemChave');
     if(chave)chave.addEventListener('click',function(){ PROG_SEM_ABERTA=!PROG_SEM_ABERTA; go('lp-semana'); });
     document.querySelectorAll('[data-pgrupo]').forEach(function(b){
