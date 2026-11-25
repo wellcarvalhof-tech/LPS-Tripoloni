@@ -24564,18 +24564,24 @@
           '<text class="axm" style="font-size:9px" x="'+t.toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+rotSem(mondayOf(w))+'</text>';
     }
     var frentes=tcLinhasFrentes(segs,posDoLote);
+    /* UM ponto por lote, no meio da faixa e no meio da janela de tempo daquele lote.
+     * Desenhar o trecho inteiro (começo → fim dentro da faixa) e depois ligar o fim de um
+     * lote ao começo do seguinte produzia o serrilhado: quando duas equipes trabalham em
+     * paralelo, o lote seguinte começa ANTES de o anterior acabar, e a ligação virava um
+     * degrau pra trás. Com um ponto por lote a linha é contínua, e a inclinação continua
+     * dizendo o ritmo. O começo e o fim de verdade seguem na dica de cada ponto. */
     frentes.forEach(function(f){
-      var pts=[];
-      f.trechos.forEach(function(tr){
-        var p=posDoLote[tr.li];
-        pts.push(proj(p,tr.de));
-        pts.push(proj(p+1,tr.ate));
-      });
+      var pts=f.trechos.map(function(tr){ return proj(posDoLote[tr.li]+0.5,(tr.de+tr.ate)/2); });
+      if(pts.length===1){
+        /* Serviço num lote só não tem linha: vira um traço curto, senão some do gráfico. */
+        var a=proj(posDoLote[f.trechos[0].li],f.trechos[0].de), b=proj(posDoLote[f.trechos[0].li]+1,f.trechos[0].ate);
+        pts=[a,b];
+      }
       s+='<polyline points="'+pts.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ')+
         '" fill="none" stroke="'+f.cor+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>'+escAttr(f.nome)+'</title></polyline>';
       f.trechos.forEach(function(tr){
-        var q=proj(posDoLote[tr.li],tr.de);
-        s+='<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="2.6" fill="'+f.cor+'"><title>'+
+        var q=proj(posDoLote[tr.li]+0.5,(tr.de+tr.ate)/2);
+        s+='<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="2.8" fill="'+f.cor+'"><title>'+
           escAttr(f.nome+' · '+(LOTS[tr.li]||'')+' · '+rotSem(mondayOf(tr.de))+' a '+rotSem(mondayOf(Math.max(tr.de,tr.ate-1))))+'</title></circle>';
       });
     });
