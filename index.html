@@ -8512,6 +8512,14 @@
     if(fim&&diaIso>fim)return false;
     return true;
   }
+  /** Em quantos dias da semana esta linha acontece. É o divisor da quantidade: o que está
+   *  cadastrado é o total da SEMANA, e no quadro de parede cada dia precisa trazer a parte
+   *  dele — senão o encarregado lê o total como se fosse a meta de segunda. */
+  function progDiasDoItem(it,dias,p){
+    var n=0;
+    (dias||[]).forEach(function(d){ if(progItemNoDia(it,d,p))n++; });
+    return n;
+  }
   function progNomeServico(it){
     var s=SERV.filter(function(x){ return x.id===it.servico_id; })[0];
     var n=s?s.n:(it.etapa||it.descricao||'(livre)');
@@ -8601,7 +8609,11 @@
         g.itens.forEach(function(it){
           if(!progItemNoDia(it,d,p))return;
           var lote=progNomeLote(it);
-          var q=(it.quantidade_prevista==null)?'':(fmtBR(+it.quantidade_prevista)+' '+progUnidade(it));
+          var nd=progDiasDoItem(it,dias,p);
+          /* Divide pelos dias em que a linha acontece, não pelos sete: linha de três dias
+           * tem que fechar a semana em três, não em sete. */
+          var q=(it.quantidade_prevista==null||!nd)?''
+            :(fmtBR(Math.round((+it.quantidade_prevista/nd)*100)/100)+' '+progUnidade(it)+'/dia');
           var linha=[lote,q].filter(Boolean).join(' · ');
           txt.push(linha||(it.detalhamento||'previsto'));
         });
@@ -8620,7 +8632,8 @@
       });
     });
     wsM.addRow([]);
-    var notaM=wsM.addRow(['Cada célula traz o lote e a quantidade prevista daquele dia. Linha sem data de início/fim aparece em todos os dias da semana.']);
+    var notaM=wsM.addRow(['Cada célula traz o lote e a quantidade do DIA: o previsto da semana dividido pelos dias em que aquela linha acontece. '+
+      'Linha sem data de início/fim aparece nos sete dias, e aí a divisão é por sete. O total da semana está na aba da lista.']);
     notaM.font={size:9,italic:true};
 
     var buf=await wb.xlsx.writeBuffer();
