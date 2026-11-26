@@ -6162,7 +6162,7 @@
       '<div style="display:flex;gap:14px;flex-wrap:wrap">'+cmpLines().map(function(l){
         return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" data-cmpsel="'+escAttr(l.key)+'"'+(l.on?' checked':'')+'><span class="swatch" style="background:'+l.color+'"></span>'+l.nome+'</label>';
       }).join('')+'</div></div>'+
-    '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Comparação — Curvas S sobrepostas (total da obra)</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária).</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div></div>'+
+    '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Comparação — Curvas S sobrepostas</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária). <b>Cada curva é medida contra o escopo do próprio cenário</b> — 100% é terminar o que ele prevê. O que se compara aqui é o ritmo, não o tamanho.</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div></div>'+
     '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">'+
       '<div><div class="eyebrow" style="margin:0">Comparação — Histograma de recursos</div><div class="note">Total de recursos mobilizados em cada semana, por cenário. Esquerda: evolução semanal. Direita: acumulado (recurso × semana).</div></div>'+
       '<div style="display:flex;gap:6px">'+['todos','funcao','equipamento'].map(function(f){
@@ -14397,17 +14397,39 @@
   function cmpCurves(){
     var el=document.getElementById('cmpc');if(!el)return;
     var legEl=document.getElementById('cmpcLeg');
-    var totalByServ=SERV.map(function(s,si){var t=0;LOTS.forEach(function(l,li){if(lotInView(li))t+=QTY[li][si]||0;});return t;});
-    var grandTotal=totalByServ.reduce(function(a,b){return a+b;},0);
+    /* O escopo da obra ao vivo. Serve de régua só para o REALIZADO, que é um só e é da obra —
+     * não dá para medir o que foi apontado contra o saldo de um cenário hipotético. */
+    var totalDaObra=(function(){
+      var t=0;
+      SERV.forEach(function(s,si){ LOTS.forEach(function(_,li){ if(lotInView(li))t+=orcNum((QTY[li]||[])[si])||0; }); });
+      return t;
+    })();
+    /* O 100% de cada curva é o escopo DAQUELE cenário.
+     *
+     * Antes havia um denominador só — a quantidade da obra ao vivo — e cenário com saldo próprio
+     * saía errado nos dois sentidos: o que previa mais quantidade ultrapassava os 100%, e o que
+     * previa menos nunca chegava lá. Nenhuma das duas leituras diz nada: o que se compara aqui é
+     * o RITMO de avanço de cada alternativa, não o tamanho do escopo dela. Com cada curva medida
+     * contra o próprio escopo, todas terminam em 100% e o que sobra na tela é a diferença que
+     * interessa — quem sobe antes, quem demora a engrenar, quem termina primeiro. */
+    function totalDaLinha(l){
+      if(!l.snap)return totalDaObra;
+      return withSnapshot(l.snap,function(){
+        var t=0;
+        SERV.forEach(function(s,si){ LOTS.forEach(function(_,li){ if(lotInView(li))t+=orcNum((QTY[li]||[])[si])||0; }); });
+        return t;
+      });
+    }
     function totalSeriesFor(l){
       var segsAll=cmpSegs(l), tw=1;
       segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
       var segs=viewSegs(segsAll); // filtro global de lotes; horizonte continua o do cronograma inteiro
+      var tot=totalDaLinha(l);
       var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=0;
       segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++)weekly[sg.start+i]+=sg.wq[i]||0; });
       var out=[0], acc=0;
-      for(var w2=1;w2<=tw;w2++){ acc+=weekly[w2]||0; out.push(grandTotal>0?(acc/grandTotal*100):0); }
-      return {tw:tw,series:out};
+      for(var w2=1;w2<=tw;w2++){ acc+=weekly[w2]||0; out.push(tot>0?(acc/tot*100):0); }
+      return {tw:tw,series:out,total:tot};
     }
     var lines=cmpLines().filter(function(l){return l.on;});
     if(!SERV.length||!lines.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
@@ -14422,7 +14444,7 @@
       if(w4!=null)realWeekly[w4]+=r.qtd||0;
     });
     var realSeries=[0], racc=0;
-    for(var w5=1;w5<=maxTw;w5++){ racc+=realWeekly[w5]||0; realSeries.push(grandTotal>0?(racc/grandTotal*100):0); }
+    for(var w5=1;w5<=maxTw;w5++){ racc+=realWeekly[w5]||0; realSeries.push(totalDaObra>0?(racc/totalDaObra*100):0); }
     var W=620,H=220,pl=34,pr=10,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb, n=maxTw+1;
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
     function path(a){var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
@@ -14431,8 +14453,15 @@
     computed.forEach(function(c){ s+='<path d="'+path(c.series)+'" fill="none" stroke="'+c.color+'" stroke-width="2" stroke-dasharray="6 4"/>'; });
     s+='<path d="'+path(realSeries)+'" fill="none" stroke="var(--ink)" stroke-width="2.5"/>';
     el.setAttribute('viewBox','0 0 '+W+' '+H); el.innerHTML=s;
-    if(legEl)legEl.innerHTML=computed.map(function(c){return '<span><span class="swatch" style="background:'+c.color+'"></span>'+c.nome+' — previsto</span>';}).join('')+
-      '<span><span class="swatch" style="background:var(--ink)"></span>Realizado (real)</span>';
+    /* Quando os escopos diferem, a legenda diz de quanto é o 100% de cada um — senão duas curvas
+     * idênticas na tela esconderiam que uma faz 20% mais obra que a outra. */
+    var escoposDiferem=computed.some(function(c){ return Math.abs((c.total||0)-totalDaObra)>0.5; });
+    if(legEl)legEl.innerHTML=computed.map(function(c){
+      return '<span><span class="swatch" style="background:'+c.color+'"></span>'+c.nome+' — previsto'+
+        (escoposDiferem?(' · 100% = '+fmtBR(Math.round(c.total||0))):'')+'</span>';
+    }).join('')+
+      '<span><span class="swatch" style="background:var(--ink)"></span>Realizado (real)'+
+      (escoposDiferem?(' · 100% = '+fmtBR(Math.round(totalDaObra))):'')+'</span>';
   }
 
   /* ---- Cor por equipe (port do colors.ts do Lovable) ---- */
@@ -19042,6 +19071,7 @@
     if(!selectedObra)return '<div class="card"><div class="note">Abra uma obra.</div></div>';
     var O=orcAtual();
     var acoes='<button class="btn" id="orcImp">↥ Importar planilha de orçamento</button>'+
+      '<button class="btn" id="orcModelo" title="Baixa uma planilha de exemplo já no formato que este app importa, com as colunas certas e uma aba explicando cada uma">▤ Exportar modelo</button>'+
       (orcTem()?'<button class="btn" id="orcExp">↧ Exportar Excel</button><button class="btn" id="orcLimpar">🗑 Limpar</button>':'')+
       '<button class="btn primary" id="orcSalvar"'+(ORC_DIRTY?'':' disabled')+'>💾 Salvar orçamento</button>';
     var topo=head('Orçamento do projeto','Quadro de quantidades e preços da obra. Dá o peso financeiro de cada atividade para a AVA — não altera o cronograma.',acoes)+orcVersoesHTML();
@@ -19163,6 +19193,7 @@
     });
     orcHistWire();
     var b=document.getElementById('orcImp'); if(b)b.addEventListener('click',orcImportar);
+    var bm=document.getElementById('orcModelo'); if(bm)bm.addEventListener('click',function(){ comCarga(exportOrcamentoModelo); });
     var s=document.getElementById('orcSalvar'); if(s)s.addEventListener('click',function(){ comCarga(orcSalvar); });
     var x=document.getElementById('orcExp'); if(x)x.addEventListener('click',function(){ comCarga(exportOrcamentoExcel); });
     var l=document.getElementById('orcLimpar');
@@ -19223,6 +19254,96 @@
       orcSujo(); go('cad-orc');
       toast(n?(n+' atividade(s) vinculada(s) por semelhança de nome. Confira antes de salvar.'):'Nenhum nome bateu com os serviços cadastrados.');
     });
+  }
+  /** Planilha de exemplo do orçamento, no formato que o próprio app reimporta.
+   *
+   *  Existe porque a outra ponta — a planilha de composições da obra — nem sempre está à mão, e
+   *  quem monta orçamento do zero não tem como adivinhar as colunas. O modelo sai com a
+   *  hierarquia montada, com os serviços desta obra já escritos na coluna de vínculo e com os
+   *  meses do cronograma já nomeados: preencher é trocar números, não decifrar formato. */
+  async function exportOrcamentoModelo(){
+    if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
+    var wb=new ExcelJS.Workbook();
+    wb.creator='LPS Tripoloni'; wb.created=new Date();
+
+    /* Três meses a partir do início da obra. São exemplo de COLUNA, não de valor: o importador
+     * lê o mês do próprio cabeçalho, então quem precisar de doze copia a coluna e corrige o nome. */
+    var meses=[], d0=(window._OBRA&&window._OBRA.data_inicio)?new Date(window._OBRA.data_inicio+'T00:00:00'):new Date();
+    for(var mi=0;mi<3;mi++){
+      var d=new Date(d0.getFullYear(),d0.getMonth()+mi,1);
+      meses.push(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2));
+    }
+    /* Os serviços desta obra, escritos como o app os reconhece — é o vínculo que faz o apontado
+     * em campo virar avanço na AVA, e errar o nome aqui é o jeito mais comum de ele não funcionar. */
+    var svc=SERV.map(function(x){ return x.n; });
+    var sv=function(i){ return svc.length?svc[i%svc.length]:['Terraplenagem - Corte','Terraplenagem - Aterro','Base'][i%3]; };
+
+    var ws=wb.addWorksheet('Orçamento',{views:[{state:'frozen',ySplit:1}]});
+    var cab=['Seção','Item','Nível','Descrição','Un.','Quantidade','Custo unit.','Custo total','Fat. unit.','Fat. total','Serviço do app'];
+    meses.forEach(function(m){ cab.push('COTA '+orcMesLabel(m)); });
+    relCabecalho(ws,cab,[18,12,7,46,8,15,14,16,14,16,26].concat(meses.map(function(){ return 14; })));
+
+    /* O exemplo mostra o que texto nenhum explica bem: grupo não leva número, folha leva; o
+     * código é que diz quem é filho de quem; e a soma dos meses de uma folha fecha o custo dela.
+     * Três níveis, porque é no terceiro que a dúvida aparece. */
+    var ex=[
+      ['DUPLICAÇÃO','1',1,'SERVIÇOS PRELIMINARES','',null,null,null,null,null,'',null,null,null],
+      ['DUPLICAÇÃO','1.1',2,'Cercas a remover','m',8391.96,2.29,19217.59,3.20,26854.27,sv(0),19217.59,0,0],
+      ['DUPLICAÇÃO','2',1,'TERRAPLENAGEM','',null,null,null,null,null,'',null,null,null],
+      ['DUPLICAÇÃO','2.1',2,'Limpeza','',null,null,null,null,null,'',null,null,null],
+      ['DUPLICAÇÃO','2.1.1',3,'Limpeza mecanizada da camada vegetal','m2',245000,2.80,686000.00,4.10,1004500.00,sv(0),300000.00,386000.00,0],
+      ['DUPLICAÇÃO','2.2',2,'Corte','m3',1250000,6.30,7875000.00,9.00,11250000.00,sv(0),1500000.00,3000000.00,3375000.00],
+      ['DUPLICAÇÃO','2.3',2,'Aterro','m3',610000,6.27,3824700.00,8.95,5459500.00,sv(1),0,1900000.00,1924700.00],
+      ['MARGINAIS','3',1,'PAVIMENTAÇÃO','',null,null,null,null,null,'',null,null,null],
+      ['MARGINAIS','3.1',2,'Base de brita graduada','m3',48000,145.00,6960000.00,198.00,9504000.00,sv(2),0,0,2000000.00]
+    ];
+    ex.forEach(function(lin){
+      var r=ws.addRow(lin.slice(0,11).concat(lin.slice(11,11+meses.length)));
+      r.font={size:10,bold:lin[2]<=1};
+      for(var c=6;c<=10;c++)r.getCell(c).numFmt='#,##0.00';
+      for(var c2=12;c2<=11+meses.length;c2++)r.getCell(c2).numFmt='#,##0.00';
+    });
+
+    var wi=wb.addWorksheet('Como preencher');
+    wi.columns=[{width:24},{width:94}];
+    var tit=wi.addRow(['Modelo de orçamento — LPS Tripoloni','']);
+    tit.font={bold:true,size:13}; tit.height=22;
+    var linhas=[
+      ['',''],
+      ['Para que serve','Este arquivo já tem as colunas que o app lê em "Importar planilha de orçamento". Preencha a aba Orçamento com os seus itens, apague as linhas de exemplo e importe. Se a planilha de composições da obra estiver à mão (PLANILHAS_COMPOR, aba PLANILHA SALDO), o app lê aquele formato direto e este modelo não é necessário.'],
+      ['',''],
+      ['Seção','O bloco da planilha: DUPLICAÇÃO, MARGINAIS, OAE. Separa e soma nos relatórios. Itens de seções diferentes podem repetir o mesmo código.'],
+      ['Item','O código hierárquico: 1, 1.1, 2.1.3. É ele que monta a árvore — 2.1.3 é filho de 2.1, que é filho de 2. Não precisa vir em ordem no arquivo.'],
+      ['Nível','Quantos degraus o código tem (1, 2, 3). É conferência: se brigar com o código, vale o código.'],
+      ['Descrição','O nome do item, como aparece na tela e nos relatórios.'],
+      ['Un.','A unidade de medição: m, m2, m3, t, vb. Em branco nos grupos.'],
+      ['Quantidade','A quantidade do item. Em branco nos grupos — eles somam os filhos.'],
+      ['Custo unit. / Custo total','O custo do item. Se os dois vierem e não fecharem com a quantidade, o app recalcula o TOTAL a partir do unitário e avisa quantas linhas corrigiu: em planilha de obra o unitário costuma ser o número confiável.'],
+      ['Fat. unit. / Fat. total','O faturamento (preço de venda), na mesma lógica. A diferença para o custo é a margem que a tela mostra.'],
+      ['Serviço do app','O vínculo com o cronograma: escreva o nome do serviço EXATAMENTE como está no cadastro desta obra. É esse vínculo que faz o avanço apontado em campo alimentar a AVA. Vincular um grupo aplica o vínculo a todos os itens dentro dele. Em branco, o item fica sem vínculo e não entra na medição por serviço.'],
+      ['COTA <mês>','O cronograma de custo: quanto daquele item está previsto em cada mês. Uma coluna por mês, e o cabeçalho é que manda — para ter doze meses, copie a coluna e corrija o nome. A soma dos meses de um item deve fechar o custo total dele.'],
+      ['',''],
+      ['Grupo x folha','Linha que tem filhos é GRUPO: deixe quantidade e valores em branco, que o app soma de baixo para cima. Só a folha leva número. É o que o exemplo mostra: 2 e 2.1 vazios, 2.1.1 preenchido.'],
+      ['Ordem das colunas','Não precisa ser esta. O app acha as colunas pelo NOME do cabeçalho, então mover ou intercalar coluna não quebra a importação. Mudar o nome do cabeçalho, sim.'],
+      ['Antes de importar','Apague as linhas de exemplo. O que estiver na planilha entra no orçamento.']
+    ];
+    if(!svc.length)linhas.push(['Atenção','Esta obra ainda não tem serviços cadastrados, então a coluna "Serviço do app" saiu com exemplos genéricos. Cadastre os serviços primeiro (Tempo Caminho, Serviços) e baixe o modelo de novo: ele sai com os nomes certos.']);
+    linhas.forEach(function(l){
+      var r=wi.addRow(l);
+      r.font={size:10,bold:!!l[0]};
+      r.alignment={vertical:'top',wrapText:true};
+      if(l[1])r.height=Math.max(16,Math.ceil(String(l[1]).length/94)*13+6);
+    });
+
+    var nome=((window._OBRA&&window._OBRA.nome)||'obra').replace(/[\\/:*?"<>|]+/g,'_').trim()||'obra';
+    var buf=await wb.xlsx.writeBuffer();
+    var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url; a.download='modelo-orcamento - '+nome+'.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); },1500);
+    toast('Modelo baixado. A aba "Como preencher" explica cada coluna.');
   }
   async function exportOrcamentoExcel(){
     if(typeof ExcelJS==='undefined'){ alert('Biblioteca de planilha (ExcelJS) não carregou.'); return; }
@@ -26985,6 +27106,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
 
 
