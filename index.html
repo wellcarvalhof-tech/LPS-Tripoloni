@@ -1391,9 +1391,12 @@
     {id:'acomp', label:'Acompanhamento', icon:'pulse', items:[
       ['ac-curvas','Curva S'],['ac-ava','AVA — Valor Agregado'],['ac-prod','Produção Diária'],['ac-med','Medições']]},
     {id:'lps', label:'Last Planner', icon:'check', items:[
-      ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]}
+      ['lp-medio','Médio Prazo · Restrições'],['lp-semana','Programação Semanal'],['lp-ppc','PPC & Causas']]},
+    {id:'ajuda', label:'Ajuda', icon:'check', items:[
+      ['aj-instrucoes','Instruções de uso'],['aj-sugestoes','Sugestões']]}
   ];
-  var CRUMB={torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
+  var CRUMB={'aj-instrucoes':['Ajuda','Instruções de uso'],'aj-sugestoes':['Ajuda','Sugestões'],
+    torre:['Torre de Controle'],'torre-rel':['Torre de Controle','Relatório de planejamento executivo'],
     'cad-obra':['Cadastro','Obra'],'cad-eap':['Cadastro','EAP de serviços'],'cad-orc':['Cadastro','Orçamento do projeto'],'cad-apoio':['Cadastro','Apoio Administrativo'],'cad-acessos':['Cadastro','Acessos'],'cad-log':['Cadastro','Histórico de alterações'],
     'cad-quant':['Cadastro','Quantidades'],'cad-serv':['Tempo Caminho','Serviços'],'cad-lotes':['Tempo Caminho','Lotes & Quantidades'],'cad-equipes':['Tempo Caminho','Equipes'],'cad-cal':['Tempo Caminho','Calendário'],
     'cr-matriz':['Tempo Caminho','Matriz Tempo-Caminho'],'cr-lb':['Tempo Caminho','Linha de Balanço'],'cr-gantt':['Tempo Caminho','Gráficos do cronograma'],'cr-reti':['Tempo Caminho','Retigráfico'],'cr-hist':['Tempo Caminho','Histograma'],'cr-cenarios':['Tempo Caminho','Cenários'],
@@ -1529,6 +1532,9 @@
     if(t)t.addEventListener('click',function(){ if(selectedObra)selectObra(selectedObra.id,current); });
   }
   function canViewTab(view){
+    /* Ajuda e sugestões são de todo mundo: quem só consulta é justamente quem mais precisa
+     * do manual, e quem usa na obra é quem tem o que sugerir. */
+    if(view==='aj-instrucoes'||view==='aj-sugestoes')return true;
     if(view==='torre-rel')view='torre'; // relatório é parte da Torre de Controle
     if(view==='cad-acessos'||view==='cad-log')return isPlanejador();
     if(isPlanejador())return true;
@@ -1840,6 +1846,148 @@
 
   /* ================= VIEWS ================= */
   var VIEWS={};
+  /* ================= Ajuda: instruções e sugestões ================= */
+  var AJ_ABERTO={};
+  function ajSecao(k,titulo,corpo){
+    var ab=!!AJ_ABERTO[k];
+    return '<div class="card" style="margin-bottom:10px">'+
+      '<div style="display:flex;align-items:flex-start;gap:8px">'+
+        '<button class="iconbtn" data-ajsec="'+escAttr(k)+'" title="'+(ab?'Recolher':'Abrir')+'">'+(ab?'▾':'▸')+'</button>'+
+        '<div class="eyebrow" style="margin:0;cursor:pointer" data-ajsec="'+escAttr(k)+'">'+titulo+'</div>'+
+      '</div>'+(ab?('<div class="note" style="margin-top:10px;line-height:1.65">'+corpo+'</div>'):'')+
+    '</div>';
+  }
+  VIEWS['aj-instrucoes']=function(){
+    var p=function(t){ return '<p style="margin:0 0 8px">'+t+'</p>'; };
+    var ul=function(itens){ return '<ul style="margin:0 0 8px;padding-left:18px">'+itens.map(function(i){ return '<li style="margin-bottom:4px">'+i+'</li>'; }).join('')+'</ul>'; };
+    return head('Instruções de uso','Como cada parte funciona, e as regras que costumam gerar dúvida.',
+      '<button class="btn" id="ajIrSug">Tenho uma sugestão →</button>')+
+    ajSecao('comecar','Por onde começar numa obra nova',
+      p('A ordem importa, porque cada passo usa o anterior:')+
+      ul(['<b>Cadastro → Obra</b>: nome, data de início e o calendário de paralisações e chuva.',
+          '<b>Tempo Caminho → Serviços</b>: o que a obra executa, com unidade, produtividade por equipe e número de equipes.',
+          '<b>Tempo Caminho → Lotes &amp; Quantidades</b>: os lotes na ordem executiva e o saldo de cada serviço em cada lote.',
+          '<b>Matriz Tempo-Caminho</b>: o cronograma propriamente dito.',
+          'Quando o plano estiver de pé, <b>gere a linha de base</b> (REV00) em Cenários. É ela que vira o previsto da Curva S, do histograma, da AVA e dos relatórios.']))+
+    ajSecao('matriz','Matriz Tempo-Caminho: automático × manual',
+      p('A chave <b>“Como o cronograma é montado”</b> decide tudo o que o app calcula — Curva S, histograma, AVA e relatórios saem dali.')+
+      ul(['<b>Automático</b>: o app distribui os lotes pelas equipes sozinho, respeitando predecessoras, fila e calendário. O que você fixar à mão continua valendo como âncora.',
+          '<b>Manual</b>: o cronograma é <i>só</i> o que você desenhar. Lote que você não colocar não entra — e o aviso no topo diz quantas combinações lote × serviço ficaram de fora.'])+
+      p('Trocar de um para o outro pergunta antes, porque muda o cronograma da obra inteira. No manual, o botão <b>Arrumar pendências</b> desliza para a primeira semana válida o que ficou fora de ordem.')+
+      p('A <b>duração nunca é digitada</b>: é quantidade ÷ produtividade da equipe, corrigida pela chuva da semana. Para mudar a duração, mude a quantidade ou a produtividade.'))+
+    ajSecao('cenarios','Cenários e linha de base',
+      p('Um cenário é uma <b>cópia completa</b> do momento: calendário, produtividade, número de equipes, saldos, orçamento e o desenho do Tempo-Caminho.')+
+      ul(['<b>Ver</b> mostra o cenário na tela inteira, em só leitura — a moldura azul e o chip no topo dizem que você está nesse modo. Nada da obra é alterado.',
+          '<b>Editar</b> abre o cenário no editor: o que você salvar vai para ele, não para a obra.',
+          '<b>Duplicar</b> cria uma cópia independente. Editando um cenário, a cópia sai do que está na tela agora, com o que ainda não foi salvo.',
+          '<b>Aplicar ao cronograma ao vivo</b> substitui o cronograma da obra pelo cenário.',
+          '<b>Gerar linha de base</b> congela aquele plano como REV00, REV01… e trava a matriz. É o compromisso da obra.'])+
+      p('Apagar: rascunho é de quem edita a obra; <b>linha de base só sai pela mão do desenvolvedor ou de quem a gerou</b>. Apagando a linha de base ativa, a revisão anterior assume no lugar.'))+
+    ajSecao('curva','Curva S e AVA',
+      p('A Curva S tem três níveis: geral, grupos do orçamento e serviços do cronograma. O previsto sai da linha de base; o realizado, dos apontamentos.')+
+      p('Quando a obra começou antes do plano, importe o executado no <b>Orçamento → Histórico</b>. Aí o contrato passa a ser <i>executado + saldo</i>, e a curva parte do percentual já executado em vez de zero — para todo serviço, agrupamento e geral.')+
+      p('No gráfico, a linha vertical é o <b>cursor</b>: arraste-a para ler outro período, ou use as setas ←/→ com o gráfico em foco. Os cartões, as barras e o IDP acompanham.'))+
+    ajSecao('lps','Last Planner: médio prazo, semana e PPC',
+      ul(['<b>Médio Prazo</b>: as restrições que precisam cair antes de o serviço poder ser programado.',
+          '<b>Programação Semanal</b>: crie a semana, use <b>↓ Puxar sugestões</b> para trazer o previsto do cronograma e ajuste. Preencha <b>início e fim</b> de cada linha para dizer em que dias ela acontece.',
+          '<b>↓ Exportar semana</b> gera o arquivo para os encarregados, em duas abas: a lista (com espaço para assinar) e o quadro da semana, com a quantidade <i>do dia</i> — o previsto da semana dividido pelos dias em que a linha acontece.',
+          '<b>PPC</b>: o percentual de compromissos cumpridos. Marcar uma linha como não concluída pede a causa, e é dela que sai o Pareto.']))+
+    ajSecao('hist','Histograma de recursos',
+      p('Monte o catálogo de funções e equipamentos, a <b>equipe típica</b> de cada serviço e a <b>alocação do apoio administrativo</b>. O previsto é a equipe típica × as equipes ativas em cada semana do cronograma.')+
+      p('O apoio não tem frente: ele entra por <b>janela de mobilização</b>. Na exportação há uma aba só dele, com quem é cada cabeça, a janela e o recurso × semana.')+
+      p('A tarja no topo diz de onde o previsto está saindo — automático ou manual — e qual é a referência em uso.'))+
+    ajSecao('duvidas','Dúvidas que aparecem sempre',
+      ul(['<b>Salvei e ao recarregar voltou.</b> Se aparecer um aviso falando em permissão, seu usuário não tem escrita nessa obra — fale com o planejador. Sem aviso, o dado foi gravado.',
+          '<b>O Excel não bate com a tela.</b> O relatório do Tempo-Caminho sai da <i>vista</i> que está na tela, e a aba Meta diz qual é. Confira se você está em “Planejado” ou na linha de base.',
+          '<b>Zerei uma quantidade no cenário e ela voltou.</b> Corrigido na v167 — se o cenário é antigo, reabra, confira os zeros e salve uma vez.',
+          '<b>Não consigo editar.</b> Veja se há a moldura azul (você está vendo um cenário) ou se a matriz está travada pela linha de base.',
+          '<b>Botão ⟳ no topo</b> relê a obra do servidor — útil quando outra pessoa salvou algo e sua tela ainda mostra o de antes.']));
+  };
+  /* ---- Sugestões ---- */
+  var SUG=[], SUG_LIDO=false, SUG_CARREGANDO=false, SUG_ERRO='';
+  var SUG_STATUS=[['nova','Nova'],['analisando','Em análise'],['feita','Feita'],['recusada','Recusada']];
+  function sugRotStatus(s){ var r=SUG_STATUS.filter(function(x){ return x[0]===s; })[0]; return r?r[1]:'Nova'; }
+  function sugPill(s){
+    var cor=s==='feita'?'good':(s==='recusada'?'crit':(s==='analisando'?'warn':'mut'));
+    return '<span class="pill '+cor+'">'+sugRotStatus(s)+'</span>';
+  }
+  async function sbSugListar(obraId){
+    await sbRequireSession();
+    var q=SB.from('sugestoes').select('*').order('created_at',{ascending:false});
+    var r=await (obraId?q.or('obra_id.is.null,obra_id.eq.'+obraId):q);
+    if(r.error)throw r.error; return r.data||[];
+  }
+  async function sbSugCriar(reg){
+    await sbRequireSession();
+    var r=await SB.from('sugestoes').insert(reg).select('id');
+    if(r.error)throw r.error;
+    if(!r.data||!r.data.length)throw new Error('O banco não gravou a sugestão: nenhuma linha foi criada.');
+    return r.data[0].id;
+  }
+  async function sbSugAtualizar(id,patch){ await sbUpdateVerificado('sugestoes',id,patch,'a sugestão'); }
+  async function sbSugApagar(id){
+    await sbRequireSession();
+    var r=await SB.from('sugestoes').delete().eq('id',id).select('id');
+    if(r.error)throw r.error;
+    if(!r.data||!r.data.length)throw new Error('O banco não apagou a sugestão: nenhuma linha foi removida.');
+  }
+  async function sugCarregar(){
+    if(!SB)return;
+    SUG_ERRO=''; SUG_CARREGANDO=true; if(current==='aj-sugestoes')go('aj-sugestoes');
+    try{ SUG=await sbSugListar(selectedObra?selectedObra.id:null); }
+    catch(e){ SUG_ERRO=(e&&e.message)||String(e); }
+    SUG_CARREGANDO=false; SUG_LIDO=true;
+    if(current==='aj-sugestoes')go('aj-sugestoes');
+  }
+  VIEWS['aj-sugestoes']=function(){
+    var form='<div class="card" style="margin-bottom:14px">'+
+      '<div class="eyebrow">Mandar uma sugestão</div>'+
+      '<div class="field" style="margin-top:8px"><label>O que você sugere</label>'+
+        '<input class="inp" id="sugTitulo" maxlength="140" placeholder="Em uma linha: o que deveria existir ou mudar"></div>'+
+      '<div class="field"><label>Detalhe (opcional)</label>'+
+        '<textarea class="inp" id="sugDetalhe" rows="4" placeholder="O que você faz hoje, por que atrapalha, e como seria melhor. Exemplo concreto ajuda mais que descrição geral."></textarea></div>'+
+      '<div class="field"><label>De que tela você está falando</label>'+
+        '<select class="inp" id="sugTela" style="max-width:320px">'+
+          '<option value="">— a obra em geral —</option>'+
+          allTabs().map(function(t){ return '<option value="'+escAttr(t[0])+'">'+escAttr(t[1])+'</option>'; }).join('')+
+        '</select></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">'+
+        '<button class="btn primary" id="sugEnviar">Enviar sugestão</button></div>'+
+      '<div class="note" style="margin-top:8px">A sugestão fica ligada à obra aberta e à tela escolhida — é esse contexto que faz o pedido ser entendido depois.</div>'+
+    '</div>';
+    var lista;
+    if(SUG_ERRO){
+      lista='<div class="banner" style="border-color:var(--crit)">Não deu pra carregar as sugestões: '+escAttr(SUG_ERRO)+
+        '<br>Se a mensagem fala em tabela ou coluna que não existe, rode a migração <b>sql/39_sugestoes.sql</b> no Supabase.</div>';
+    } else if(SUG_CARREGANDO){ lista='<div class="note">Carregando…</div>'; }
+    else if(!SUG.length){ lista='<div class="card"><div class="note">Nenhuma sugestão ainda. A primeira pode ser a sua.</div></div>'; }
+    else{
+      lista='<div class="card"><div class="eyebrow" style="margin-bottom:8px">'+SUG.length+' sugestão(ões)</div>'+
+        SUG.map(function(s){
+          var minha=(MY_UID&&s.user_id===MY_UID);
+          var quando=String(s.created_at||'').slice(0,10).split('-').reverse().join('/');
+          var telaRot=(allTabs().filter(function(t){ return t[0]===s.tela; })[0]||[null,''])[1];
+          return '<div style="border-top:1px solid var(--line);padding:10px 0">'+
+            '<div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">'+
+              sugPill(s.status)+
+              '<b style="font-size:13.5px">'+escAttr(s.titulo||'')+'</b>'+
+              '<span class="note" style="margin:0 0 0 auto;white-space:nowrap">'+escAttr(s.autor_nome||'')+(s.autor_nome?' · ':'')+quando+'</span>'+
+            '</div>'+
+            (telaRot?('<div class="note" style="margin:4px 0 0">Tela: <b>'+escAttr(telaRot)+'</b></div>'):'')+
+            (s.detalhe?('<div class="note" style="margin:4px 0 0;white-space:pre-wrap">'+escAttr(s.detalhe)+'</div>'):'')+
+            (s.resposta?('<div class="note" style="margin:6px 0 0;padding:6px 10px;background:var(--elev);border-radius:var(--radius)"><b>Resposta:</b> '+escAttr(s.resposta)+'</div>'):'')+
+            ((IS_APP_ADMIN||minha)?('<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
+              (IS_APP_ADMIN?('<select class="esel" data-sugstatus="'+s.id+'" style="width:140px">'+
+                 SUG_STATUS.map(function(st){ return '<option value="'+st[0]+'"'+(s.status===st[0]?' selected':'')+'>'+st[1]+'</option>'; }).join('')+'</select>'+
+                 '<input class="einp" data-sugresp="'+s.id+'" value="'+escAttr(s.resposta||'')+'" placeholder="resposta (opcional)" style="width:260px">'):'')+
+              '<button class="iconbtn" data-sugdel="'+s.id+'" title="Apagar esta sugestão">✕</button>'+
+            '</div>'):'')+
+          '</div>';
+        }).join('')+'</div>';
+    }
+    return head('Sugestões','O que falta, o que atrapalha, o que daria para melhorar.',
+      '<button class="btn" id="sugRecarregar">⟳ Atualizar</button>')+form+lista;
+  };
 
   VIEWS.torre=function(){
     window._torreTab=window._torreTab||'painel';
@@ -11494,6 +11642,56 @@
     if(view==='cad-quant')massasAutoCarga();   // pra poder resumir a cubação já gravada
     if(view==='torre-rel'){execReportDraw();}
     if(view==='cr-lb'){undoInit('lb'); wireLinhaBalanco();}
+    if(view==='aj-instrucoes'){
+      document.querySelectorAll('[data-ajsec]').forEach(function(b){
+        b.addEventListener('click',function(){
+          var k=b.getAttribute('data-ajsec');
+          AJ_ABERTO[k]=!AJ_ABERTO[k];
+          go('aj-instrucoes');
+        });
+      });
+      var irSug=document.getElementById('ajIrSug');
+      if(irSug)irSug.addEventListener('click',function(){ go('aj-sugestoes'); });
+    }
+    if(view==='aj-sugestoes'){
+      if(!SUG_LIDO&&!SUG_CARREGANDO)sugCarregar();
+      var rec=document.getElementById('sugRecarregar');
+      if(rec)rec.addEventListener('click',function(){ SUG_LIDO=false; sugCarregar(); });
+      var env=document.getElementById('sugEnviar');
+      if(env)env.addEventListener('click',async function(){
+        var t=(document.getElementById('sugTitulo').value||'').trim();
+        if(!t){ alert('Escreva em uma linha o que você sugere.'); return; }
+        env.disabled=true; env.textContent='Enviando…';
+        try{
+          await sbSugCriar({obra_id:selectedObra?selectedObra.id:null,
+            autor_nome:(window._MEU_NOME||null),
+            tela:document.getElementById('sugTela').value||null,
+            titulo:t,detalhe:(document.getElementById('sugDetalhe').value||'').trim()||null,status:'nova'});
+          SUG_LIDO=false;
+          await sugCarregar();
+          toast('Sugestão enviada. Obrigado — ela aparece na lista abaixo.');
+        }catch(e){
+          env.disabled=false; env.textContent='Enviar sugestão';
+          alert('Não deu pra enviar: '+((e&&e.message)||e)+String.fromCharCode(10)+String.fromCharCode(10)+
+            'Se a mensagem fala em tabela que não existe, falta rodar a migração sql/39_sugestoes.sql.');
+        }
+      });
+      document.querySelectorAll('[data-sugstatus],[data-sugresp]').forEach(function(el){
+        el.addEventListener('change',async function(){
+          var id=el.getAttribute('data-sugstatus')||el.getAttribute('data-sugresp');
+          var patch=el.hasAttribute('data-sugstatus')?{status:el.value}:{resposta:(el.value||'').trim()||null};
+          try{ await sbSugAtualizar(id,patch); SUG_LIDO=false; sugCarregar(); }
+          catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
+        });
+      });
+      document.querySelectorAll('[data-sugdel]').forEach(function(b){
+        b.addEventListener('click',async function(){
+          if(!confirm('Apagar esta sugestão? Isso não volta atrás.'))return;
+          try{ await sbSugApagar(b.getAttribute('data-sugdel')); SUG_LIDO=false; sugCarregar(); }
+          catch(e){ alert('Falha ao apagar: '+((e&&e.message)||e)); }
+        });
+      });
+    }
     if(view==='cr-gantt'){
       grafWire();
       document.querySelectorAll('[data-tcleixo]').forEach(function(b){
