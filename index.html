@@ -1396,6 +1396,14 @@
   var selectedObra=null;
 
   /* ---------- Nav model ---------- */
+  /* Telas que existem e funcionam, mas não aparecem no menu. Some da barra lateral, da barra do
+   * modo campo e da lista de abas dos Acessos; quem chegar nelas por link direto continua
+   * entrando normalmente, e o código fica onde está.
+   * Para trazer uma de volta, tire a linha daqui — não há nada mais a desfazer. */
+  var NAV_OCULTO={
+    torre:true   // Torre de Controle (e o relatório executivo, que se abre de dentro dela)
+  };
+  function navOculto(view){ return !!NAV_OCULTO[view]; }
   var NAV=[
     {id:'torre', solo:true, icon:'grid', label:'Torre de Controle'},
     {id:'cadastro', label:'Cadastro', icon:'folder', items:[
@@ -1558,8 +1566,14 @@
     var p=Array.isArray(MY_ROLE.permissoes)?MY_ROLE.permissoes:[];
     return p.indexOf('*')>=0||p.indexOf(view)>=0;
   }
-  function allTabs(){ var out=[]; NAV.forEach(function(g){ if(g.solo)out.push([g.id,g.label]); else g.items.forEach(function(it){ if(it[0]!=='cad-acessos'&&it[0]!=='cad-log')out.push(it); }); }); return out; }
-  function firstAllowedTab(){ var t=allTabs().filter(function(it){return canViewTab(it[0]);})[0]; return t?t[0]:'torre'; }
+  function allTabs(){ var out=[]; NAV.forEach(function(g){ if(navOculto(g.id))return; if(g.solo)out.push([g.id,g.label]); else g.items.forEach(function(it){ if(it[0]!=='cad-acessos'&&it[0]!=='cad-log'&&!navOculto(it[0]))out.push(it); }); }); return out; }
+  function firstAllowedTab(){ var t=allTabs().filter(function(it){return canViewTab(it[0]);})[0]; return t?t[0]:'cr-matriz'; }
+  /** Em que tela a obra abre. Com a Torre de Controle fora do menu, a Matriz Tempo-Caminho é o
+   *  lugar natural: é o cronograma, e é de lá que sai todo o resto. Quem não tiver acesso a ela
+   *  cai na primeira aba que puder ver. */
+  function telaInicial(){
+    return (!navOculto('cr-matriz')&&canViewTab('cr-matriz'))?'cr-matriz':firstAllowedTab();
+  }
   function refreshRoleBadge(){
     var b=document.getElementById('roleBadge'); if(!b)return;
     if(IS_APP_ADMIN){
@@ -1604,8 +1618,8 @@
   function buildNav(){
     var nav=document.getElementById('nav'); nav.innerHTML='';
     NAV.forEach(function(g){
-      if(g.solo&&!canViewTab(g.id))return;
-      var items=g.solo?[]:g.items.filter(function(it){return canViewTab(it[0]);});
+      if(g.solo&&(navOculto(g.id)||!canViewTab(g.id)))return;
+      var items=g.solo?[]:g.items.filter(function(it){return !navOculto(it[0])&&canViewTab(it[0]);});
       if(!g.solo&&!items.length)return;
       var grp=document.createElement('div');
       grp.className='nav-group'+(g.solo?' nav-solo':'')+(g.open?' open':'');
@@ -1659,7 +1673,7 @@
                 ['lp-semana','Semana','check'],['__menu','Menu','folder']];
   function renderFieldBar(){
     var el=document.getElementById('fieldBar'); if(!el)return;
-    el.innerHTML=FIELDBAR.filter(function(f){ return f[0]==='__menu'||canViewTab(f[0]); }).map(function(f){
+    el.innerHTML=FIELDBAR.filter(function(f){ return f[0]==='__menu'||(!navOculto(f[0])&&canViewTab(f[0])); }).map(function(f){
       var act=(f[0]===current)?' active':'';
       return '<button data-fb="'+f[0]+'" class="'+act.trim()+'"><svg viewBox="0 0 24 24">'+(ICONS[f[2]]||'')+'</svg>'+f[1]+'</button>';
     }).join('');
@@ -26853,7 +26867,9 @@
     loadLotView();
     document.getElementById('landing').classList.remove('show');
     try{ safeStore.setItem('lps-tripoloni-lastobra',id); }catch(e){}
-    go(initialView&&CRUMB[initialView]?initialView:'torre');
+    /* Tela guardada da sessão anterior só vale se ainda estiver no menu: voltar para uma tela
+     * oculta deixaria a barra lateral sem nada marcado e a pessoa sem saber onde está. */
+    go((initialView&&CRUMB[initialView]&&!navOculto(initialView))?initialView:telaInicial());
     sbPresencaPing().then(presRefresh);
   }
   async function enterNewObra(){
@@ -26969,6 +26985,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
 
   (async function boot(){
