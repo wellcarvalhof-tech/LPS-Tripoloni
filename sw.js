@@ -7,7 +7,7 @@
  * Pra publicar uma versão nova: suba o VERSAO. O app avisa na tela e recarrega quando o usuário
  * mandar.
  */
-var VERSAO='lps-v177';
+var VERSAO='lps-v178';
 var SHELL=['./','./index.html','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
 
 self.addEventListener('install',function(e){
@@ -33,6 +33,13 @@ self.addEventListener('fetch',function(e){
   if(url.protocol!=='http:'&&url.protocol!=='https:')return;
   // Supabase (dados e login) nunca entra em cache: resposta velha aqui seria pior que erro.
   if(/supabase\.(co|in)$/.test(url.hostname))return;
+
+  /* A pasta de treinamento é material de leitura, não o app — passa direto pra rede.
+   * Duas razões, as duas concretas: abrir /treinamento/ é uma navegação, e o ramo abaixo
+   * guardaria ESSA página como './index.html', ou seja, o app offline abriria o treinamento;
+   * e o roteiro é um .md que muda com frequência, que no cache-primeiro ficaria preso na
+   * versão antiga sem ninguém entender por quê. */
+  if(url.origin===self.location.origin&&url.pathname.indexOf('/treinamento/')>=0)return;
 
   // Navegação: tenta a rede (pra pegar versão nova) e cai pro shell guardado se não houver sinal.
   if(req.mode==='navigate'){

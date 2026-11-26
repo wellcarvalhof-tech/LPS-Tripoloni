@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Treinamento · LPS Tripoloni</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext y='19' font-size='19'%3E%F0%9F%8E%93%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0e1116; --elev:#161b22; --card:#1a2029; --ink:#e6edf3; --muted:#8b949e;
+    --line:#30363d; --line-2:#21262d; --accent:#f0883e; --accent-soft:#f0883e22;
+    --max:860px;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#f6f8fa; --elev:#ffffff; --card:#ffffff; --ink:#1f2328; --muted:#636c76;
+      --line:#d0d7de; --line-2:#e4e8ed; --accent:#bc4c00; --accent-soft:#bc4c0014;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f8fa; --elev:#ffffff; --card:#ffffff; --ink:#1f2328; --muted:#636c76;
+    --line:#d0d7de; --line-2:#e4e8ed; --accent:#bc4c00; --accent-soft:#bc4c0014;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth; scroll-padding-top:70px}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  header{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:10px 16px;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header .brand{font-weight:650;letter-spacing:-.01em}
+  header .brand span{color:var(--muted);font-weight:400}
+  header .sp{flex:1}
+  .lk{color:var(--muted);text-decoration:none;font-size:13px;border:1px solid var(--line);
+    border-radius:7px;padding:5px 11px;white-space:nowrap}
+  .lk:hover{color:var(--ink);border-color:var(--accent)}
+  .wrap{display:grid;grid-template-columns:250px minmax(0,1fr);gap:34px;
+    max-width:1180px;margin:0 auto;padding:26px 16px 90px}
+  nav.toc{position:sticky;top:64px;align-self:start;max-height:calc(100vh - 90px);
+    overflow:auto;font-size:13.5px;padding-right:6px}
+  nav.toc .mod{color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
+    font-size:10.5px;font-weight:700;margin:16px 0 6px}
+  nav.toc a{display:block;color:var(--ink);text-decoration:none;padding:4px 9px;
+    border-radius:6px;border-left:2px solid transparent;opacity:.78}
+  nav.toc a:hover{background:var(--elev);opacity:1}
+  nav.toc a.on{border-left-color:var(--accent);background:var(--accent-soft);opacity:1;font-weight:600}
+  main{min-width:0}
+  main h1{font-size:27px;line-height:1.25;letter-spacing:-.02em;margin:34px 0 10px}
+  main h1:first-child{margin-top:0}
+  main h2{font-size:20px;letter-spacing:-.01em;margin:40px 0 4px;padding-top:14px;
+    border-top:1px solid var(--line)}
+  main h3{font-size:14px;margin:26px 0 8px;color:var(--accent);font-weight:650;
+    font-variant-numeric:tabular-nums}
+  main p{margin:9px 0}
+  main hr{border:0;border-top:1px solid var(--line-2);margin:30px 0}
+  main blockquote{margin:10px 0;padding:12px 15px;background:var(--elev);
+    border-left:3px solid var(--accent);border-radius:0 8px 8px 0;color:var(--ink)}
+  main blockquote p{margin:7px 0}
+  main blockquote p:first-child{margin-top:0} main blockquote p:last-child{margin-bottom:0}
+  main table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;
+    background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  main th,main td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line-2)}
+  main th{background:var(--elev);font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--muted)}
+  main tr:last-child td{border-bottom:0}
+  main td:first-child,main th:first-child{width:38px;color:var(--muted);text-align:center}
+  main td:last-child,main th:last-child{width:84px;white-space:nowrap;color:var(--muted)}
+  main ul{padding-left:22px;margin:9px 0} main li{margin:5px 0}
+  main code{background:var(--elev);border:1px solid var(--line-2);border-radius:4px;
+    padding:1px 5px;font-size:13px}
+  main strong{font-weight:650}
+  .video{margin:14px 0 4px;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    background:#000;aspect-ratio:16/9}
+  .video iframe{width:100%;height:100%;border:0;display:block}
+  .semvideo{margin:14px 0 4px;border:1px dashed var(--line);border-radius:10px;
+    padding:13px 15px;color:var(--muted);font-size:13.5px;background:var(--elev)}
+  footer{border-top:1px solid var(--line);color:var(--muted);font-size:13px;
+    padding:20px 16px 40px;text-align:center}
+  @media (max-width:860px){
+    .wrap{grid-template-columns:1fr;gap:0;padding-top:16px}
+    nav.toc{position:static;max-height:none;margin-bottom:22px;
+      border-bottom:1px solid var(--line);padding-bottom:14px}
+    main h1{font-size:23px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">Treinamento <span>· LPS Tripoloni</span></div>
+  <div class="sp"></div>
+  <a class="lk" href="../index.html">← Abrir a plataforma</a>
+  <a class="lk" href="roteiros.md" download>Baixar o roteiro</a>
+</header>
+
+<div class="wrap">
+  <nav class="toc" id="toc"></nav>
+  <main id="doc"><p style="color:var(--muted)">Carregando o roteiro…</p></main>
+</div>
+
+<footer>Construtora Tripoloni · material interno de treinamento</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script>
+/* Os vídeos entram aqui, e só aqui. Grave a aula, pegue o link de incorporação
+ * (no Loom: Share → Embed → o endereço que começa com loom.com/embed/...) e cole ao lado
+ * do número da aula. A página passa a mostrar o player em cima do roteiro daquela aula.
+ * Aula sem link continua mostrando só o roteiro — não quebra nada. */
+var VIDEOS = {
+  1: '',   // O que a plataforma faz e como se navega nela
+  2: '',   // Criar a obra e acertar o calendário
+  3: '',   // Serviços: o cadastro que decide o cronograma
+  4: ''    // Lotes e quantidades: a matriz de entrada
+};
+
+(function(){
+  var doc = document.getElementById('doc');
+  var toc = document.getElementById('toc');
+
+  fetch('roteiros.md', {cache:'no-cache'})
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+    .then(function(md){ render(md); })
+    .catch(function(e){
+      doc.innerHTML = '<h1>Não deu para carregar o roteiro</h1>'+
+        '<p>O arquivo <code>roteiros.md</code> não respondeu ('+String(e.message||e)+'). '+
+        'Se você abriu esta página com duplo clique no arquivo, o navegador bloqueia a '+
+        'leitura do roteiro — abra pelo endereço do site.</p>';
+    });
+
+  function render(md){
+    marked.setOptions({gfm:true, breaks:false});
+    doc.innerHTML = marked.parse(md);
+    numeraEAncora();
+    poeVideos();
+    montaIndice();
+    observa();
+  }
+
+  /* Um id estável por título, para o índice e para mandar link de uma aula por mensagem. */
+  function numeraEAncora(){
+    var n = 0;
+    doc.querySelectorAll('h1,h2').forEach(function(h){
+      var m = /^Aula\s+(\d+)/.exec(h.textContent.trim());
+      h.id = m ? ('aula-'+m[1]) : ('sec-'+(++n));
+      if(m) h.dataset.aula = m[1];
+    });
+  }
+
+  /* O player vai logo depois do título da aula, antes de "Tempo:" e do roteiro. */
+  function poeVideos(){
+    doc.querySelectorAll('h2[data-aula]').forEach(function(h){
+      var url = (VIDEOS[h.dataset.aula]||'').trim();
+      var box = document.createElement('div');
+      if(url){
+        box.className = 'video';
+        var f = document.createElement('iframe');
+        f.src = url;
+        f.allow = 'fullscreen; picture-in-picture';
+        f.setAttribute('allowfullscreen','');
+        f.title = h.textContent.trim();
+        box.appendChild(f);
+      } else {
+        box.className = 'semvideo';
+        box.textContent = 'Vídeo desta aula ainda não gravado — o roteiro abaixo é o que será dito.';
+      }
+      h.parentNode.insertBefore(box, h.nextSibling);
+    });
+  }
+
+  function montaIndice(){
+    var html = '';
+    doc.querySelectorAll('h1,h2').forEach(function(h){
+      var t = h.textContent.trim();
+      if(h.tagName === 'H1'){
+        html += '<div class="mod">'+t.replace(/^M[ÓO]DULO\s*/i,'Módulo ')+'</div>';
+      } else {
+        html += '<a href="#'+h.id+'">'+t+'</a>';
+      }
+    });
+    toc.innerHTML = html;
+  }
+
+  /* Marca no índice a aula que está na tela. */
+  function observa(){
+    var links = {};
+    toc.querySelectorAll('a').forEach(function(a){ links[a.getAttribute('href').slice(1)] = a; });
+    var io = new IntersectionObserver(function(ents){
+      ents.forEach(function(e){
+        var a = links[e.target.id];
+        if(!a) return;
+        if(e.isIntersecting){
+          toc.querySelectorAll('a.on').forEach(function(x){ x.classList.remove('on'); });
+          a.classList.add('on');
+        }
+      });
+    }, {rootMargin:'-70px 0px -72% 0px'});
+    doc.querySelectorAll('h2').forEach(function(h){ io.observe(h); });
+  }
+})();
+</script>
+</body>
+</html>
