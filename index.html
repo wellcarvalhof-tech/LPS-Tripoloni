@@ -24542,13 +24542,22 @@
     if(!segs.length)return '<div class="note">Nada desenhado nos lotes em exibição.</div>';
     var tw=1; segs.forEach(function(g){ tw=Math.max(tw,g.start+g.dur-1); });
     var nL=lotIdxs.length, comoMatriz=(TCL_EIXO==='matriz');
-    var pl=comoMatriz?62:118, pr=18, pt=comoMatriz?34:16, pb=comoMatriz?30:34;
-    var W=comoMatriz?Math.max(680,120+nL*84):940;
-    var H=comoMatriz?Math.max(360,pt+pb+tw*12):Math.max(260,pt+pb+nL*26);
+    /* Tamanho generoso de proposito: o grafico vive dentro de um quadro que rola, entao
+     * apertar tudo pra caber na largura da tela so tornava ilegivel o que ele tem de util —
+     * a inclinacao de cada frente. Cada lote e cada semana ganham espaco fixo. */
+    var pl=comoMatriz?74:140, pr=24, pt=comoMatriz?40:22, pb=comoMatriz?34:44;
+    var W=comoMatriz?Math.max(900,pl+pr+nL*118):Math.max(1100,pl+pr+tw*26);
+    var H=comoMatriz?Math.max(520,pt+pb+tw*19):Math.max(420,pt+pb+nL*46);
     var iw=W-pl-pr, ih=H-pt-pb;
     /* Um ponto do desenho é sempre (posição do lote, semana); quem decide onde isso cai na tela
      * é só esta função — trocar os eixos não mexe em mais nada. */
-    var eixoL=function(p){ return (comoMatriz?pl:pt)+(comoMatriz?iw:ih)*p/Math.max(1,nL); };
+    /* Deitado, o lote cresce de BAIXO pra cima, como numa linha de balanco: o primeiro lote
+     * fica na base e a obra sobe. Como a matriz, ele cresce da esquerda pra direita, igual
+     * as colunas da prancheta. */
+    var eixoL=function(p){
+      var f=p/Math.max(1,nL);
+      return comoMatriz?(pl+iw*f):(pt+ih-ih*f);
+    };
     var eixoT=function(w){
       var f=(w-1)/Math.max(1,tw);
       return comoMatriz?(pt+ih-ih*f):(pl+iw*f);   // como a matriz, o tempo sobe
@@ -24556,25 +24565,27 @@
     var proj=function(p,w){ return comoMatriz?[eixoL(p),eixoT(w)]:[eixoT(w),eixoL(p)]; };
     var s='';
     lotIdxs.forEach(function(li,i){
-      var a=eixoL(i), b=eixoL(i+1);
+      /* Deitado o eixo e invertido (lote cresce pra cima), entao a faixa vai do menor pro
+       * maior — sem isso a altura sairia negativa e a faixa nao apareceria. */
+      var a=eixoL(i), b=eixoL(i+1), lo=Math.min(a,b), hi=Math.max(a,b), meio=(a+b)/2;
       if(i%2===0)s+=comoMatriz
-        ? '<rect x="'+a.toFixed(1)+'" y="'+pt+'" width="'+(b-a).toFixed(1)+'" height="'+ih+'" fill="var(--elev)" opacity="0.5"/>'
-        : '<rect x="'+pl+'" y="'+a.toFixed(1)+'" width="'+iw+'" height="'+(b-a).toFixed(1)+'" fill="var(--elev)" opacity="0.5"/>';
+        ? '<rect x="'+lo.toFixed(1)+'" y="'+pt+'" width="'+(hi-lo).toFixed(1)+'" height="'+ih+'" fill="var(--elev)" opacity="0.5"/>'
+        : '<rect x="'+pl+'" y="'+lo.toFixed(1)+'" width="'+iw+'" height="'+(hi-lo).toFixed(1)+'" fill="var(--elev)" opacity="0.5"/>';
       s+=comoMatriz
         ? '<line x1="'+a.toFixed(1)+'" y1="'+pt+'" x2="'+a.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)"/>'
         : '<line x1="'+pl+'" y1="'+a.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+a.toFixed(1)+'" stroke="var(--line-2)"/>';
       s+=comoMatriz
-        ? '<text class="axm" style="font-size:9px" x="'+((a+b)/2).toFixed(1)+'" y="'+(pt-10)+'" text-anchor="middle">'+escAttr(LOTS[li]||'')+'</text>'
-        : '<text class="axm" style="font-size:9px" x="'+(pl-6)+'" y="'+((a+b)/2+3).toFixed(1)+'" text-anchor="end">'+escAttr(LOTS[li]||'')+'</text>';
+        ? '<text class="axm" style="font-size:10px" x="'+meio.toFixed(1)+'" y="'+(pt-12)+'" text-anchor="middle">'+escAttr(LOTS[li]||'')+'</text>'
+        : '<text class="axm" style="font-size:10px" x="'+(pl-8)+'" y="'+(meio+3.5).toFixed(1)+'" text-anchor="end">'+escAttr(LOTS[li]||'')+'</text>';
     });
-    var passo=Math.max(1,Math.ceil(tw/(comoMatriz?22:14)));
+    var passo=Math.max(1,Math.ceil(tw/(comoMatriz?26:24)));
     for(var w=1;w<=tw;w+=passo){
       var t=eixoT(w);
       s+=comoMatriz
         ? '<line x1="'+pl+'" y1="'+t.toFixed(1)+'" x2="'+(W-pr)+'" y2="'+t.toFixed(1)+'" stroke="var(--line-2)" stroke-dasharray="2 4"/>'+
-          '<text class="axm" style="font-size:9px" x="'+(pl-6)+'" y="'+(t+3).toFixed(1)+'" text-anchor="end">'+rotSem(mondayOf(w))+'</text>'
+          '<text class="axm" style="font-size:10px" x="'+(pl-8)+'" y="'+(t+3.5).toFixed(1)+'" text-anchor="end">'+rotSem(mondayOf(w))+'</text>'
         : '<line x1="'+t.toFixed(1)+'" y1="'+pt+'" x2="'+t.toFixed(1)+'" y2="'+(pt+ih)+'" stroke="var(--line-2)" stroke-dasharray="2 4"/>'+
-          '<text class="axm" style="font-size:9px" x="'+t.toFixed(1)+'" y="'+(H-10)+'" text-anchor="middle">'+rotSem(mondayOf(w))+'</text>';
+          '<text class="axm" style="font-size:10px" x="'+t.toFixed(1)+'" y="'+(H-14)+'" text-anchor="middle" transform="rotate(-35 '+t.toFixed(1)+' '+(H-14)+')">'+rotSem(mondayOf(w))+'</text>';
     }
     var frentes=tcLinhasFrentes(segs,posDoLote);
     /* UM ponto por lote, no meio da faixa e no meio da janela de tempo daquele lote.
@@ -24584,24 +24595,51 @@
      * degrau pra trás. Com um ponto por lote a linha é contínua, e a inclinação continua
      * dizendo o ritmo. O começo e o fim de verdade seguem na dica de cada ponto. */
     frentes.forEach(function(f){
+      var dica=function(tr){ return escAttr(f.nome+' · '+(LOTS[tr.li]||'')+' · '+rotSem(mondayOf(tr.de))+' a '+rotSem(mondayOf(Math.max(tr.de,tr.ate-1)))); };
+      var traco=function(pts,titulo){
+        if(pts.length<2)return;
+        s+='<polyline points="'+pts.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ')+
+          '" fill="none" stroke="'+f.cor+'" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"><title>'+titulo+'</title></polyline>';
+      };
+      if(!comoMatriz){
+        /* Deitado e uma linha de balanco: cada atividade e tracada do seu INICIO ao seu
+         * TERMINO, atravessando a faixa do lote. A linha so continua no lote seguinte quando
+         * ele comeca depois que este acaba; se os dois se sobrepoem, sao frentes diferentes
+         * trabalhando ao mesmo tempo, e emendar inventaria um passo pra tras. */
+        var atual=[], fimAnterior=null;
+        f.trechos.forEach(function(tr){
+          var p=posDoLote[tr.li];
+          if(fimAnterior!=null&&tr.de<fimAnterior-0.001){ traco(atual,escAttr(f.nome)); atual=[]; }
+          atual.push(proj(p,tr.de));
+          atual.push(proj(p+1,tr.ate));
+          fimAnterior=tr.ate;
+        });
+        traco(atual,escAttr(f.nome));
+        f.trechos.forEach(function(tr){
+          var q=proj(posDoLote[tr.li],tr.de);
+          s+='<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="3" fill="'+f.cor+'"><title>'+dica(tr)+'</title></circle>';
+        });
+        return;
+      }
+      /* Como a matriz, um ponto por lote: a leitura aqui e por onde a frente passou, e o
+       * tracado continuo e o que o usuario pediu depois do serrilhado. */
       var pts=f.trechos.map(function(tr){ return proj(posDoLote[tr.li]+0.5,(tr.de+tr.ate)/2); });
       if(pts.length===1){
-        /* Serviço num lote só não tem linha: vira um traço curto, senão some do gráfico. */
-        var a=proj(posDoLote[f.trechos[0].li],f.trechos[0].de), b=proj(posDoLote[f.trechos[0].li]+1,f.trechos[0].ate);
-        pts=[a,b];
+        var t0=f.trechos[0];
+        pts=[proj(posDoLote[t0.li],t0.de),proj(posDoLote[t0.li]+1,t0.ate)];
       }
-      s+='<polyline points="'+pts.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ')+
-        '" fill="none" stroke="'+f.cor+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><title>'+escAttr(f.nome)+'</title></polyline>';
+      traco(pts,escAttr(f.nome));
       f.trechos.forEach(function(tr){
         var q=proj(posDoLote[tr.li]+0.5,(tr.de+tr.ate)/2);
-        s+='<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="2.8" fill="'+f.cor+'"><title>'+
-          escAttr(f.nome+' · '+(LOTS[tr.li]||'')+' · '+rotSem(mondayOf(tr.de))+' a '+rotSem(mondayOf(Math.max(tr.de,tr.ate-1))))+'</title></circle>';
+        s+='<circle cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="3" fill="'+f.cor+'"><title>'+dica(tr)+'</title></circle>';
       });
     });
     var leg='<div class="legend" style="margin-top:8px">'+frentes.map(function(f){
       return '<span><span class="swatch" style="background:'+f.cor+'"></span>'+escAttr(f.nome)+'</span>';
     }).join('')+'</div>';
-    return '<div class="tc-wrap"><svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:'+Math.min(W,900)+'px">'+s+'</svg></div>'+leg;
+    /* min-width = largura real: dentro do quadro que rola, deixar encolher apagaria o
+     * desenho numa obra com muitos lotes ou muitas semanas. */
+    return '<div class="tc-wrap"><svg class="chart" viewBox="0 0 '+W+' '+H+'" style="min-width:'+W+'px;height:'+H+'px;max-height:none">'+s+'</svg></div>'+leg;
   }
   function tcLinhasCtlHTML(){
     var b=function(attr,v,atual,rot,dica){
