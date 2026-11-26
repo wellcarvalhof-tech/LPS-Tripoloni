@@ -47,7 +47,7 @@ ordem das telas, porque cada aula assume que a anterior foi assistida.
 
 | # | Aula | Tempo |
 |---|------|-------|
-| 7 | Como a matriz decide as datas (ninguém digita duração) | 10 min |
+| 7 | Gerar o cronograma: como a matriz decide as datas | 10 min |
 | 8 | Operando a Matriz Tempo-Caminho | 12 min |
 | 9 | Gráficos do cronograma: Gantt, linha de balanço e tempo-caminho | 8 min |
 | 10 | Histograma: de onde saem os recursos | 8 min |
@@ -483,16 +483,22 @@ confirme. Depois aponte o ícone **📏** de um lote.
 > aterro, CFT, base. Serve para quem precisa desse detalhe no campo. O cronograma
 > continua calculado por lote; a régua é detalhamento, não cálculo."
 
-### 9:30 — Fechamento
+### 9:30 — Fechamento: gerar o cronograma
 
-**[TELA]** Clique no botão de salvar. Depois vá em Tempo Caminho → Matriz Tempo-Caminho
-e mostre o cronograma preenchido.
+**[TELA]** Clique no botão de salvar. Vá em Tempo Caminho → Matriz Tempo-Caminho e
+mostre a tela vazia. Clique em **⟳ Gerar cronograma automático** e mostre a matriz
+preenchendo.
 
 **[FALA]**
-> "Salvo. E olhe o que apareceu: o cronograma. Ninguém digitou uma data, ninguém
-> arrastou uma barra. Isso veio de quantidade dividida por produtividade, na sequência
-> dos lotes.
-> No Módulo 3 a gente abre essa matriz e trabalha dentro dela."
+> "Salvo. E agora vamos na matriz — e repare que ela está vazia, com um botão no meio.
+> Isso não é erro e não é cadastro faltando: o cronograma **só é gerado quando você
+> manda**. Clico em gerar, e olhe o que aparece.
+> Ninguém digitou uma data, ninguém arrastou uma barra. Isso veio de quantidade dividida
+> por produtividade, na sequência dos lotes que a gente acabou de definir.
+> E já guarde isto, porque é o assunto do Módulo 3: daqui para frente, se você mudar a
+> produtividade ou uma quantidade, **a matriz não vai se refazer sozinha**. Ela avisa que
+> o cadastro mudou e espera você mandar gerar de novo. O cronograma que a obra combinou
+> não muda sem alguém decidir que ele muda."
 
 **Erro comum a citar:** digitar quantidade com cenário aberto achando que mudou a obra.
 É a origem de quase toda reclamação de "salvei e não salvou".

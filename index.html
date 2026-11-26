@@ -1260,6 +1260,10 @@
     SEM_COL_EQMACRO=!!(obra&&!('equipe_macro' in obra));
     EQMACRO_DIRTY=false;
     OVR=(obra.ajustes_manuais&&typeof obra.ajustes_manuais==='object')?obra.ajustes_manuais:{};
+    /* O cronograma gerado (migração 40). Coluna ausente = migração pendente: a obra continua
+     * com o cálculo ao vivo de antes, e a matriz avisa, em vez de abrir vazia. */
+    AUTO=(obra.cronograma_auto&&typeof obra.cronograma_auto==='object')?obra.cronograma_auto:null;
+    SEM_COL_CRONOAUTO=!('cronograma_auto' in obra);
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
     orcCarregaVersoes(obra.orcamento);
     EAP=(obra.eap&&typeof obra.eap==='object'&&obra.eap.itens)?obra.eap:null;
@@ -1283,7 +1287,20 @@
   async function sbLoadCadastro(obraId){
     var dados=await sbFetchCadastro(obraId);
     aplicarCadastro(dados);
+    await autoPrimeiraVez();
     offlineSalvar(obraId,dados);   // retrato pra abrir sem sinal depois (não espera)
+  }
+  /** Obra que já existia antes desta mudança nunca mandou gerar nada, e abriria com a matriz em
+   *  branco — um susto enorme por uma questão de implementação. Então, na primeira vez que uma
+   *  obra com cadastro é carregada sem cronograma gerado, o sistema gera uma vez sozinho, com o
+   *  cadastro que ela tem, e grava. Dali em diante vale a regra nova: só gera quando mandarem.
+   *
+   *  Isso não roda de novo depois, nem desfaz um "limpar": limpar grava {limpo:true}, que é
+   *  diferente de nunca ter gerado. Falhar aqui não pode derrubar a abertura da obra — no pior
+   *  caso a matriz mostra o botão de gerar, que é justamente o que se quer que ela mostre. */
+  async function autoPrimeiraVez(){
+    if(!autoLigado()||AUTO!==null||!selectedObra||!autoTemCadastro())return;
+    try{ await autoGerar(true); }catch(e){}
   }
 
   /* ---------- Retrato offline da obra (IndexedDB) ----------
@@ -1875,6 +1892,14 @@
           '<b>Manual</b>: o cronograma é <i>só</i> o que você desenhar. Lote que você não colocar não entra — e o aviso no topo diz quantas combinações lote × serviço ficaram de fora.'])+
       p('Trocar de um para o outro pergunta antes, porque muda o cronograma da obra inteira. No manual, o botão <b>Arrumar pendências</b> desliza para a primeira semana válida o que ficou fora de ordem.')+
       p('A <b>duração nunca é digitada</b>: é quantidade ÷ produtividade da equipe, corrigida pela chuva da semana. Para mudar a duração, mude a quantidade ou a produtividade.'))+
+    ajSecao('gerar','Por que a matriz não muda sozinha quando mudo o cadastro',
+      p('O cronograma automático é <b>gerado quando você manda</b>, pelo botão <b>⟳ Gerar cronograma</b>. Ele guarda o cadastro daquele momento — produtividade, nº de equipes, saldos, calendário e a sequência dos lotes — e a matriz passa a ser desenhada a partir desse retrato.')+
+      p('Mexer no cadastro depois disso <b>não refaz o plano</b>. Aparece o aviso <i>“o cadastro mudou depois que este cronograma foi gerado”</i>, e a matriz continua mostrando o cronograma que a obra combinou. Gerar de novo é decisão sua.')+
+      p('Antes era o contrário: qualquer mudança refazia tudo na hora, e o plano mudava debaixo de quem estava olhando — às vezes entre a reunião e o envio da programação.')+
+      ul(['O que você <b>fixa à mão</b> na matriz vale na hora, sem precisar gerar: ajuste é sobre o plano, não é cadastro.',
+          'Renomear um serviço ou trocar a cor dele não desatualiza nada — só entra no aviso o que o cálculo lê.',
+          '<b>↺ Limpar cronograma</b> apaga o cronograma gerado e os ajustes fixados; a matriz fica vazia até você gerar de novo. O cadastro, a linha de base e os cenários não são tocados.',
+          'Dentro de um <b>cenário em edição</b> o cálculo continua respondendo na hora a cada mudança — é lá que se testa premissa.']))+
     ajSecao('cenarios','Cenários e linha de base',
       p('Um cenário é uma <b>cópia completa</b> do momento: calendário, produtividade, número de equipes, saldos, orçamento e o desenho do Tempo-Caminho.')+
       ul(['<b>Ver</b> mostra o cenário na tela inteira, em só leitura — a moldura azul e o chip no topo dizem que você está nesse modo. Nada da obra é alterado.',
@@ -4123,9 +4148,12 @@
     var TB=[['modelo','Modelo','▤'],
       ['imp-xls','Importar Excel (tudo)','↥'],['imp-serv','Importar Serviços','↥'],['imp-lot','Importar Lotes','↥'],['imp-cal','Importar Calendário','↥'],
       ['imp-tc','Importar Tempo-Caminho','↥'],['imp-cronog','Importar Cronograma (Project)','↥'],
-      ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],['reset','Reiniciar exemplo','↺'],
+      ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],
       ['exp-dados','Exportar dados','↧'],['exp-cronog','Exportar Cronograma (Project)','↧'],['exp-xls','Exportar Excel','↧'],['exp-rel','Exportar relatório Excel','▦'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
-    var tb=TB.map(function(t){var cls=(t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn';
+    /* Gerar e limpar andam juntos e são o par que comanda o cronograma — ficam no começo da
+     * barra, antes dos importadores, porque é por eles que se passa primeiro. */
+    TB=[['gerar','Gerar cronograma','⟳'],['limpar','Limpar cronograma','↺']].concat(TB);
+    var tb=TB.map(function(t){var cls=(t[0]==='gerar')?'btn primary':((t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn');
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
 
@@ -14738,7 +14766,63 @@
     return refAtiva()?withSnapshot(snapRef(),function(){ return computeHistogramVivo(modo); })
                      :computeHistogramVivo(modo);
   }
+  /** O cronograma ao vivo da obra: o desenho do retrato gerado, não do cadastro de agora.
+   *
+   *  Dentro de um snapshot (linha de base, cenário) o retrato não se aplica — aquele estado já
+   *  é um congelamento completo, e sobrepor outro misturaria dois momentos da obra. Num cenário
+   *  em edição também não: ali se está justamente testando premissa, e o cálculo tem de
+   *  responder a cada mudança.
+   *
+   *  Sem nada gerado o retorno é vazio de propósito: a matriz aparece em branco com o botão de
+   *  gerar, em vez de inventar um plano que ninguém pediu. */
   function buildScheduleVivo(){
+    if(REF_DENTRO>0||ACTIVE_CENARIO||!autoLigado())return buildScheduleCalc();
+    var s=autoSnap();
+    return s?autoDesenha(s):[];
+  }
+  /** Desenha o retrato e devolve os segmentos já falando a língua da tela: `si` e `li` saem como
+   *  índices do SERV e do LOTS de AGORA, remapeados por id.
+   *
+   *  Os dois remapeamentos existem pelo mesmo motivo: índice é posição, e posição muda. Quem
+   *  reordenasse um serviço ou um lote depois de gerar veria o bloco pintado na linha do
+   *  vizinho — o cronograma certo, desenhado no lugar errado, que é pior que erro nenhum porque
+   *  parece plausível. A ordem dos lotes vai além disso: ela é a fila das equipes, então o
+   *  cálculo roda na ordem de quando se gerou, e não na de hoje. */
+  function autoDesenha(s){
+    var ordem=(Array.isArray(s.lotes)&&s.lotes.length)?s.lotes:null;
+    var vLOTS=LOTS, vIDS=window._LOTIDS||[], vQTY=QTY, vPAC=LOTE_PACOTE;
+    var mapaL=null, idsServ=null, segs;
+    try{
+      if(ordem){
+        var por={}; vIDS.forEach(function(id,i){ por[id]=i; });
+        var idx=[];
+        ordem.forEach(function(id){ if(por[id]!=null)idx.push(por[id]); });
+        // Lote criado depois da geração entra no fim: ele não estava na fila daquele plano.
+        vIDS.forEach(function(id,i){ if(ordem.indexOf(id)<0)idx.push(i); });
+        mapaL=idx;
+        LOTS=idx.map(function(i){ return vLOTS[i]; });
+        window._LOTIDS=idx.map(function(i){ return vIDS[i]; });
+        QTY=idx.map(function(i){ return vQTY[i]; });
+        if(Array.isArray(vPAC))LOTE_PACOTE=idx.map(function(i){ return vPAC[i]; });
+      }
+      segs=withSnapshot(s,function(){ idsServ=SERV.map(function(x){ return x.id; }); return buildScheduleCalc(); });
+    }finally{
+      LOTS=vLOTS; window._LOTIDS=vIDS; QTY=vQTY; LOTE_PACOTE=vPAC;
+    }
+    var posS={}; SERV.forEach(function(x,i){ posS[x.id]=i; });
+    var out=[];
+    segs.forEach(function(g){
+      var si=posS[idsServ[g.si]];
+      if(si==null)return;                          // serviço apagado depois da geração
+      var li=mapaL?mapaL[g.li]:g.li;
+      if(li==null)return;
+      if(si===g.si&&li===g.li){ out.push(g); return; }
+      var c={}; for(var k in g)c[k]=g[k];
+      c.si=si; c.li=li; out.push(c);
+    });
+    return out;
+  }
+  function buildScheduleCalc(){
     var segs=[], startByKey={}, endByKey={};
     // No modo manual o cronograma é SÓ o que foi desenhado: lote sem colocação não entra na
     // fila automática, senão o app voltaria a preencher sozinho o que o usuário deixou de fora.
@@ -15350,6 +15434,83 @@
       motor:MOTOR
     };
   }
+  /* ================= Cronograma gerado sob demanda =================
+   * O cronograma automático deixou de ser refeito a cada desenho da matriz. Agora ele é
+   * GERADO: guarda-se o retrato do cadastro no instante em que alguém mandou gerar, e a matriz
+   * passa a ser desenhada sempre a partir desse retrato. Mexer na produtividade, no saldo ou no
+   * calendário depois disso não muda mais o plano sozinho — aparece o aviso de que o cronograma
+   * está desatualizado, e gerar de novo é uma decisão de quem planeja.
+   *
+   * Guarda-se o retrato do CADASTRO, e não os blocos já desenhados, de propósito: o desenho
+   * continua saindo do motor de sempre — nada de um segundo caminho de cálculo para dar
+   * resultado diferente do primeiro — e os ajustes fixados na mão continuam entrando por cima e
+   * valendo na hora, porque ajustar a matriz é o que se faz DEPOIS de gerar. */
+  var AUTO=null;                 // {snap,em,por} · {limpo:true,em,por} · null = obra nunca gerou
+  var SEM_COL_CRONOAUTO=false;   // true enquanto a migração 40 não rodar
+  /** Enquanto a coluna não existe, tudo continua como era: cronograma ao vivo, recalculado
+   *  sempre. Vale mais isso que uma obra abrindo vazia por causa de migração pendente. */
+  function autoLigado(){ return !SEM_COL_CRONOAUTO; }
+  /** O retrato do cadastro que o cálculo consome. Sem o `ovr`: ajuste fixado não é cadastro. */
+  function autoCapturaCadastro(){
+    return {
+      feriados:JSON.parse(JSON.stringify(calData())),
+      servicos:SERV.map(function(s){return {id:s.id,nome:s.n,unidade:s.u,cor:s.hex,eq:s.eq,produtividade:s.p,lag:s.lag,config:JSON.parse(JSON.stringify(s.cfg||{}))};}),
+      quantidades:captureQuantidades(),
+      /* A sequência executiva dos lotes é a fila das equipes — entrada de cálculo como
+       * qualquer outra, e por isso entra no retrato. Guardada por id, não por posição. */
+      lotes:(window._LOTIDS||[]).slice(),
+      motor:MOTOR
+    };
+  }
+  /** Assinatura do retrato, para dizer se o cadastro andou desde a geração. Só entra o que o
+   *  cálculo lê: renomear um serviço ou trocar a cor dele não desatualiza cronograma nenhum, e
+   *  avisar que desatualizou nesses casos ensinaria a ignorar o aviso. */
+  function autoAssinatura(s){
+    if(!s)return '';
+    if(!s.lotes)s={servicos:s.servicos,quantidades:s.quantidades,feriados:s.feriados,motor:s.motor,lotes:(window._LOTIDS||[]).slice()};
+    var sv=(s.servicos||[]).map(function(x){
+      return [x.id,Math.max(1,parseInt(x.eq,10)||1),pnum(x.produtividade),parseInt(x.lag,10)||0,JSON.stringify(x.config||{})].join('|');
+    }).sort().join(';');
+    var q=Object.keys(s.quantidades||{}).sort().map(function(k){ return k+'='+orcNum(s.quantidades[k]); }).join(';');
+    var f=s.feriados||{};
+    var fer=(f.holidayWeeks||[]).slice().sort().join(',');
+    var ch=(f.rainPeriods||[]).map(function(p){ return JSON.stringify(p); }).sort().join(',');
+    /* A ordem dos lotes entra sem ordenar — aqui é justamente a ordem que importa. */
+    return [sv,q,fer,ch,(s.lotes||[]).join(','),(+s.motor||1)].join('#');
+  }
+  function autoSnap(){ return (AUTO&&AUTO.snap)?AUTO.snap:null; }
+  function autoGerado(){ return !!autoSnap(); }
+  /** O cadastro mudou depois da geração? */
+  function autoDesatualizado(){
+    var s=autoSnap();
+    return s?(autoAssinatura(s)!==autoAssinatura(autoCapturaCadastro())):false;
+  }
+  /** A matriz ao vivo está em branco por falta de GERAÇÃO — e não por falta de cadastro. */
+  function autoPrecisaGerar(){
+    if(!autoLigado()||CENARIO_VISTA||ACTIVE_CENARIO||autoGerado())return false;
+    return !refAtiva()||tcVistaAtual()==='plano';
+  }
+  /** Há cadastro suficiente para o cálculo dar alguma coisa? */
+  function autoTemCadastro(){
+    if(!LOTS.length||!SERV.length)return false;
+    return LOTS.some(function(_,li){ return SERV.some(function(_,si){ return orcNum((QTY[li]||[])[si])>0; }); });
+  }
+  async function autoGerar(silencioso){
+    if(!selectedObra)return;
+    var reg={snap:autoCapturaCadastro(),em:new Date().toISOString(),por:(window._MEU_NOME||'')};
+    await sbUpdateObra(selectedObra.id,{cronograma_auto:reg});
+    AUTO=reg;
+    if(!silencioso)toast('Cronograma gerado com o cadastro de agora.');
+  }
+  /** Apaga o cronograma gerado. Fica gravado que foi de propósito ({limpo:true}) — sem isso a
+   *  obra voltaria a parecer "nunca gerou" e o sistema geraria sozinho no próximo carregamento,
+   *  desfazendo em silêncio o que a pessoa acabou de mandar apagar. */
+  async function autoLimpar(){
+    if(!selectedObra)return;
+    var reg={limpo:true,em:new Date().toISOString(),por:(window._MEU_NOME||'')};
+    await sbUpdateObra(selectedObra.id,{cronograma_auto:reg});
+    AUTO=reg;
+  }
   /** Normaliza cenarios.ajustes_manuais: formato novo ({ovr,feriados,servicos}) ou o formato
    *  antigo (o próprio objeto de ajustes manuais, sem calendário/serviços — cenários criados
    *  antes dessa funcionalidade). */
@@ -15382,7 +15543,11 @@
     var savedOVR=OVR, savedSERV=SERV, savedFeriados=window._OBRA?window._OBRA.feriados:null;
     var savedQTY=QTY, savedMOTOR=MOTOR;
     MOTOR=(+snap.motor>0)?+snap.motor:1;
-    OVR=snap.ovr||{};
+    /* Retrato sem `ovr` — o do cronograma gerado — mantém os ajustes fixados de agora: pino é
+     * ajuste SOBRE o plano, não parte do retrato do cadastro, e zerá-lo aqui faria o ajuste
+     * sumir da matriz até a próxima geração. Cenário e linha de base passam por normalizeSnap,
+     * que sempre entrega um objeto, então para eles nada muda. */
+    if(snap.ovr)OVR=snap.ovr;
     if(snap.servicos&&snap.servicos.length){
       SERV=snap.servicos.map(function(sc){
         var orig=savedSERV.filter(function(x){return x.id===sc.id;})[0]||{};
@@ -25497,10 +25662,61 @@
   /** Barra do Tempo-Caminho automatico. Herdou do Ajuste manual, que saiu, a unica coisa que
    *  continuava sendo precisa ali: apagar os ajustes fixados. Sem isso um pino antigo ficaria
    *  valendo pra sempre, sem nenhuma tela que o mostre ou o remova. */
+  /** O estado do cronograma gerado, dito onde a matriz é olhada. São três recados possíveis, e
+   *  cada um existe por um motivo: que ainda não há cronograma (senão a grade vazia parece
+   *  defeito), que o cadastro andou desde a geração (senão a pessoa decide em cima de um plano
+   *  que já não corresponde ao que ela cadastrou), e, no caso tranquilo, de quando é o plano que
+   *  está na tela — uma linha discreta, que é o peso que a informação tem quando está tudo bem. */
+  function autoEstadoHTML(){
+    if(CENARIO_VISTA||ACTIVE_CENARIO)return '';
+    if(!autoLigado())
+      return '<div class="banner" style="margin-bottom:10px;border-color:var(--crit)">'+
+        'A coluna <b>cronograma_auto</b> ainda não existe no banco. Rode <b>sql/40_cronograma_auto.sql</b> '+
+        'no Supabase para o cronograma passar a ser gerado sob demanda. Até lá ele continua sendo '+
+        'refeito a cada mudança de cadastro, como antes.</div>';
+    var pode=!isReadOnly()&&!matBloqueada();
+    /* O banner é estreito e o texto é longo: o botão na mesma linha era espremido até quebrar
+     * no meio da palavra. Linha própria, e sem deixar o rótulo partir. */
+    var btn=function(rot){
+      return pode?('<div style="margin-top:9px"><button class="btn" id="autoGerarBtn" '+
+        'style="padding:4px 12px;font-size:11.5px;white-space:nowrap">⟳ '+rot+'</button></div>'):'';
+    };
+    if(!autoGerado())return '';   // a tela inteira já é o aviso — ver autoVazioHTML()
+    if(autoDesatualizado())
+      return '<div class="banner" style="margin-bottom:10px;border-color:var(--warn)">'+
+        '<b>O cadastro mudou depois que este cronograma foi gerado.</b> Produtividade, nº de equipes, '+
+        'saldo ou calendário estão diferentes do que valia na geração. A matriz continua mostrando o '+
+        'cronograma gerado — é ele que a obra combinou — e só passa a valer o cadastro novo quando você mandar.'+
+        btn('Gerar de novo')+'</div>';
+    var em=AUTO&&AUTO.em?fmtDate(new Date(AUTO.em)):'';
+    var por=(AUTO&&AUTO.por)?(' por '+escAttr(AUTO.por)):'';
+    /* Está tudo certo: uma linha, e o botão ao lado dela mesmo — aqui ele é oferta, não recado. */
+    return '<div class="note" style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+      '<span>Cronograma gerado'+(em?(' em <b>'+em+'</b>'):'')+por+' — o cadastro de hoje bate com o que foi usado aqui.</span>'+
+      (pode?'<button class="btn" id="autoGerarBtn" style="padding:3px 10px;font-size:11.5px;white-space:nowrap">⟳ Gerar de novo</button>':'')+
+      '</div>';
+  }
+  /** A matriz sem cronograma. Uma grade em branco pareceria defeito, e um cálculo feito sozinho
+   *  seria exatamente o que se quis tirar: então a tela diz o que falta e oferece o botão. */
+  function autoVazioHTML(){
+    var temCad=autoTemCadastro();
+    return '<div class="card" style="text-align:center;padding:40px 22px">'+
+      '<div style="font-size:32px;opacity:.3;margin-bottom:12px">▦</div>'+
+      '<div style="font-size:17px;font-weight:650;margin-bottom:10px">Esta obra ainda não tem cronograma gerado</div>'+
+      '<div class="note" style="max-width:640px;margin:0 auto 18px">'+(temCad
+        ? 'O cadastro está todo aqui — serviços, lotes, quantidades e calendário continuam guardados, nada se perdeu. '+
+          'O que não existe ainda é o desenho: o cronograma passou a ser gerado quando você manda, e não sozinho a cada mudança.'
+        : 'Antes de gerar, cadastre os <b>serviços</b> (com produtividade por semana e número de equipes) e os '+
+          '<b>lotes</b> com as quantidades. Sem quantidade e produtividade não há duração para calcular.')+'</div>'+
+      ((temCad&&!isReadOnly()&&!matBloqueada())
+        ?'<button class="btn primary" id="autoGerarBtn" style="padding:10px 20px">⟳ Gerar cronograma automático</button>'
+        :'')+'</div>';
+  }
   function tcAutoBarraHTML(){
-    if(isReadOnly())return '';
+    var estado=autoEstadoHTML();
+    if(isReadOnly())return estado;
     var temAjuste=Object.keys(OVR||{}).some(function(k){ return k.indexOf('__')!==0; });
-    return '<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">'+undoBotoesHTML()+
+    return estado+'<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">'+undoBotoesHTML()+
       ((temAjuste&&!matBloqueada())
         ?'<button class="btn" id="clearAdjustsBtn" title="Apaga os ajustes fixados e devolve tudo ao cálculo automático">↺ Limpar ajustes</button>'
         :'')+
@@ -25516,6 +25732,9 @@
      * devolveria o espaco que se acabou de ganhar. */
     var avFalta=(document.body.classList.contains('mat-fullscreen')&&(window._cronoTab||'tc')==='tc')
       ?'':tcmAvisoFaltaHTML();
+    /* Sem cronograma gerado não há o que desenhar no Tempo-Caminho ao vivo. Vale só para ele:
+     * linha de base e cenário carregam plano próprio e continuam aparecendo normalmente. */
+    if(tab==='tc'&&autoPrecisaGerar())return fsBarHTML()+autoVazioHTML();
     /* A vista "Linha de base" é o retrato congelado, e isso vale TAMBÉM no modo manual. Antes a
      * prancheta de desenho vinha primeiro na ordem, então escolher "Linha de base" com o modo
      * manual ligado abria o editor, com as pendências do rascunho por cima. Retrato não se
@@ -25633,6 +25852,8 @@
         }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); sv.disabled=false; }
       });
     }
+    var gerB=document.getElementById('autoGerarBtn');
+    if(gerB)gerB.addEventListener('click',autoGerarClicado);
     var clearB=document.getElementById('clearAdjustsBtn');
     if(clearB)clearB.addEventListener('click',function(){
       if(!confirm('Remover todos os ajustes fixados deste cronograma?'+String.fromCharCode(10)+String.fromCharCode(10)+
@@ -26285,6 +26506,8 @@
         if(a==='imp-serv'){pickExcelFile(function(file){readWorkbookFile(file).then(importOnlyServicos).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-lot'){pickExcelFile(function(file){readWorkbookFile(file).then(importOnlyLotes).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
         if(a==='imp-cal'){pickExcelFile(function(file){readWorkbookFile(file).then(importOnlyCalendario).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});return;}
+        if(a==='gerar'){autoGerarClicado();return;}
+        if(a==='limpar'){autoLimparClicado();return;}
         if(a==='rev00'){gerarLinhaDeBase(captureLiveSnapshot(),null);return;}
         if(a==='imp-mpp'||a==='imp-img'){toast(b.getAttribute('data-label')+' — ainda não implementado nesta etapa.');return;}
         toast(b.getAttribute('data-label')+' — função do app (mockup visual)');
@@ -26311,6 +26534,45 @@
       toast('Alterações salvas no cenário "'+ACTIVE_CENARIO.nome+'".');
       go(current);
     }catch(e){ alert('Falha ao salvar no cenário: '+((e&&e.message)||e)); }
+  }
+  async function autoGerarClicado(){
+    var NL=String.fromCharCode(10);
+    if(!autoLigado()){ alert('Rode a migração sql/40_cronograma_auto.sql no Supabase antes de usar isto.'); return; }
+    if(matBloqueada()){ toast('A matriz está travada pela linha de base — destrave ali em cima para gerar.'); return; }
+    if(!autoTemCadastro()){ alert('Não há o que calcular ainda: cadastre serviços com produtividade e lotes com quantidade.'); return; }
+    /* Gerar por cima de um cronograma que a obra já está usando refaz o plano inteiro — isso se
+     * pergunta antes. Gerar o primeiro não desfaz nada de ninguém, e perguntar ali só atrasaria. */
+    if(autoGerado()&&!confirm('Gerar o cronograma de novo, com o cadastro de agora?'+NL+NL+
+      'O plano é recalculado do zero, e as datas podem mudar. Os ajustes que você fixou na matriz continuam valendo por cima.'))return;
+    var b=document.getElementById('autoGerarBtn');
+    if(b){ b.disabled=true; b.textContent='Gerando…'; }
+    try{ await autoGerar(false); go(current); }
+    catch(e){
+      alert('Falha ao gerar o cronograma: '+((e&&e.message)||e));
+      if(b){ b.disabled=false; b.textContent='⟳ Gerar cronograma'; }
+    }
+  }
+  async function autoLimparClicado(){
+    var NL=String.fromCharCode(10);
+    if(!autoLigado()){ alert('Rode a migração sql/40_cronograma_auto.sql no Supabase antes de usar isto.'); return; }
+    if(matBloqueada()){ toast('A matriz está travada pela linha de base — destrave ali em cima para limpar.'); return; }
+    if(!autoGerado()){ toast('Não há cronograma gerado para limpar.'); return; }
+    if(!confirm('Limpar o cronograma desta obra?'+NL+NL+
+      'A matriz fica vazia até você mandar gerar de novo, e os ajustes fixados na matriz são apagados junto. '+
+      'O cadastro não é tocado: serviços, lotes, quantidades e calendário continuam como estão. '+
+      'A linha de base e os cenários também ficam intactos.'))return;
+    try{
+      await autoLimpar();
+      /* Ajuste fixado é ajuste SOBRE um plano. Sem plano ele não quer dizer nada, e sobreviveria
+       * escondido para reaparecer deslocado na próxima geração. As chaves com "__" ficam: elas
+       * guardam o modo do cronograma e a liberação da matriz, não ajuste de ninguém. */
+      Object.keys(OVR).forEach(function(k){ if(k.indexOf('__')!==0)delete OVR[k]; });
+      ADJ_PENDING={};
+      await saveOverrides();
+      ADJ_DIRTY=false;
+      toast('Cronograma limpo. A matriz espera você mandar gerar.');
+      go(current);
+    }catch(e){ alert('Falha ao limpar o cronograma: '+((e&&e.message)||e)); }
   }
   /** Sai do modo "editando cenário" e recarrega o cronograma ao vivo real da obra (ajustes,
    *  calendário e serviços), descartando o que veio do cenário. */
@@ -26707,6 +26969,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
   (async function boot(){
     if(!SB){ showAuth(); return; }
