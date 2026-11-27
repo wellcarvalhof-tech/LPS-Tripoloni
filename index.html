@@ -155,6 +155,10 @@
   .kpis .kpi .lab{font-size:9.5px}
   .kpis .kpi .val{font-size:19px;margin-top:4px}
   .kpis .kpi .foot{font-size:10px;margin-top:3px;line-height:1.3}
+  /* Barra do cartao do retigrafico: a cor e o executado, o tracinho e onde o plano estaria. */
+  .reti-bar{position:relative;height:6px;border-radius:4px;background:var(--elev);margin-top:5px}
+  .reti-bar>i{display:block;height:100%;border-radius:4px}
+  .reti-bar>b{position:absolute;top:-3px;width:2px;height:12px;background:var(--ink);border-radius:1px}
   .cv-compact .kpi{padding:8px 11px}
   .cv-compact .kpi .lab{font-size:10px}
   .cv-compact .kpi .val{font-size:19px;margin-top:3px}
@@ -3737,7 +3741,7 @@
    *
    * O previsto sai da cubação cadastrada por estaca. O realizado ainda não entra: quando o
    * apontamento por estaca estiver ligado, cada faixa ganha a barra de avanço por cima. */
-  var RETI={passo:'km',de:null,ate:null};   // passo: 'km' | 'estaca'
+  var RETI={passo:'km',de:null,ate:null,modo:'etapa',sem:null,play:null};
   var RETI_FAIXAS=[
     {id:'corte',  rot:'Corte',   campo:'corte',   cor:'--c1'},
     {id:'rebaixo',rot:'Rebaixo', campo:'reb',     cor:'--c5'},
@@ -3767,80 +3771,326 @@
   function retiRotulo(m,passoM){
     return (passoM>=1000)?('km '+Math.round(m/1000)):massaEstaca(m);
   }
-  function retiSVG(el,R){
-    if(!el)return;
-    if(R.vazio){ el.setAttribute('viewBox','0 0 1060 80');
-      el.innerHTML='<text class="axm" x="530" y="44" text-anchor="middle">Sem volume cadastrado por estaca — importe a cubação em Cadastro → Quantidades.</text>'; return; }
-    var n=R.celulas.length;
-    var W=1060, pl=92, pr=20, pt=28, hF=30, gapF=8, pb=46;
-    var H=pt+R.faixas.length*(hF+gapF)+pb;
-    var iw=W-pl-pr;
-    el.setAttribute('viewBox','0 0 '+W+' '+H);
-    var bw=iw/Math.max(1,n);
-    var s='';
-    /* Uma escala por faixa: corte e aterro vivem em ordens de grandeza diferentes, e uma escala
-     * comum apagaria a faixa menor. O numero no fim da faixa diz qual e o maximo dela. */
-    R.faixas.forEach(function(F,fi){
-      var y=pt+fi*(hF+gapF);
-      var max=0; R.celulas.forEach(function(c){ max=Math.max(max,c[F.campo]); });
-      var cor=cssHex(F.cor)||'#888';
-      s+='<text class="axlab" x="'+(pl-8)+'" y="'+(y+hF/2+4)+'" text-anchor="end">'+F.rot+'</text>';
-      s+='<rect x="'+pl+'" y="'+y+'" width="'+iw+'" height="'+hF+'" fill="var(--elev)" stroke="var(--line)"/>';
-      R.celulas.forEach(function(c,i){
-        var v=c[F.campo];
-        if(!(v>0))return;
-        var h=Math.max(1.5,hF*v/(max||1));
-        s+='<rect x="'+(pl+i*bw).toFixed(1)+'" y="'+(y+hF-h).toFixed(1)+'" width="'+Math.max(0.6,bw-0.6).toFixed(1)+
-           '" height="'+h.toFixed(1)+'" fill="'+cor+'"><title>'+retiRotulo(c.x,R.passoM)+' · '+F.rot+': '+fmtBR(Math.round(v))+' m³'+
-           (c.n?('\n'+c.n+' estaca(s)'):'')+'</title></rect>';
+  /* ---------- o eixo do traçado ----------
+   * O retigráfico de serviços não precisa de cubação: ele precisa saber ONDE cada lote está no
+   * estaqueamento, e isso massasDados() já devolve (km de projeto do lote + comprimento). Só o
+   * diagrama de volumes depende das estacas. Por isso a tela passa a abrir com qualquer obra que
+   * tenha lotes medidos, e não só com a cubação importada. */
+  function retiEixo(){
+    var D=massasDados();
+    var todos=(D.lotes||[]).filter(function(L){ return L.x1>L.x0; });
+    if(!todos.length)return null;
+    var ini=Infinity, fim=-Infinity;
+    todos.forEach(function(L){ ini=Math.min(ini,L.x0); fim=Math.max(fim,L.x1); });
+    if(D.pts.length){ ini=D.x0win; fim=D.x1win; }
+    else{
+      if(MASSAS.de!=null)ini=Math.max(ini,MASSAS.de);
+      if(MASSAS.ate!=null)fim=Math.min(fim,MASSAS.ate);
+    }
+    if(!(fim>ini))return null;
+    var lotes=[];
+    todos.forEach(function(L){
+      if(L.x1<=ini||L.x0>=fim)return;
+      lotes.push({li:L.li,o0:L.x0,o1:L.x1,x0:Math.max(L.x0,ini),x1:Math.min(L.x1,fim)});
+    });
+    if(!lotes.length)return null;
+    return {D:D,lotes:lotes,x0:ini,x1:fim};
+  }
+  /* ---------- previsto e realizado, semana a semana ----------
+   * Previsto sai do cronograma de referência (o mesmo que a matriz e a Curva S leem); realizado
+   * sai dos apontamentos da Produção Diária. Os dois viram acumulado por serviço × lote × semana,
+   * e a tela lê a coluna da semana onde o cursor está. */
+  function retiAcumulado(){
+    var semDa=mapaSemanaPorData(520);
+    var prev={}, real={}, maxW=1;
+    function cel(o,k,w){ var a=o[k]||(o[k]=[]); a[w]=(a[w]||0); return a; }
+    viewSegs(buildSchedule()).forEach(function(sg){
+      var k=sg.si+'::'+sg.li;
+      for(var i=0;i<sg.dur;i++){
+        var w=sg.start+i;
+        var a=cel(prev,k,w); a[w]+=sg.wq[i]||0;
+        if(w>maxW)maxW=w;
+      }
+    });
+    var liDe={}; (window._LOTIDS||[]).forEach(function(id,li){ liDe[id]=li; });
+    var siDe={}; SERV.forEach(function(s,si){ siDe[s.id]=si; });
+    (window.PROD_LIST||[]).forEach(function(r){
+      var li=liDe[r.loteId], si=siDe[r.servId];
+      if(li==null||si==null||!lotInView(li))return;
+      var w=semDa(r.data); if(!w)return;
+      var a=cel(real,si+'::'+li,w); a[w]+=r.qtd||0;
+      if(w>maxW)maxW=w;
+    });
+    function soma(o){
+      Object.keys(o).forEach(function(k){
+        var a=o[k], s=0;
+        for(var w=1;w<=maxW;w++){ s+=a[w]||0; a[w]=s; }
       });
-      s+='<text class="axm" x="'+(W-pr+2)+'" y="'+(y+10)+'">'+fmtBR(Math.round(max))+'</text>';
-      s+='<text class="axm" x="'+(W-pr+2)+'" y="'+(y+hF)+'">0</text>';
+    }
+    soma(prev); soma(real);
+    return {prev:prev,real:real,tw:maxW,mondays:mondaysDoPlano(maxW)};
+  }
+  /** A semana do plano em que estamos hoje (limitada ao horizonte). */
+  function retiSemanaHoje(tw){
+    var w=mapaSemanaPorData(520)(new Date().toISOString().slice(0,10));
+    return Math.max(1,Math.min(tw,w||tw));
+  }
+  function retiSemana(tw){
+    var s=(RETI.sem==null)?retiSemanaHoje(tw):RETI.sem;
+    return Math.max(1,Math.min(tw,s));
+  }
+  /** A etapa (item de nível 1 da EAP) a que o serviço pertence. */
+  function retiEtapaDe(svcId){
+    var itens=(EAP&&EAP.itens)||[], it=null;
+    itens.forEach(function(x){ if(!it&&x.svc===svcId)it=x; });
+    if(!it)return null;
+    var raiz=String(it.cod).split('.')[0], g=null;
+    itens.forEach(function(x){ if(!g&&String(x.cod)===raiz)g=x; });
+    return {cod:raiz,ord:(isNaN(+raiz)?900:+raiz),nome:(g&&g.nome)||('Grupo '+raiz),item:it.cod};
+  }
+  /** As linhas do retigráfico: uma por etapa (leitura da obra) ou uma por serviço (detalhe). */
+  function retiLinhas(){
+    var ordDe=function(si){
+      var e=retiEtapaDe(SERV[si].id);
+      if(!e)return 9999;
+      var p=String(e.item).split('.');
+      return (+p[0]||900)*1000+(+(p[1]||0));
+    };
+    if(RETI.modo==='servico'){
+      return SERV.map(function(s,si){ return {nome:s.n,cor:svcColor(s),sis:[si],ord:ordDe(si)}; })
+        .sort(function(a,b){ return a.ord-b.ord; });
+    }
+    var por={}, ordem=[];
+    SERV.forEach(function(s,si){
+      var e=retiEtapaDe(s.id)||{cod:'zz',ord:900,nome:macroDe(s)||'Outros serviços'};
+      if(!por[e.cod]){ por[e.cod]={nome:e.nome,cor:svcColor(s),sis:[],ord:e.ord}; ordem.push(e.cod); }
+      por[e.cod].sis.push(si);
     });
-    // eixo: rótulos que couberem, sem encostar
-    var yE=pt+R.faixas.length*(hF+gapF)+4, ultimo=-1e9;
-    R.celulas.forEach(function(c,i){
-      var rot=retiRotulo(c.x,R.passoM), larg=rot.length*5.6+10, cx=pl+i*bw+bw/2;
-      if(cx-larg/2<ultimo+6)return;
-      ultimo=cx+larg/2;
-      s+='<line x1="'+cx.toFixed(1)+'" y1="'+(yE-4)+'" x2="'+cx.toFixed(1)+'" y2="'+(yE)+'" stroke="var(--line)"/>'+
-         '<text class="axm" x="'+cx.toFixed(1)+'" y="'+(yE+12)+'" text-anchor="middle">'+rot+'</text>';
+    return ordem.map(function(k){ return por[k]; }).sort(function(a,b){ return a.ord-b.ord; });
+  }
+  /** Quanto desta linha, neste lote, está previsto e realizado na semana w — em fração do que o
+   *  lote tem cadastrado. Lote sem quantidade nenhuma devolve null: ali o serviço não existe, e
+   *  faixa pintada de cinza seria dizer que existe e não começou. */
+  function retiFracao(L,li,A,w){
+    var qt=0, pr=0, re=0;
+    L.sis.forEach(function(si){
+      var q=orcNum((QTY[li]||[])[si])||0;
+      if(!(q>0))return;
+      qt+=q;
+      var ap=A.prev[si+'::'+li], ar=A.real[si+'::'+li];
+      pr+=Math.min(q,(ap&&ap[w])||0);
+      re+=Math.min(q,(ar&&ar[w])||0);
     });
-    s+='<text class="axm" x="'+pl+'" y="'+(H-6)+'">'+massaEstaca(R.x0)+'</text>';
-    s+='<text class="axm" x="'+(W-pr)+'" y="'+(H-6)+'" text-anchor="end">'+massaEstaca(R.x1)+'</text>';
+    if(!(qt>0))return null;
+    return {qt:qt,prev:Math.max(0,Math.min(1,pr/qt)),real:Math.max(0,Math.min(1,re/qt))};
+  }
+  function retiPct(L,E,A,w){
+    var qt=0, pr=0, re=0;
+    E.lotes.forEach(function(lo){
+      var f=retiFracao(L,lo.li,A,w);
+      if(!f)return;
+      qt+=f.qt; pr+=f.prev*f.qt; re+=f.real*f.qt;
+    });
+    return {qt:qt,prev:qt>0?Math.round(pr/qt*100):0,real:qt>0?Math.round(re/qt*100):0};
+  }
+  /* ---------- desenho ---------- */
+  function retiProdSVG(el,E,A,w){
+    if(!el)return;
+    var linhas=retiLinhas();
+    var W=1060, pl=186, pr=26, pt=26, hF=(RETI.modo==='servico')?17:26, gap=5, pb=34;
+    var H=pt+linhas.length*(hF+gap)+pb;
+    var iw=W-pl-pr, ext=E.x1-E.x0;
+    var X=function(m){ return pl+iw*(m-E.x0)/(ext||1); };
+    el.setAttribute('viewBox','0 0 '+W+' '+H);
+    var s='';
+    /* Régua em km: a mesma do diagrama de volumes logo acima, para a leitura ser de cima a
+     * baixo na mesma posição do traçado. */
+    var passo=Math.max(1000,Math.pow(10,Math.round(Math.log(ext/12000)/Math.LN10))*1000);
+    for(var m=Math.ceil(E.x0/passo)*passo;m<=E.x1;m+=passo){
+      s+='<line x1="'+X(m).toFixed(1)+'" y1="'+(pt-6)+'" x2="'+X(m).toFixed(1)+'" y2="'+(H-pb+6)+'" stroke="var(--line)" stroke-dasharray="2 4"/>'+
+         '<text class="axm" x="'+X(m).toFixed(1)+'" y="'+(H-pb+20)+'" text-anchor="middle">km '+Math.round(m/1000)+'</text>';
+    }
+    linhas.forEach(function(L,fi){
+      var y=pt+fi*(hF+gap), bh=hF-3;
+      var p=retiPct(L,E,A,w);
+      var dif=p.real-p.prev;
+      var corDif=dif<-2?'var(--crit)':(dif>2?'var(--good)':'var(--muted)');
+      /* O rótulo é cortado no que cabe à esquerda: nome comprido escrito por inteiro saía do
+       * quadro e aparecia pela metade. O nome inteiro fica no title. */
+      var rot=String(L.nome||'');
+      var lim=(RETI.modo==='servico')?26:22;
+      s+='<text class="axlab" x="'+(pl-30)+'" y="'+(y+bh/2+4)+'" text-anchor="end">'+
+         escAttr(rot.length>lim?(rot.slice(0,lim-1)+'…'):rot)+'<title>'+escAttr(rot)+'</title></text>';
+      s+='<text class="axm" x="'+(pl-6)+'" y="'+(y+bh/2+4)+'" text-anchor="end" fill="'+corDif+'">'+p.real+'%</text>';
+      E.lotes.forEach(function(lo){
+        var f=retiFracao(L,lo.li,A,w);
+        if(!f)return;
+        var a=X(lo.x0), b=X(lo.x1);
+        /* trilho do lote: onde o serviço existe e ainda não chegou */
+        s+='<rect x="'+a.toFixed(1)+'" y="'+y+'" width="'+Math.max(1,b-a).toFixed(1)+'" height="'+bh+
+           '" fill="var(--elev)" stroke="var(--line)" stroke-width="0.4"/>';
+        var larg=X(lo.o1)-X(lo.o0);
+        var xr=X(lo.o0)+larg*f.real;
+        var xp=X(lo.o0)+larg*f.prev;
+        var atraso=Math.round((f.real-f.prev)*100);
+        var dica=escAttr(L.nome+' · '+LOTS[lo.li]+'\nrealizado '+Math.round(f.real*100)+'% · previsto '+
+                 Math.round(f.prev*100)+'%\n'+(atraso<0?(-atraso+' pontos atrás do plano'):(atraso>0?(atraso+' pontos à frente'):'em dia'))+
+                 '\nsemana '+w);
+        if(f.real>0){
+          var x1r=Math.min(b,Math.max(a,xr));
+          if(x1r>a)s+='<rect x="'+a.toFixed(1)+'" y="'+y+'" width="'+(x1r-a).toFixed(1)+'" height="'+bh+
+            '" fill="'+L.cor+'" fill-opacity="'+(f.real>=0.999?'1':'0.45')+'"><title>'+dica+'</title></rect>';
+        }
+        /* o plano, por cima: onde o cronograma dizia que a frente estaria nesta semana */
+        if(f.prev>0&&xp>=a-0.5&&xp<=b+0.5){
+          s+='<line x1="'+xp.toFixed(1)+'" y1="'+(y-1)+'" x2="'+xp.toFixed(1)+'" y2="'+(y+bh+1)+
+             '" stroke="var(--ink)" stroke-width="1.6" stroke-dasharray="3 2"><title>'+dica+'</title></line>';
+        }
+        if(f.real<=0&&f.prev<=0){
+          s+='<rect x="'+a.toFixed(1)+'" y="'+y+'" width="'+Math.max(1,b-a).toFixed(1)+'" height="'+bh+
+             '" fill="transparent"><title>'+dica+'</title></rect>';
+        }
+      });
+    });
     el.innerHTML=s;
+  }
+  /* O diagrama de volumes do modelo: corte para cima, aterro para baixo, no MESMO eixo das
+   * faixas. O tom claro é o volume cadastrado; o escuro é a parte que já foi executada na
+   * semana em que o cursor está — lida do avanço do serviço de corte e do de aterro. */
+  function retiVolSVG(el,E,A,w){
+    if(!el)return;
+    var R=retiDados();
+    if(R.vazio||!R.celulas.length){
+      el.setAttribute('viewBox','0 0 1060 40');
+      el.innerHTML='<text class="axm" x="530" y="24" text-anchor="middle">Sem cubação por estaca — o diagrama de volumes aparece depois de importar as estacas em Cadastro → Quantidades.</text>';
+      return;
+    }
+    var W=1060, pl=186, pr=26, VH=170, padT=18, padB=16;
+    var iw=W-pl-pr, ext=E.x1-E.x0, half=(VH-padT-padB)/2, yMid=padT+half;
+    /* As células do volume comecam no km cheio, que pode cair antes do inicio do recorte; sem
+     * prender o x dentro do quadro, a area vazava para cima do rotulo. */
+    var X=function(m){ return Math.max(pl,Math.min(W-pr,pl+iw*(m-E.x0)/(ext||1))); };
+    el.setAttribute('viewBox','0 0 '+W+' '+VH);
+    var max=1; R.celulas.forEach(function(c){ max=Math.max(max,c.corte+(MASSAS.rebaixo?c.reb:0),c.aterro); });
+    var yUp=function(v){ return yMid-half*v/max; }, yDn=function(v){ return yMid+half*v/max; };
+    /* a fração executada de cada lote, para corte e para aterro */
+    var siC=MASSAS.corteSi, siA=MASSAS.aterroSi;
+    var frDe=function(si,li){
+      if(si==null||!SERV[si])return 0;
+      var f=retiFracao({sis:[si]},li,A,w);
+      return f?f.real:0;
+    };
+    var corte=cssHex('--c1')||'#b06a3b', aterro=cssHex('--c2')||'#3a51a3';
+    function area(valor,yf,cor,op){
+      var d='M '+X(R.celulas[0].x).toFixed(1)+' '+yMid.toFixed(1);
+      R.celulas.forEach(function(c){ d+=' L '+X(c.x).toFixed(1)+' '+yf(valor(c)).toFixed(1); });
+      var ult=R.celulas[R.celulas.length-1];
+      d+=' L '+X(ult.x+R.passoM).toFixed(1)+' '+yf(valor(ult)).toFixed(1)+
+         ' L '+X(ult.x+R.passoM).toFixed(1)+' '+yMid.toFixed(1)+' Z';
+      return '<path d="'+d+'" fill="'+cor+'" fill-opacity="'+op+'"/>';
+    }
+    /* Executado é posição, não altura: a parte escura cobre o TRECHO já feito, do começo do lote
+     * até onde o avanço chegou — a mesma convenção das faixas logo abaixo. Escurecer a área
+     * inteira pela metade diria "metade de cada corte", que não é o que acontece em campo. */
+    var loteDe={}; E.lotes.forEach(function(lo){ loteDe[lo.li]=lo; });
+    var exec=function(c,si){
+      var lis=Object.keys(c.lotes);
+      if(!lis.length)return 0;
+      var meio=c.x+R.passoM/2, feito=0;
+      lis.forEach(function(li){
+        var lo=loteDe[+li]; if(!lo)return;
+        var fr=frDe(si,+li);
+        if(fr>0&&meio<=lo.o0+fr*((lo.o1-lo.o0)||1))feito++;
+      });
+      return feito?1:0;
+    };
+    var s='';
+    s+=area(function(c){ return c.corte+(MASSAS.rebaixo?c.reb:0); },yUp,corte,'0.35');
+    s+=area(function(c){ return (c.corte+(MASSAS.rebaixo?c.reb:0))*exec(c,siC); },yUp,corte,'0.95');
+    s+=area(function(c){ return c.aterro; },yDn,aterro,'0.35');
+    s+=area(function(c){ return c.aterro*exec(c,siA); },yDn,aterro,'0.95');
+    s+='<line x1="'+pl+'" y1="'+yMid+'" x2="'+(W-pr)+'" y2="'+yMid+'" stroke="var(--crit)" stroke-width="1.6"/>';
+    s+='<text class="axm" x="'+(pl-6)+'" y="'+(padT+8)+'" text-anchor="end">'+fmtBR(Math.round(max))+' m³ corte</text>';
+    s+='<text class="axm" x="'+(pl-6)+'" y="'+(yMid+4)+'" text-anchor="end">0</text>';
+    s+='<text class="axm" x="'+(pl-6)+'" y="'+(VH-padB+4)+'" text-anchor="end">'+fmtBR(Math.round(max))+' m³ aterro</text>';
+    el.innerHTML=s;
+  }
+  /** Um cartão por etapa: executado em número grande, o plano como traço na barra. Ver os dois
+   *  no mesmo lugar é o que transforma "67%" em "67%, e devia estar em 80%". */
+  function retiCard(nome,cor,real,prev,pe){
+    var dif=real-prev;
+    return '<div class="kpi"><div class="stripe" style="background:'+cor+'"></div>'+
+      '<div class="lab">'+escAttr(nome)+'</div><div class="val num">'+real+'%</div>'+
+      '<div class="reti-bar"><i style="width:'+Math.max(0,Math.min(100,real))+'%;background:'+cor+'"></i>'+
+      '<b style="left:'+Math.max(0,Math.min(100,prev))+'%"></b></div>'+
+      '<div class="foot">plano '+prev+'%'+(pe?(' · '+pe):'')+' · <span style="color:var('+
+      (dif<-2?'--crit':(dif>2?'--good':'--muted'))+')">'+(dif>0?'+':'')+dif+' pts</span></div></div>';
+  }
+  function retiResumoHTML(E,A,w){
+    var tot={qt:0,pr:0,re:0};
+    var cards=retiLinhas().map(function(L){
+      var p=retiPct(L,E,A,w);
+      if(!p.qt)return '';
+      tot.qt+=p.qt; tot.pr+=p.prev*p.qt; tot.re+=p.real*p.qt;
+      return retiCard(L.nome,L.cor,p.real,p.prev,'');
+    }).join('');
+    var gr=tot.qt>0?Math.round(tot.re/tot.qt):0, gp=tot.qt>0?Math.round(tot.pr/tot.qt):0;
+    return retiCard('Obra executada',cssHex('--accent')||'#3b82f6',gr,gp,'semana '+w)+cards;
   }
   function retiHTML(){
     massaInit();
-    var ids=(window._LOTIDS||[]), carregados=ids.filter(function(id){ return !!ESTACAS[id]; }).length;
+    var ids=(window._LOTIDS||[]);
     var btn=function(v,rot,dica){
-      return '<button class="subtab'+(RETI.passo===v?' active':'')+'" data-retipasso="'+v+'" title="'+escAttr(dica)+'">'+rot+'</button>';
+      return '<button class="subtab'+(RETI.modo===v?' active':'')+'" data-retimodo="'+v+'" title="'+escAttr(dica)+'">'+rot+'</button>';
     };
     var barra='<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">'+
-      '<span class="note" style="margin:0">Agrupar por</span>'+
+      '<span class="note" style="margin:0">Faixas por</span>'+
       '<div style="display:flex;gap:4px">'+
-        btn('km','Quilômetro','Uma coluna por km — a leitura da obra inteira')+
-        btn('estaca','Estaca','Uma coluna por estaca do projeto — use com o recorte de trecho')+
+        btn('etapa','Etapa','Uma faixa por macrofluxo da EAP — a leitura da obra')+
+        btn('servico','Serviço','Uma faixa por serviço do Tempo-Caminho — o detalhe')+
       '</div>'+
       '<div class="field" style="margin:0"><label>Trecho</label>'+
         '<select class="inp" id="retiTrecho" style="width:200px">'+msTrechoOpts()+'</select></div>'+
       ((MASSAS.de!=null||MASSAS.ate!=null)?'<button class="btn" id="retiTudo" style="margin-top:14px">↺ Obra inteira</button>':'')+
       '</div>'+
-      '<div class="note" style="margin-top:8px">O traçado esticado: cada faixa é um serviço, e a altura em cada posição é o volume previsto ali. '+
-      'O previsto sai da cubação cadastrada por estaca (<b>Cadastro → Quantidades</b>). '+
-      'O <b>realizado</b> ainda não entra — vai aparecer como barra de avanço sobre cada faixa quando o apontamento por estaca estiver ligado.</div></div>';
+      '<div class="note" style="margin-top:8px">O traçado esticado: cada faixa é um serviço (ou uma etapa) e o preenchimento é <b>o que já foi apontado</b> na Produção Diária até a semana do cursor — cor cheia quando o lote está concluído, clara enquanto está em andamento. '+
+      'O <b>tracejado</b> é onde o cronograma dizia que a frente estaria nessa mesma semana: tracejado à frente da cor é atraso, atrás é adianto. '+
+      'O avanço dentro de um lote é proporcional à quantidade apontada — o apontamento é por lote, então a leitura é tão fina quanto os lotes forem.</div></div>';
     if(!ids.length)return head('Retigráfico','',null)+barra+'<div class="card"><div class="note">Cadastre lotes antes.</div></div>';
-    if(!carregados)return head('Retigráfico','',null)+barra+'<div class="card"><div class="note">'+
-      (MASSAS_CARREGANDO?'Carregando as estacas…':'Nenhuma estaca cadastrada ainda. Importe a cubação em <b>Cadastro → Quantidades</b>.')+'</div></div>';
-    var R=retiDados();
-    var D=massasDados();
-    var totais='<div class="kpis" style="margin-bottom:12px">'+
-      kpi('info','Corte',fmtBR(D.totC)+' m³',R.celulas.length+' '+(R.passoM>=1000?'km':'estaca(s)')+' no recorte')+
-      kpi('accent','Aterro',fmtBR(D.totA)+' m³','fator '+D.fator)+
-      kpi('warn','Rebaixo',fmtBR(D.totR)+' m³',MASSAS.rebaixo?'no balanço':'fora do balanço')+
-      '</div>';
-    var tab='<div class="card" style="margin-top:12px"><div class="eyebrow">Por '+(R.passoM>=1000?'quilômetro':'estaca')+'</div>'+
-      '<div class="tbl-wrap" style="max-height:340px"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+    var E=retiEixo();
+    if(!E)return head('Retigráfico','',null)+barra+'<div class="card"><div class="note">'+
+      (MASSAS_CARREGANDO?'Carregando…':'Os lotes ainda não têm extensão nem km de projeto. Preencha o comprimento do lote em <b>Cadastro → Lotes &amp; Quantidades</b> (ou importe a cubação) para o traçado existir.')+'</div></div>';
+    var A=retiAcumulado(), w=retiSemana(A.tw);
+    var d=A.mondays[w];
+    var tempo='<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+      '<button class="btn" id="retiPlay" title="Roda a obra do começo até a semana atual">▶ Animar</button>'+
+      '<button class="btn" id="retiIni" title="Início da obra">⏮</button>'+
+      '<input type="range" id="retiSem" min="1" max="'+A.tw+'" value="'+w+'" style="flex:1;min-width:220px">'+
+      '<button class="btn" id="retiFim" title="Fim do horizonte">⏭</button>'+
+      '<span class="mono" id="retiTlab" style="min-width:210px;text-align:right">'+retiTlab(w,A)+'</span>'+
+      '</div></div>';
+    var tab='<div class="card" style="margin-top:12px"><div class="eyebrow">Volume por '+(RETI.passo==='estaca'?'estaca':'quilômetro')+'</div>'+
+      '<div style="display:flex;gap:4px;margin:6px 0">'+
+        '<button class="subtab'+(RETI.passo==='km'?' active':'')+'" data-retipasso="km">Quilômetro</button>'+
+        '<button class="subtab'+(RETI.passo==='estaca'?' active':'')+'" data-retipasso="estaca">Estaca</button>'+
+      '</div>'+retiTabela()+'</div>';
+    return head('Retigráfico','O traçado esticado — onde cada serviço está, e onde o plano dizia que estaria.','')+
+      barra+tempo+
+      '<div class="kpis" id="retiResumo" style="margin-bottom:12px">'+retiResumoHTML(E,A,w)+'</div>'+
+      '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Distribuição de volumes · corte (cima) / aterro (baixo)</div>'+
+      '<svg class="chart" id="retiVol" style="width:100%;height:auto"></svg></div>'+
+      '<div class="card" style="margin-top:12px"><div class="eyebrow" style="margin-bottom:4px">Retigráfico de produção</div>'+
+      '<svg class="chart" id="retiChart" style="width:100%;height:auto"></svg>'+
+      '<div class="note" style="margin-top:6px"><b>Cheio</b> = lote concluído · <b>claro</b> = em andamento · <b>tracejado</b> = posição do plano na mesma semana · vazio = o serviço não existe naquele lote.</div></div>'+tab;
+  }
+  function retiTlab(w,A){
+    var d=A.mondays[w];
+    return (d?brDate(d.toISOString().slice(0,10)):('semana '+w))+' · semana '+w+' de '+A.tw;
+  }
+  function retiTabela(){
+    var R=retiDados(), D=massasDados();
+    if(R.vazio)return '<div class="note">Sem cubação por estaca — importe as estacas em <b>Cadastro → Quantidades</b>.</div>';
+    return '<div class="tbl-wrap" style="max-height:340px"><table class="edtbl" style="font-size:12px"><thead><tr>'+
       '<th>'+(R.passoM>=1000?'Km':'Estaca')+'</th><th class="r">Corte</th><th class="r">Rebaixo</th><th class="r">Aterro</th><th class="r">Saldo</th><th>Lotes</th></tr></thead><tbody>'+
       R.celulas.filter(function(c){ return c.corte||c.reb||c.aterro; }).map(function(c){
         var sal=c.corte+(MASSAS.rebaixo?c.reb:0)-c.aterro*D.fator;
@@ -3851,17 +4101,41 @@
           '<td class="r mono">'+(c.aterro?fmtBR(Math.round(c.aterro)):'—')+'</td>'+
           '<td class="r mono" style="color:var('+(sal>=0?'--good':'--crit')+')">'+(sal>=0?'+':'−')+fmtBR(Math.round(Math.abs(sal)))+'</td>'+
           '<td class="note">'+escAttr(nomes.join(', '))+'</td></tr>';
-      }).join('')+'</tbody></table></div></div>';
-    return head('Retigráfico','O traçado esticado — onde cada serviço está previsto ao longo do estaqueamento.','')+
-      barra+totais+
-      '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Previsto ao longo do traçado</div>'+
-      '<div class="tc-wrap"><svg class="chart" id="retiChart" style="width:100%;height:auto"></svg></div></div>'+tab;
+      }).join('')+'</tbody></table></div>';
   }
+  /** Redesenha só o que depende da semana — o cursor precisa correr sem reconstruir a tela. */
   function retiDraw(){
-    var el=document.getElementById('retiChart');
-    if(el)retiSVG(el,retiDados());
+    var el=document.getElementById('retiChart'); if(!el)return;
+    var E=retiEixo(); if(!E)return;
+    var A=(retiDraw._A&&retiDraw._A.obra===((selectedObra&&selectedObra.id)||'')&&!retiDraw._sujo)?retiDraw._A.dados:null;
+    if(!A){ A=retiAcumulado(); retiDraw._A={obra:(selectedObra&&selectedObra.id)||'',dados:A}; retiDraw._sujo=false; }
+    var w=retiSemana(A.tw);
+    retiProdSVG(el,E,A,w);
+    retiVolSVG(document.getElementById('retiVol'),E,A,w);
+    var r=document.getElementById('retiResumo'); if(r)r.innerHTML=retiResumoHTML(E,A,w);
+    var t=document.getElementById('retiTlab'); if(t)t.textContent=retiTlab(w,A);
+    var sl=document.getElementById('retiSem'); if(sl&&+sl.value!==w){ sl.max=A.tw; sl.value=w; }
+  }
+  function retiPlayPara(){
+    if(RETI.play){ clearInterval(RETI.play); RETI.play=null; }
+    var b=document.getElementById('retiPlay'); if(b)b.textContent='▶ Animar';
+  }
+  function retiPlayVai(){
+    var sl=document.getElementById('retiSem'); if(!sl)return;
+    var fim=+sl.max||1;
+    RETI.sem=1;
+    var b=document.getElementById('retiPlay'); if(b)b.textContent='⏸ Pausar';
+    RETI.play=setInterval(function(){
+      if(current!=='cr-reti'){ retiPlayPara(); return; }
+      RETI.sem=(RETI.sem||1)+Math.max(1,Math.round(fim/90));
+      if(RETI.sem>=fim){ RETI.sem=fim; retiDraw(); retiPlayPara(); return; }
+      retiDraw();
+    },90);
   }
   function retiWire(){
+    document.querySelectorAll('[data-retimodo]').forEach(function(b){
+      b.addEventListener('click',function(){ RETI.modo=b.getAttribute('data-retimodo'); go('cr-reti'); });
+    });
     document.querySelectorAll('[data-retipasso]').forEach(function(b){
       b.addEventListener('click',function(){ RETI.passo=b.getAttribute('data-retipasso'); go('cr-reti'); });
     });
@@ -3873,8 +4147,16 @@
     });
     var bt=document.getElementById('retiTudo');
     if(bt)bt.addEventListener('click',function(){ MASSAS.de=null; MASSAS.ate=null; go('cr-reti'); });
+    var sl=document.getElementById('retiSem');
+    if(sl)sl.addEventListener('input',function(){ retiPlayPara(); RETI.sem=+sl.value; retiDraw(); });
+    var bi=document.getElementById('retiIni');
+    if(bi)bi.addEventListener('click',function(){ retiPlayPara(); RETI.sem=1; retiDraw(); });
+    var bf=document.getElementById('retiFim');
+    if(bf)bf.addEventListener('click',function(){ retiPlayPara(); RETI.sem=(+((document.getElementById('retiSem')||{}).max))||1; retiDraw(); });
+    var bp=document.getElementById('retiPlay');
+    if(bp)bp.addEventListener('click',function(){ if(RETI.play)retiPlayPara(); else retiPlayVai(); });
   }
-  VIEWS['cr-reti']=function(){ return retiHTML(); };
+  VIEWS['cr-reti']=function(){ retiDraw._sujo=true; retiPlayPara(); return retiHTML(); };
   function massasHTML(){
     massaInit();
     var ids=(window._LOTIDS||[]), carregados=ids.filter(function(id){ return !!ESTACAS[id]; }).length;
