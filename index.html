@@ -6324,7 +6324,7 @@
       '<div style="display:flex;gap:14px;flex-wrap:wrap">'+cmpLines().map(function(l){
         return '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" data-cmpsel="'+escAttr(l.key)+'"'+(l.on?' checked':'')+'><span class="swatch" style="background:'+l.color+'"></span>'+l.nome+'</label>';
       }).join('')+'</div></div>'+
-    '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Comparação — Curvas S sobrepostas</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária). <b>Cada curva é medida contra o escopo do próprio cenário</b> — 100% é terminar o que ele prevê. O que se compara aqui é o ritmo, não o tamanho.</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div></div>'+
+    '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Comparação — Curvas S sobrepostas</div><div class="note" style="margin-bottom:6px">Linhas tracejadas = previsto de cada cenário/linha de base. Linha cheia preta = realizado real (apontamentos de Produção Diária). <b>Cada curva é medida contra o escopo do próprio cenário</b> — 100% é terminar o que ele prevê. O que se compara aqui é o ritmo, não o tamanho.</div><svg class="chart" id="cmpc" viewBox="0 0 620 220" style="margin-top:6px"></svg><div class="legend" id="cmpcLeg" style="margin-top:8px"></div><div id="cmpcAviso" style="margin-top:8px"></div></div>'+
     '<div class="card"><div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:6px">'+
       '<div><div class="eyebrow" style="margin:0">Comparação — Histograma de recursos</div><div class="note">Total de recursos mobilizados em cada semana, por cenário. Esquerda: evolução semanal. Direita: acumulado (recurso × semana).</div></div>'+
       '<div style="display:flex;gap:6px">'+['todos','funcao','equipamento'].map(function(f){
@@ -14668,24 +14668,62 @@
      * o RITMO de avanço de cada alternativa, não o tamanho do escopo dela. Com cada curva medida
      * contra o próprio escopo, todas terminam em 100% e o que sobra na tela é a diferença que
      * interessa — quem sobe antes, quem demora a engrenar, quem termina primeiro. */
-    function totalDaLinha(l){
-      if(!l.snap)return totalDaObra;
-      return withSnapshot(l.snap,function(){
-        var t=0;
-        SERV.forEach(function(s,si){ LOTS.forEach(function(_,li){ if(lotInView(li))t+=orcNum((QTY[li]||[])[si])||0; }); });
-        return t;
-      });
+    /* O ESCOPO de uma linha (o saldo cadastrado nela) e o que ela DESENHA (a soma das barras)
+     * deveriam ser a mesma coisa, e quase sempre são. Quando não são, a diferença tem leitura:
+     *
+     *   desenha MENOS que o escopo — lote sem barra no modo manual, serviço sem equipe ou sem
+     *     produtividade. A curva termina abaixo de 100 e isso é verdade: aquele plano não cobre
+     *     a obra toda. Fica como está.
+     *
+     *   desenha MAIS que o escopo — não existe avanço acima de 100%. Isso é sinal de ajuste
+     *     fixado com quantidade que não bate mais com a do lote: dividir um lote entre equipes
+     *     (no arraste da matriz ou no desenho manual) grava a quantidade de CADA equipe no
+     *     ajuste, e mudar a quantidade do lote depois não reescreve o que já foi fixado. O
+     *     motor desenha o que foi mandado desenhar; quem dividia sem perceber era a curva, que
+     *     punha essa soma sobre um saldo menor.
+     *
+     * A régua passa a ser o maior dos dois. Com isso nenhuma curva passa de 100% e cada uma
+     * ainda chega aos 100% na semana em que o plano dela acaba — que é o que esta tela compara.
+     * O excesso não some calado: o aviso embaixo do gráfico diz em qual linha e em que lote. */
+    function escopoDaLinha(l,segs){
+      function conta(){
+        var escopo=0, par={};
+        SERV.forEach(function(s,si){ LOTS.forEach(function(_,li){
+          if(!lotInView(li))return;
+          var q=orcNum((QTY[li]||[])[si])||0;
+          escopo+=q;
+          if(q>0)par[li+'::'+si]={q:q,des:0};
+        }); });
+        var desenhado=0;
+        (segs||[]).forEach(function(sg){
+          var t=0; (sg.wq||[]).forEach(function(v){ t+=v||0; });
+          desenhado+=t;
+          var k=sg.li+'::'+sg.si;
+          (par[k]||(par[k]={q:0,des:0})).des+=t;
+        });
+        var fora=[];
+        Object.keys(par).forEach(function(k){
+          var p=par[k];
+          if(p.des<=p.q+Math.max(0.5,p.q*0.001))return;
+          var ix=k.split('::');
+          fora.push({serv:(SERV[+ix[1]]||{}).n||'?',lote:LOTS[+ix[0]]||'?',q:p.q,des:p.des});
+        });
+        fora.sort(function(a,b){ return (b.des-b.q)-(a.des-a.q); });
+        return {escopo:escopo,desenhado:desenhado,fora:fora};
+      }
+      return l.snap?withSnapshot(l.snap,conta):conta();
     }
     function totalSeriesFor(l){
       var segsAll=cmpSegs(l), tw=1;
       segsAll.forEach(function(sg){tw=Math.max(tw,sg.start+sg.dur-1);});
       var segs=viewSegs(segsAll); // filtro global de lotes; horizonte continua o do cronograma inteiro
-      var tot=totalDaLinha(l);
+      var e=escopoDaLinha(l,segs);
+      var tot=Math.max(e.escopo,e.desenhado);
       var weekly=[]; for(var w=0;w<=tw;w++)weekly[w]=0;
       segs.forEach(function(sg){ for(var i=0;i<sg.dur;i++)weekly[sg.start+i]+=sg.wq[i]||0; });
       var out=[0], acc=0;
       for(var w2=1;w2<=tw;w2++){ acc+=weekly[w2]||0; out.push(tot>0?(acc/tot*100):0); }
-      return {tw:tw,series:out,total:tot};
+      return {tw:tw,series:out,total:e.escopo,desenhado:e.desenhado,fora:e.fora};
     }
     var lines=cmpLines().filter(function(l){return l.on;});
     if(!SERV.length||!lines.length){ el.innerHTML=''; if(legEl)legEl.innerHTML=''; return; }
@@ -14699,8 +14737,12 @@
       for(var wi=1;wi<=maxTw;wi++){ if(mondayOf(wi).toISOString().slice(0,10)===mon){w4=wi;break;} }
       if(w4!=null)realWeekly[w4]+=r.qtd||0;
     });
-    var realSeries=[0], racc=0;
-    for(var w5=1;w5<=maxTw;w5++){ racc+=realWeekly[w5]||0; realSeries.push(totalDaObra>0?(racc/totalDaObra*100):0); }
+    /* O realizado é medido contra o escopo da obra, e aqui o limite é outro: apontar mais do
+     * que a quantidade cadastrada não é "mais de 100% de avanço", é quantidade desatualizada no
+     * cadastro. Vale o mesmo que na Curva S do cronograma — para em 100% e o aviso conta. */
+    var realSeries=[0], racc=0, realTotal=0;
+    for(var w5=1;w5<=maxTw;w5++){ racc+=realWeekly[w5]||0; realSeries.push(totalDaObra>0?Math.min(100,racc/totalDaObra*100):0); }
+    realTotal=racc;
     var W=620,H=220,pl=34,pr=10,pt=10,pb=20,iw=W-pl-pr,ih=H-pt-pb, n=maxTw+1;
     var xx=function(i){return pl+iw*i/Math.max(1,n-1);}, yy=function(v){return pt+ih-ih*v/100;};
     function path(a){var d='';for(var j=0;j<a.length;j++){d+=(j?'L':'M')+xx(j).toFixed(1)+' '+yy(a[j]).toFixed(1)+' ';}return d;}
@@ -14718,6 +14760,35 @@
     }).join('')+
       '<span><span class="swatch" style="background:var(--ink)"></span>Realizado (real)'+
       (escoposDiferem?(' · 100% = '+fmtBR(Math.round(totalDaObra))):'')+'</span>';
+    cmpAvisoEscopo(computed,realTotal,totalDaObra);
+  }
+  /** O que a curva teve de corrigir, dito em palavras. Gráfico que conserta número sozinho e não
+   *  conta vira confiança errada: quem olha acha que o cadastro está em dia. */
+  function cmpAvisoEscopo(computed,realTotal,totalDaObra){
+    var el=document.getElementById('cmpcAviso'); if(!el)return;
+    var linhas=[], doPlano=0;
+    computed.forEach(function(c){
+      var exc=(c.desenhado||0)-(c.total||0);
+      if(!(exc>Math.max(0.5,(c.total||0)*0.001)))return;
+      var pct=c.total>0?Math.round(exc/c.total*1000)/10:0;
+      var onde=(c.fora||[]).slice(0,3).map(function(f){
+        return f.serv+' no '+f.lote+' ('+fmtBR(Math.round(f.des))+' desenhado · '+fmtBR(Math.round(f.q))+' no cadastro)';
+      }).join('; ');
+      doPlano++;
+      linhas.push('<b>'+escAttr(c.nome)+'</b> desenha '+fmtBR(Math.round(c.desenhado))+
+        ' para um saldo de '+fmtBR(Math.round(c.total))+' (+'+pct+'%).'+
+        (onde?(' Onde: '+escAttr(onde)+((c.fora||[]).length>3?(' e mais '+((c.fora||[]).length-3)+' lote(s)'):'')+'.'):''));
+    });
+    if(realTotal>totalDaObra+Math.max(0.5,totalDaObra*0.001)){
+      linhas.push('O <b>realizado</b> aponta '+fmtBR(Math.round(realTotal))+
+        ' para um saldo cadastrado de '+fmtBR(Math.round(totalDaObra))+
+        ' — a curva para em 100%. Quantidade apontada acima da cadastrada é quantidade a revisar em Lotes &amp; Quantidades.');
+    }
+    if(!linhas.length){ el.innerHTML=''; return; }
+    el.innerHTML='<div class="note" style="border-left:3px solid var(--warn,#f59e0b);padding-left:8px">'+
+      '<b>Por que nenhuma curva passa de 100%:</b> '+linhas.join(' ')+
+      (doPlano?(' O ajuste fixado guarda a quantidade de cada equipe de quando foi feito — mudar a quantidade do lote depois não reescreve o que já estava fixado. '+
+                'Para acertar, refaça a divisão do lote na matriz (ou tire o ajuste fixado) nos pontos acima.'):'')+'</div>';
   }
 
   /* ---- Cor por equipe (port do colors.ts do Lovable) ---- */
