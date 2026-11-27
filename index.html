@@ -1287,6 +1287,9 @@
   async function sbLoadCadastro(obraId){
     var dados=await sbFetchCadastro(obraId);
     aplicarCadastro(dados);
+    /* Antes do cronograma: a EAP padrão pode marcar serviços, e o retrato que a geração de
+     * primeira vez tira tem de ser do cadastro já completo. */
+    await catPadraoGarantir(obraId);
     await autoPrimeiraVez();
     offlineSalvar(obraId,dados);   // retrato pra abrir sem sinal depois (não espera)
   }
@@ -17747,29 +17750,103 @@
   /** Põe a EAP padrão numa obra recém-criada: cria os serviços no Tempo-Caminho e monta a EAP
    *  com todos marcados. Só faz sentido em obra vazia — numa obra com escopo montado à mão isto
    *  seria substituir o trabalho dela pelo modelo. */
+  /* A EAP padrão vale para TODA obra, não só para a que nasce agora. O que muda de uma para a
+   * outra é o que ela pode fazer ali:
+   *
+   *   obra vazia      — cria os 42 serviços e marca todos;
+   *   obra com escopo — não cria nem apaga serviço nenhum. Casa por nome o que a obra já tem
+   *                     (esses aparecem marcados), deixa desmarcado o resto do padrão, e põe os
+   *                     serviços que a obra tem e o padrão não num grupo próprio no fim.
+   *
+   * A segunda regra é a que importa: obra com linha de base não pode mudar de cronograma porque
+   * alguém publicou um modelo. Nada do que ela executa sai da lista, nada entra sem ser pedido —
+   * a EAP passa a mostrar o escopo dela, e o padrão fica ali ao lado, disponível para marcar.
+   *
+   * Obra que já tem EAP própria não é tocada: aquela estrutura foi montada à mão. */
+  var CAT_PADRAO_VERSAO='2026-11-27';
   async function catEapAplicar(obraId){
-    if(SERV.length||eapTem())return {servicos:0};
+    if(eapTem())return {servicos:0,casados:0,extras:0,jaTinhaEap:true};
     var plano=catEapPlano(), folhas=plano.filter(function(x){ return !x.grupo; });
-    var linhas=folhas.map(function(x,i){
-      return {id:newUuid(),obra_id:obraId,nome:x.nome,unidade:x.un,cor:x.cor||HEXPAL[i%6],
-              teams:1,produtividade:0,lag_semanas:0,config:{},codigo:x.sigla||null,ordem:i};
-    });
-    await sbInserirEmBlocos('servicos',linhas);
-    var idPorCod={};
-    linhas.forEach(function(l,i){
-      idPorCod[folhas[i].cod]=l.id;
-      SERV.push({id:l.id,n:l.nome,u:l.unidade,c:PALVARS[i%6],hex:l.cor,eq:1,p:'0',lag:0,cfg:{},
-                 codigo:l.codigo||'',eap:'',grupo:''});
-    });
+    var obraVazia=!SERV.length;
+    var svcPorNome={};
+    SERV.forEach(function(x){ svcPorNome[chaveNomeServ(x.n)]=x; });
+    var usados={}, criadas=0, casados=0;
+
+    if(obraVazia){
+      var linhas=folhas.map(function(x,i){
+        return {id:newUuid(),obra_id:obraId,nome:x.nome,unidade:x.un,cor:x.cor||HEXPAL[i%6],
+                teams:1,produtividade:0,lag_semanas:0,config:{},codigo:x.sigla||null,ordem:i};
+      });
+      await sbInserirEmBlocos('servicos',linhas);
+      linhas.forEach(function(l,i){
+        folhas[i].svcId=l.id;
+        SERV.push({id:l.id,n:l.nome,u:l.unidade,c:PALVARS[i%6],hex:l.cor,eq:1,p:'0',lag:0,cfg:{},
+                   codigo:l.codigo||'',eap:'',grupo:''});
+      });
+      criadas=linhas.length;
+    }else{
+      folhas.forEach(function(x){
+        var achado=svcPorNome[chaveNomeServ(x.nome)];
+        if(achado){ x.svcId=achado.id; usados[achado.id]=true; casados++; }
+        else x.svcId=null;
+      });
+    }
+
     EAP=eapVazio();
     EAP.cfg.arquivo='EAP padrão'; EAP.cfg.importadoEm=new Date().toISOString();
+    EAP.cfg.padraoEm=CAT_PADRAO_VERSAO;
+    var porCod={}; folhas.forEach(function(x){ porCod[x.cod]=x; });
     plano.forEach(function(x){
+      var f=porCod[x.cod];
       EAP.itens.push({cod:x.cod,nome:x.nome,un:x.un,contratual:x.sigla||'',
-                      svc:x.grupo?null:(idPorCod[x.cod]||null),controle:[],orc:null,auto:!!x.grupo});
+                      svc:x.grupo?null:((f&&f.svcId)||null),controle:[],orc:null,auto:!!x.grupo});
     });
+
+    /* O que a obra executa e o padrão não prevê entra num grupo próprio, já marcado. Deixar de
+     * fora o serviço que está no cronograma seria a EAP contar uma obra que não é a daquela
+     * obra — e seria também o caminho mais curto para alguém apagá-lo sem perceber. */
+    var extras=SERV.filter(function(x){ return !usados[x.id]; });
+    if(!obraVazia&&extras.length){
+      var g=String(CAT_EAP.length+1);
+      EAP.itens.push({cod:g,nome:'SERVIÇOS DESTA OBRA',un:'',contratual:'',svc:null,controle:[],orc:null,auto:true});
+      extras.forEach(function(x,i){
+        EAP.itens.push({cod:g+'.'+(i+1),nome:x.n,un:x.u||'',contratual:x.codigo||'',
+                        svc:x.id,controle:[],orc:null,auto:false});
+      });
+    }
+
     await sbUpdateObra(obraId,{eap:EAP});
     window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
-    return {servicos:linhas.length};
+    return {servicos:criadas,casados:casados,extras:(obraVazia?0:extras.length),jaTinhaEap:false};
+  }
+  /** Os cadastros padrão desta obra, uma vez só. Roda na primeira vez que cada obra é aberta
+   *  depois desta versão: completa funções, equipamentos e apoio administrativo com o que falta,
+   *  e monta a EAP padrão quando a obra ainda não tem uma.
+   *
+   *  Nunca apaga nem substitui nada, e nunca cria serviço em obra que já tem escopo — por isso
+   *  pode rodar sozinho. A marca de que já rodou fica na própria EAP; sem ela, uma obra em que
+   *  alguém apagou de propósito os recursos padrão os veria voltar na abertura seguinte.
+   *
+   *  Falhar aqui não pode atrapalhar a abertura da obra: no pior caso os botões "Catálogo
+   *  padrão" das telas de cadastro fazem a mesma coisa quando alguém pedir. */
+  async function catPadraoGarantir(obraId){
+    if(!obraId||!SB||OFFLINE_MODE)return null;
+    if(EAP&&EAP.cfg&&EAP.cfg.padraoEm)return null;
+    var r={funcao:0,equipamento:0,apoio:0,eap:null};
+    try{
+      var c=await catalogoAplicar(obraId);
+      r.funcao=c.funcao||0; r.equipamento=c.equipamento||0; r.apoio=c.apoio||0;
+    }catch(e){}
+    try{
+      r.eap=await catEapAplicar(obraId);
+      /* Obra com EAP própria não entra no ramo acima, e sem marca tentaria de novo a cada
+       * abertura. A marca vai na EAP que ela já tem. */
+      if(r.eap&&r.eap.jaTinhaEap&&EAP&&EAP.cfg&&!EAP.cfg.padraoEm){
+        EAP.cfg.padraoEm=CAT_PADRAO_VERSAO;
+        await sbUpdateObra(obraId,{eap:EAP});
+      }
+    }catch(e){}
+    return r;
   }
   /* ---------- marcar e desmarcar serviços na EAP ---------- */
   /** O item está ligado a um serviço que existe de verdade? */
@@ -17831,15 +17908,24 @@
     if(!marcar){
       /* O aviso conta o que será apagado junto. Numa obra nova isso é sempre zero e a pergunta
        * some: perguntar por nada ensina a clicar em "sim" sem ler. */
-      var comQtd=0, comApont=0;
+      var comQtd=0, comApont=0, naBase=0;
+      /* Serviço que está na linha de base é o caso mais grave: a referência da obra passa a
+       * falar de um serviço que o cadastro não tem mais, e a comparação previsto × realizado
+       * fica sem o outro lado. A linha de base em si não muda — ela é um retrato —, mas quem
+       * tira isso daqui precisa saber o que está fazendo. */
+      var b=activeBaseline();
+      var idsBase={};
+      if(b&&b.snap&&Array.isArray(b.snap.servicos))b.snap.servicos.forEach(function(x){ idsBase[x.id]=true; });
       alvos.forEach(function(it){
+        if(idsBase[it.svc])naBase++;
         var p=it.svc?eapPerdasDoServico(it.svc):null;
         if(!p)return;
         if(p.lotes)comQtd++;
         if(p.apontado)comApont++;
       });
-      if(comQtd||comApont){
+      if(comQtd||comApont||naBase){
         if(!confirm('Tirar '+alvos.length+' serviço(s) do Tempo-Caminho?'+NL+NL+
+          (naBase?(naBase+' está na linha de base '+escAttr(b.revisao||'')+' — a referência da obra continua contando com ele.'+NL):'')+
           (comQtd?(comQtd+' tem quantidade lançada em algum lote — ela vai junto.'+NL):'')+
           (comApont?(comApont+' tem produção já apontada em campo.'+NL):'')+NL+
           'Para voltar depois é só marcar de novo, mas as quantidades terão de ser lançadas outra vez.'))return;
@@ -27480,10 +27566,10 @@
        * de apoio são os mesmos em toda obra, e começar do zero só rendia planilha importada à
        * mão em cada uma. Falhar aqui não pode impedir de entrar na obra — ela existe, e o
        * catálogo se carrega depois pelo botão. */
-      try{ RECURSOS=[]; APOIO=[]; await catalogoAplicar(id); }catch(e){}
-      /* E com o escopo-tipo: a EAP padrão e os serviços dela já no Tempo-Caminho. Desmarcar o
-       * que a obra não executa é muito mais rápido que cadastrar quarenta serviços do zero. */
-      try{ SERV=[]; EAP=null; await catEapAplicar(id); }catch(e){}
+      /* Os cadastros padrão da construtora: funções, equipamentos, apoio administrativo e a
+       * EAP com os serviços dela já no Tempo-Caminho. Desmarcar o que a obra não executa é
+       * muito mais rápido que cadastrar quarenta serviços do zero. */
+      try{ RECURSOS=[]; APOIO=[]; SERV=[]; EAP=null; await catPadraoGarantir(id); }catch(e){}
       await selectObra(id);
     }
     catch(e){
@@ -27592,6 +27678,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
 
 
