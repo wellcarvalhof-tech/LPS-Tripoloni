@@ -1158,6 +1158,7 @@
     if(r.error)throw r.error;
   }
   var SEM_COL_TERCEIRO=false; // true quando a migração 19 (quantidade_terceiro) ainda não rodou
+  var SEM_COL_MATRIZ=false;   // true enquanto a migração 41 (data_inicio_matriz) não rodar
   async function sbUpsertApontamentoRecurso(obraId,recursoId,dataSemana,quantidade,quantidadeTerceiro){
     await sbRequireSession();
     var reg={obra_id:obraId,recurso_id:recursoId,data_semana:dataSemana,quantidade:quantidade};
@@ -1268,6 +1269,9 @@
      * com o cálculo ao vivo de antes, e a matriz avisa, em vez de abrir vazia. */
     AUTO=(obra.cronograma_auto&&typeof obra.cronograma_auto==='object')?obra.cronograma_auto:null;
     SEM_COL_CRONOAUTO=!('cronograma_auto' in obra);
+    /* Início da matriz (migração 41). Coluna ausente = obra continua com uma data só, como
+     * antes; a tela avisa onde dá para rodar a migração em vez de esconder o campo. */
+    SEM_COL_MATRIZ=!('data_inicio_matriz' in obra);
     // Obra antiga (ou banco sem a migração 32) simplesmente não tem orçamento — a tela avisa.
     orcCarregaVersoes(obra.orcamento);
     EAP=(obra.eap&&typeof obra.eap==='object'&&obra.eap.itens)?obra.eap:null;
@@ -1286,7 +1290,7 @@
     LOG_LISTA=null; LOG_ERRO=''; LOG_TABELA=''; LOG_EMAIL='';
     PROG_PLANOS=[]; PROG_PLANO=null; PROG_ITENS=[]; PROG_CAUSAS=[]; PROG_ERRO=''; PROG_LIDO=false;
     MP=[]; MP_LIDO=false; MP_ERRO=''; MP_DET=null; MP_FORM=null; MP_TAB='janela';
-    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,historico:obra.historico||null,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
+    window._OBRA={nome:obra.nome,codigo:obra.codigo,rodovia:obra.rodovia,linha_balanco:obra.linha_balanco||null,data_inicio:obra.data_inicio,data_inicio_matriz:obra.data_inicio_matriz||null,historico:obra.historico||null,data_fim_prevista:obra.data_fim_prevista,feriados:obra.feriados||[],cliente:obra.cliente,valor_contrato:obra.valor_contrato,aditivos:Array.isArray(obra.aditivos)?obra.aditivos:[]};
   }
   async function sbLoadCadastro(obraId){
     var dados=await sbFetchCadastro(obraId);
@@ -3830,6 +3834,11 @@
       (preAcc[mon]||(preAcc[mon]={}))[k]=((preAcc[mon]||{})[k]||0)+(r.qtd||0);
       if(!preMin||mon<preMin)preMin=mon;
     });
+    /* A linha do tempo também recua até o início da OBRA, não só até o primeiro apontamento:
+     * obra que começou antes do plano tem semanas sem apontamento nenhum no começo, e sumir com
+     * elas faria a tela dizer que a obra começou junto com a matriz. */
+    var oIni=OBRA_START();
+    if(oIni&&mons1Antes(oIni)&&(!preMin||mondayOfIso(oIni)<preMin))preMin=mondayOfIso(oIni);
     var mons=mondaysDoPlano(maxW), pre=[];
     if(preMin&&mons[1]){
       var ini=new Date(preMin+'T00:00:00'), lim=mons[1];
@@ -3867,6 +3876,11 @@
     soma(prev); soma(real);
     return {prev:prev,real:real,tw:N,twPlano:maxW,plan0:off,cols:cols,
             mondays:cols.map(function(c){ return c?c.mon:null; })};
+  }
+  /** A data é anterior à semana 1 da matriz? (sem montar o mapa de semanas inteiro) */
+  function mons1Antes(iso){
+    var m1=mondayOfIso(TC_START());
+    return mondayOfIso(iso)<m1;
   }
   /** A coluna da linha do tempo em que estamos hoje: a última cujo início já passou. */
   function retiSemanaHoje(A){
@@ -4800,7 +4814,11 @@
         field('obraCodigo','Código',o.codigo,'Ex: BR135-L3-2026')+
         field('obraRodovia','Rodovia / trecho',o.rodovia,'Ex: BR-135 · km 0+000 a 42+000')+'</div>'+
       '<div class="card"><div class="eyebrow">Prazo</div>'+
-        field('obraInicio','Início',o.data_inicio,'','date')+
+        field('obraInicio','Início da obra',o.data_inicio,'','date')+
+        field('obraMatriz','Início da matriz (semana 1 do Tempo-Caminho)',o.data_inicio_matriz||'','','date')+
+        (SEM_COL_MATRIZ
+          ? '<div class="banner" style="margin:0 0 10px;border-color:var(--crit)">A coluna <b>data_inicio_matriz</b> ainda não existe no banco. Rode <b>sql/41_data_inicio_matriz.sql</b> no Supabase para poder salvar esta data.</div>'
+          : '<div class="note" style="margin:-4px 0 10px">Em branco, a matriz começa na data de início da obra — é como era antes. Separe as duas quando a obra já vinha rodando antes do planejamento: a <b>semana 1 do cronograma</b> fica onde você fincou o plano, e o <b>Retigráfico</b> passa a mostrar na linha do tempo o que foi apontado antes dela.</div>')+
         field('obraFim','Término previsto',o.data_fim_prevista,'','date')+
         '<div class="field"><label>Dias úteis</label><div class="note">Seg a Sex (padrão)</div></div></div></div>'+
       '<div class="card" style="margin-top:14px"><div class="eyebrow">Contrato</div>'+
@@ -5562,7 +5580,9 @@
     '<div class="grid g2">'+
       '<div class="card"><div class="eyebrow">Início do projeto</div>'+
         '<div class="field"><label>Nome do projeto</label><input class="inp" id="calNome" value="'+escAttr(o.nome)+'"></div>'+
-        '<div class="field"><label>Data de início (ajustada para segunda-feira)</label><input class="inp" id="calInicio" type="date" value="'+escAttr(o.data_inicio)+'"></div></div>'+
+        '<div class="field"><label>Início da matriz — semana 1 (ajustada para segunda-feira)</label><input class="inp" id="calInicio" type="date" value="'+escAttr(TC_START())+'"></div>'+
+        '<div class="note">'+(OBRA_START()?('A obra começou em <b>'+brDate(OBRA_START())+'</b>. '):'')+
+        'Esta data é onde a <b>semana 1 do cronograma</b> está fincada; a data de início da obra fica em <b>Cadastro → Obra</b>.</div></div>'+
       '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="eyebrow" style="margin:0">Semanas de paralisação</div><button class="btn" id="addHoliday" style="padding:5px 10px">+ Adicionar</button></div>'+
         hrows+(holidays.length?'':'<div class="note">Nenhuma data cadastrada.</div>')+'<div class="note">Semana inteira sem produção (feriado, recesso) — some da contagem de semanas.</div></div>'+
     '</div>'+
@@ -7310,6 +7330,7 @@
       // nome/data de início são da obra em si, sempre salvos ali; feriados/chuva são parte do
       // cenário quando um está ativo (vão junto no snapshot, não sobrescrevem a obra ao vivo).
       var patch={nome:window._OBRA.nome,data_inicio:window._OBRA.data_inicio};
+      if(!SEM_COL_MATRIZ)patch.data_inicio_matriz=window._OBRA.data_inicio_matriz||null;
       if(!ACTIVE_CENARIO)patch.feriados={holidayWeeks:calHolidays(),rainPeriods:calRainPeriods()};
       await sbUpdateObra(selectedObra.id,patch);
       selectedObra.nome=patch.nome; CUR.nome=patch.nome;
@@ -12743,7 +12764,7 @@
       var cn=document.getElementById('calNome');
       if(cn)cn.addEventListener('change',function(){saveObraSimpleField('nome',cn.value.trim()||'Nova obra');});
       var ci=document.getElementById('calInicio');
-      if(ci)ci.addEventListener('change',function(){saveObraSimpleField('data_inicio',ci.value||null);});
+      if(ci)ci.addEventListener('change',function(){saveObraSimpleField(SEM_COL_MATRIZ?'data_inicio':'data_inicio_matriz',ci.value||null);});
       document.querySelectorAll('[data-holi]').forEach(function(inp){
         inp.addEventListener('change',function(){saveHoliday(+inp.getAttribute('data-holi'),inp.value);});
       });
@@ -13078,13 +13099,20 @@
           valor_contrato:document.getElementById('obraValorContrato').value?+document.getElementById('obraValorContrato').value:null,
           aditivos:(window._OBRA&&window._OBRA.aditivos)||[]
         };
+        /* Sem a migração 41 a coluna não existe: mandar o campo derrubaria o save inteiro. */
+        if(!SEM_COL_MATRIZ)patch.data_inicio_matriz=document.getElementById('obraMatriz').value||null;
+        var antesTC=TC_START();
         sb.disabled=true;
         try{
           await sbUpdateObra(selectedObra.id,patch);
           window._OBRA=Object.assign({},window._OBRA,patch);
           selectedObra.nome=patch.nome; CUR.nome=patch.nome;
           document.getElementById('obraSelName').textContent=patch.nome;
-          toast('Obra salva.');
+          /* Mexer na semana 1 reposiciona todo o cronograma no calendário. Quem salvou merece
+           * ouvir isso na hora, não descobrir depois na matriz. */
+          toast(TC_START()!==antesTC
+            ? 'Obra salva. A semana 1 da matriz passou para '+brDate(TC_START())+' — o cronograma inteiro anda junto no calendário.'
+            : 'Obra salva.');
         }catch(e){ alert('Falha ao salvar: '+((e&&e.message)||e)); }
         sb.disabled=false;
       });
@@ -15202,7 +15230,19 @@
   function fmtBR(n){return Math.round(n).toLocaleString('pt-BR');}
 
   /* ---- Datas / semana ISO ---- */
-  function TC_START(){ return (window._OBRA&&window._OBRA.data_inicio)||'2026-05-04'; }
+  /* A obra tem DUAS datas desde a migração 41, e elas respondem a perguntas diferentes:
+   *
+   *   data_inicio         — quando a obra começou. Pode ser anos antes do plano, num contrato
+   *                         que já vinha rodando. É o começo da linha do tempo do Retigráfico.
+   *   data_inicio_matriz  — onde a semana 1 do Tempo-Caminho foi fincada. É ela que manda em
+   *                         tudo que sai do cronograma: matriz, curvas, histograma, programação.
+   *
+   * Enquanto eram a mesma coluna, contar a verdade sobre o início da obra custava empurrar o
+   * cronograma inteiro para trás — então ninguém contava. Em branco, a matriz continua começando
+   * no início da obra: obra antiga não muda de comportamento. */
+  function TC_START(){ var o=window._OBRA||{}; return o.data_inicio_matriz||o.data_inicio||'2026-05-04'; }
+  /** Quando a obra começou (não a matriz). Null quando nem uma data existe. */
+  function OBRA_START(){ var o=window._OBRA||{}; return o.data_inicio||o.data_inicio_matriz||null; }
   function mondayOfIso(iso){
     var d=new Date(iso+'T00:00:00');
     var day=d.getDay(), diff=day===0?-6:1-day; d.setDate(d.getDate()+diff);
@@ -17283,7 +17323,8 @@
     LOTS.forEach(function(l,li){ lotRows.push([l,LOTE_PACOTE[li]||'',li+1].concat(SERV.map(function(s,si){return QTY[li][si]||0;}))); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(lotRows),'Lotes');
 
-    var calRows=[['Início',(window._OBRA&&window._OBRA.data_inicio)||'']];
+    var calRows=[['Início',(window._OBRA&&window._OBRA.data_inicio)||''],
+                 ['Início da matriz',(window._OBRA&&window._OBRA.data_inicio_matriz)||'']];
     calHolidays().forEach(function(f){ calRows.push(['Paralisação',f,f]); });
     calRainPeriods().forEach(function(r){ calRows.push(['Chuva',r.desc||'',r.start||'',r.end||'',r.producao||0,r.dias||0]); });
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(calRows),'Calendario');
@@ -18487,6 +18528,7 @@
     }catch(e){ alert('Falha ao mudar o escopo: '+((e&&e.message)||e)); }
   }
 
+  var EAP_NOVO_PAI='';   // agrupamento escolhido no seletor do botão "+ Item"
   function eapVazio(){ return {cfg:{arquivo:'',importadoEm:''},itens:[]}; }
   function eapAtual(){ return (EAP&&EAP.itens)?EAP:(EAP=eapVazio()); }
   function eapTem(){ return !!(EAP&&EAP.itens&&EAP.itens.length); }
@@ -18783,6 +18825,8 @@
       '<td'+(sugSvc?' style="background:var(--warn-bg)"':'')+'>'+(pode?('<select class="einp" data-eapf="svc" style="min-width:160px">'+svcOpts+'</select>'):escAttr(eapServicoNome(it.svc)))+'</td>'+
       '<td>'+(pode?('<input class="einp" data-eapf="controle" value="'+escAttr((it.controle||[]).join('; '))+'" style="min-width:200px" placeholder="apelido1; apelido2">'):escAttr((it.controle||[]).join('; ')))+'</td>'+
       '<td'+(sugOrc?' style="background:var(--warn-bg)"':'')+'>'+(pode?('<select class="einp" data-eapf="orc" style="min-width:170px">'+orcOpts+'</select>'):escAttr(eapOrcNome(it.orc)))+'</td>'+
+      '<td>'+(pode?('<select class="einp" data-eapmove style="min-width:150px" title="Mover para outro agrupamento — o código muda junto">'+
+        eapGrupoOpts(it,eapPai(it.cod))+'</select>'):escAttr(eapPai(it.cod)))+'</td>'+
       '<td>'+pend+'</td></tr>';
   }
   VIEWS['cad-eap']=function(){
@@ -18828,7 +18872,9 @@
       '<div><div class="eyebrow" style="margin:0">Itens</div>'+
       '<div class="note">Um item aponta para no máximo um serviço e um item de orçamento; vários itens podem apontar para o mesmo. '+
       'Em <b>Serviço controlado</b> vão os apelidos separados por <b>;</b> — o nome da coluna muda de revisão para revisão da planilha de controle.</div></div>'+
-      '<div style="display:flex;gap:8px">'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+        (pode?('<select class="einp" id="eapNovoPai" style="min-width:190px" title="Onde o item novo vai entrar">'+eapGrupoOpts(null,EAP_NOVO_PAI)+'</select>'+
+          '<button class="btn primary" id="eapNovo" style="padding:4px 10px;font-size:11.5px" title="Cria uma linha vazia dentro do agrupamento escolhido">+ Item</button>'):'')+
         '<button class="btn" id="eapAbrir" style="padding:4px 10px;font-size:11.5px">Abrir tudo</button>'+
         '<button class="btn" id="eapFechar" style="padding:4px 10px;font-size:11.5px">Fechar tudo</button>'+
         (pode&&folhas.filter(function(i){ return !i.contratual; }).length
@@ -18838,7 +18884,8 @@
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
         '<th title="Marcado = o serviço existe no Tempo-Caminho">No TC</th>'+
         '<th>Código</th><th>Descrição</th><th>Un.</th><th>Contratual</th>'+
-        '<th>Serviço planejado</th><th>Serviço controlado (apelidos)</th><th>Item do orçamento</th><th></th>'+
+        '<th>Serviço planejado</th><th>Serviço controlado (apelidos)</th><th>Item do orçamento</th>'+
+        '<th title="Em qual macrofluxo o item está — mudar aqui renumera o código">Agrupamento</th><th></th>'+
       '</tr></thead><tbody>'+vis.map(function(it){ return eapLinhaHTML(it,pode); }).join('')+'</tbody></table></div></div>';
 
     var semSvc=folhas.filter(function(i){ return !i.svc; });
@@ -18856,6 +18903,73 @@
     return topo+kpis+tabela+pend;
   };
   function eapItemPorCod(cod){ return eapAtual().itens.filter(function(i){ return i.cod===cod; })[0]; }
+  /* ---------- Entrar na EAP pela tela ----------
+   * A EAP vinha inteira da planilha: serviço que nasceu depois (um aditivo, um serviço que a
+   * obra passou a controlar) só entrava reimportando o arquivo, e reimportar derruba os
+   * vínculos já confirmados. Aqui dá para criar o item direto e escolher em qual macrofluxo ele
+   * mora — inclusive mudar de ideia depois.
+   *
+   * O código é o ENDEREÇO do item na árvore ("3.2" é o segundo filho do grupo 3), não um nome:
+   * mudar de agrupamento é, necessariamente, mudar de código. Por isso mover renumera o item e
+   * tudo que pendura nele, em vez de guardar um campo "grupo" paralelo que o resto da tela
+   * (ordenação, recuo, caixa do grupo, retigráfico por etapa) ignoraria. */
+  /** Os agrupamentos onde um item pode morar: todo item de nível 1, mais os de nível 2 que já
+   *  têm filho — esses já são grupo na prática. */
+  function eapGrupos(){
+    var itens=eapAtual().itens, temFilho={};
+    itens.forEach(function(x){ var p=eapPai(x.cod); if(p)temFilho[p]=true; });
+    return itens.filter(function(x){
+      var n=eapNivel(x.cod);
+      return n===1||(n===2&&temFilho[x.cod]);
+    }).sort(eapOrdena);
+  }
+  /** Próximo código livre dentro de um pai ('' = nível 1). Pula o que já existe em vez de
+   *  contar filhos: item apagado deixaria dois irmãos com o mesmo código. */
+  function eapProxCod(pai){
+    var n=0;
+    eapAtual().itens.forEach(function(x){
+      if(eapPai(x.cod)!==pai)return;
+      var ult=parseInt(String(x.cod).split('.').pop(),10);
+      if(isFinite(ult)&&ult>n)n=ult;
+    });
+    return (pai?(pai+'.'):'')+(n+1);
+  }
+  function eapNovoItem(pai){
+    var cod=eapProxCod(pai);
+    eapAtual().itens.push({cod:cod,nome:'',un:'',contratual:'',serv:'',svc:null,controle:[],orc:null});
+    return cod;
+  }
+  /** Move o item (e seus filhos) para outro agrupamento. Devolve o código novo, ou null quando
+   *  não há o que fazer. Um item não entra dentro de si mesmo nem de um filho seu. */
+  function eapMoveItem(cod,novoPai){
+    var it=eapItemPorCod(cod);
+    if(!it||eapPai(cod)===novoPai)return null;
+    if(novoPai&&(novoPai===cod||String(novoPai).indexOf(cod+'.')===0))return null;
+    var novo=eapProxCod(novoPai);
+    eapAtual().itens.forEach(function(x){
+      if(x.cod===cod)x.cod=novo;
+      else if(String(x.cod).indexOf(cod+'.')===0)x.cod=novo+String(x.cod).slice(String(cod).length);
+    });
+    return novo;
+  }
+  /** As opções de agrupamento de um item (ou de um item novo, quando `it` é null). */
+  function eapGrupoOpts(it,sel){
+    var proibido=function(g){
+      if(!it)return false;
+      return g.cod===it.cod||String(g.cod).indexOf(it.cod+'.')===0;
+    };
+    return '<option value=""'+(sel===''?' selected':'')+'>— macrofluxo próprio (nível 1)</option>'+
+      eapGrupos().filter(function(g){ return !proibido(g); }).map(function(g){
+        return '<option value="'+escAttr(g.cod)+'"'+(g.cod===sel?' selected':'')+'>'+
+          escAttr(g.cod+' '+(g.nome||'(sem nome)'))+'</option>';
+      }).join('');
+  }
+  /** Abre o grupo e todos os pais dele — linha nova que nasce dentro de grupo fechado não
+   *  aparece, e some de novo a cada redesenho. */
+  function eapAbreAte(cod){
+    var p=cod;
+    while(p){ EAP_OPEN[p]=true; p=eapPai(p); }
+  }
   function eapWire(){
     var pode=eapPodeEditar();
     var b;
@@ -18884,6 +18998,20 @@
         go('cad-eap');
       });
     });
+    /* `b` é reaproveitado pelas linhas de baixo — ler b aqui dentro pegaria outro elemento (ou
+     * null). O valor vem do próprio evento. */
+    if((b=document.getElementById('eapNovoPai')))b.addEventListener('change',function(ev){ EAP_NOVO_PAI=ev.target.value; });
+    if((b=document.getElementById('eapNovo')))b.addEventListener('click',function(){
+      var sel=document.getElementById('eapNovoPai');
+      var pai=sel?sel.value:'';
+      EAP_NOVO_PAI=pai;
+      var cod=eapNovoItem(pai);
+      if(pai)eapAbreAte(pai);
+      eapSujo(); go('cad-eap');
+      var el=document.querySelector('tr[data-eapcod="'+cod+'"] [data-eapf="nome"]');
+      if(el){ el.focus(); el.scrollIntoView({block:'center'}); }
+      toast('Item '+cod+' criado. Dê o nome e ligue ao serviço — marque <b>No TC</b> se ele ainda não existir no Tempo-Caminho. Depois 💾 Salvar EAP.');
+    });
     if((b=document.getElementById('eapAbrir')))b.addEventListener('click',function(){ EAP_OPEN={}; go('cad-eap'); });
     if((b=document.getElementById('eapFechar')))b.addEventListener('click',function(){
       eapAtual().itens.forEach(function(i){ if(eapNivel(i.cod)===1)EAP_OPEN[i.cod]=false; });
@@ -18910,6 +19038,17 @@
       toast(n+' vínculo(s) confirmado(s).');
     });
     if(!pode)return;
+    document.querySelectorAll('[data-eapmove]').forEach(function(sel){
+      sel.addEventListener('change',function(){
+        var tr=sel.closest('tr'); if(!tr)return;
+        var cod=tr.getAttribute('data-eapcod');
+        var novo=eapMoveItem(cod,sel.value);
+        if(!novo){ go('cad-eap'); return; }
+        if(sel.value)eapAbreAte(sel.value);
+        eapSujo(); go('cad-eap');
+        toast('Item movido para '+(sel.value||'o nível 1')+' — agora é '+novo+'.');
+      });
+    });
     document.querySelectorAll('[data-eapf]').forEach(function(el){
       el.addEventListener('change',function(){
         var tr=el.closest('tr'); if(!tr)return;
@@ -20374,7 +20513,7 @@
 
     /* Três meses a partir do início da obra. São exemplo de COLUNA, não de valor: o importador
      * lê o mês do próprio cabeçalho, então quem precisar de doze copia a coluna e corrige o nome. */
-    var meses=[], d0=(window._OBRA&&window._OBRA.data_inicio)?new Date(window._OBRA.data_inicio+'T00:00:00'):new Date();
+    var meses=[], d0=TC_START()?new Date(TC_START()+'T00:00:00'):new Date();
     for(var mi=0;mi<3;mi++){
       var d=new Date(d0.getFullYear(),d0.getMonth()+mi,1);
       meses.push(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2));
@@ -24444,7 +24583,10 @@
     sheetRows(wsCal).forEach(function(row){
       if(!row||!row[0])return;
       var label=String(row[0]).trim().toLowerCase();
-      if(label.indexOf('inicio')===0||label.indexOf('início')===0){
+      if(label.indexOf('matriz')>=0){
+        /* Antes do genérico: "Início da matriz" também começa com "início". */
+        if(row[1]&&!SEM_COL_MATRIZ)calPatch.data_inicio_matriz=excelDateToIso(row[1]);
+      } else if(label.indexOf('inicio')===0||label.indexOf('início')===0){
         if(row[1])calPatch.data_inicio=excelDateToIso(row[1]);
       } else if(label.indexOf('paralisa')===0){
         if(row[1]){
@@ -24459,7 +24601,7 @@
       }
     });
     var feriadosArr=Object.keys(feriadosSet).sort();
-    if(!calPatch.data_inicio&&!feriadosArr.length&&!rainsFound.length)return {calChanged:false};
+    if(!calPatch.data_inicio&&!calPatch.data_inicio_matriz&&!feriadosArr.length&&!rainsFound.length)return {calChanged:false};
     calPatch.feriados={holidayWeeks:feriadosArr,rainPeriods:rainsFound.length?rainsFound:calRainPeriods()};
     await sbUpdateObra(selectedObra.id,calPatch);
     window._OBRA=Object.assign({},window._OBRA,calPatch);
