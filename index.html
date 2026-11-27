@@ -4316,8 +4316,10 @@
       ['imp-mpp','Importar MS Project (XML)','↥'],['imp-img','Importar Imagem (IA)','◨'],
       ['exp-dados','Exportar dados','↧'],['exp-cronog','Exportar Cronograma (Project)','↧'],['exp-xls','Exportar Excel','↧'],['exp-rel','Exportar relatório Excel','▦'],['exp-pdf','Exportar PDF','↧'],['sair','Sair','⇥']];
     /* Gerar e limpar andam juntos e são o par que comanda o cronograma — ficam no começo da
-     * barra, antes dos importadores, porque é por eles que se passa primeiro. */
-    TB=[['gerar','Gerar cronograma','⟳'],['limpar','Limpar cronograma','↺']].concat(TB);
+     * barra, antes dos importadores, porque é por eles que se passa primeiro.
+     * No modo manual eles não aparecem: lá o plano é o desenho, e um botão de gerar ao lado de
+     * uma prancheta só faz a pessoa se perguntar qual dos dois vale. */
+    if(!tcManual())TB=[['gerar','Gerar cronograma','⟳'],['limpar','Limpar cronograma','↺']].concat(TB);
     var tb=TB.map(function(t){var cls=(t[0]==='gerar')?'btn primary':((t[0]==='exp-xls'||t[0]==='exp-pdf')?'btn primary':'btn');
       return '<button class="'+cls+'" data-act="'+t[0]+'" data-label="'+t[1]+'" style="padding:7px 11px">'+t[2]+' '+t[1]+'</button>';}).join('');
     tb+='<span style="flex:1;min-width:8px"></span><button class="btn" data-act="rev00" data-label="Gerar linha de base" style="padding:7px 13px;background:#141A20;color:#fff;border-color:#141A20">❄ Gerar linha de base</button>';
@@ -14979,7 +14981,10 @@
    *  Sem nada gerado o retorno é vazio de propósito: a matriz aparece em branco com o botão de
    *  gerar, em vez de inventar um plano que ninguém pediu. */
   function buildScheduleVivo(){
-    if(REF_DENTRO>0||ACTIVE_CENARIO||!autoLigado())return buildScheduleCalc();
+    /* O modo manual fica de fora: ali o plano é o que foi DESENHADO, não um cálculo que alguém
+     * manda refazer. Prendê-lo à geração escondia o desenho já salvo atrás da tela de "gere o
+     * cronograma" — o trabalho estava lá, a tela é que não mostrava. */
+    if(REF_DENTRO>0||ACTIVE_CENARIO||!autoLigado()||tcManual())return buildScheduleCalc();
     var s=autoSnap();
     return s?autoDesenha(s):[];
   }
@@ -15690,7 +15695,7 @@
   }
   /** A matriz ao vivo está em branco por falta de GERAÇÃO — e não por falta de cadastro. */
   function autoPrecisaGerar(){
-    if(!autoLigado()||CENARIO_VISTA||ACTIVE_CENARIO||autoGerado())return false;
+    if(!autoLigado()||CENARIO_VISTA||ACTIVE_CENARIO||autoGerado()||tcManual())return false;
     return !refAtiva()||tcVistaAtual()==='plano';
   }
   /** Há cadastro suficiente para o cálculo dar alguma coisa? */
@@ -25963,7 +25968,7 @@
    *  que já não corresponde ao que ela cadastrou), e, no caso tranquilo, de quando é o plano que
    *  está na tela — uma linha discreta, que é o peso que a informação tem quando está tudo bem. */
   function autoEstadoHTML(){
-    if(CENARIO_VISTA||ACTIVE_CENARIO)return '';
+    if(CENARIO_VISTA||ACTIVE_CENARIO||tcManual())return '';
     if(!autoLigado())
       return '<div class="banner" style="margin-bottom:10px;border-color:var(--crit)">'+
         'A coluna <b>cronograma_auto</b> ainda não existe no banco. Rode <b>sql/40_cronograma_auto.sql</b> '+
@@ -26004,7 +26009,7 @@
         : 'Antes de gerar, cadastre os <b>serviços</b> (com produtividade por semana e número de equipes) e os '+
           '<b>lotes</b> com as quantidades. Sem quantidade e produtividade não há duração para calcular.')+'</div>'+
       ((temCad&&!isReadOnly()&&!matBloqueada())
-        ?'<button class="btn primary" id="autoGerarBtn" style="padding:10px 20px">⟳ Gerar cronograma automático</button>'
+        ?'<button class="btn primary" id="autoGerarBtn" style="padding:10px 20px">⟳ Gerar cronograma</button>'
         :'')+'</div>';
   }
   function tcAutoBarraHTML(){
@@ -27274,6 +27279,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
 
 
