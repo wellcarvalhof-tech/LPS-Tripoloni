@@ -1859,6 +1859,157 @@
   var ESTACA_AVANCO={}; // {loteId: {"estacaId::servicoId": {inicio,fim,prodId}}}
   var ESTACA_VOL={}; // {loteId: {"estacaId::servicoId": {proj,real}}} — escopo da obra toda (planilha)
   var RECURSOS=[]; // catálogo de recursos (funções/equipamentos) da obra: {id,n,tipo,u}
+  /* ================= Catálogo padrão da construtora =================
+   * As funções, os equipamentos e a estrutura de apoio administrativo que toda obra da
+   * Tripoloni usa. Ficam aqui dentro, e não numa planilha que alguém precisa lembrar de
+   * importar: obra nova já nasce com o catálogo, e obra que já existe completa o que falta
+   * pelo botão "Carregar catálogo padrão".
+   *
+   * Formato enxugado de propósito — [categoria, unidade, classe, [nomes...]] — porque a lista
+   * repetia a mesma categoria em dezenas de linhas seguidas e isso pesaria no arquivo à toa.
+   *
+   * Para atualizar: edite aqui. As obras existentes não são tocadas por uma mudança nesta
+   * lista; quem quiser o que entrou depois clica em "Carregar catálogo padrão" de novo, que
+   * só insere o que ainda não existe. */
+  var CAT_FUNCOES=[   // 103 funções
+    ["M.O.D.","un","direto",["AJUDANTE/SERVENTE","ARMADOR","CARPINTEIRO","CONTRAMESTRE DE EMBARCACAO","ENCANADOR","MARINHEIRO FLUVIAL DE CONVES","MESEIRO","MONTADOR","MOTORISTA CAMINHÃO 3/4 - BAU","MOTORISTA CAMINHÃO 3/4 - CABINADO","MOTORISTA CAMINHÃO 3/4 - CARROCERIA","MOTORISTA CAMINHÃO BASCULANTE","MOTORISTA CAMINHÃO BETONEIRA","MOTORISTA CAMINHÃO BOMBA LANÇA DE CONCRETO","MOTORISTA CAMINHÃO COMBOIO","MOTORISTA CAMINHÃO DISTRIBUIDOR DE CIMENTO","MOTORISTA CAMINHÃO ESPARGIDOR","MOTORISTA CAMINHÃO MDR","MOTORISTA CAMINHÃO MUNCK","MOTORISTA CAMINHÃO PIPA","MOTORISTA CARRETA BASCULANTE","MOTORISTA CARRETA CARGA SECA","NIVELADOR","OPERADOR DE BOB CAT","OPERADOR DE BOMBA DE CONCRETO","OPERADOR DE BRITAGEM","OPERADOR DE CALDEIRA","OPERADOR DE EMPILHADEIRA","OPERADOR DE ESCAVADEIRA","OPERADOR DE ESPARGIDOR","OPERADOR DE FORA DE ESTRADA","OPERADOR DE FRESA","OPERADOR DE GUINDASTE","OPERADOR DE MDR","OPERADOR DE MINI CARREGADEIRA","OPERADOR DE MINI ESCAVADEIRA","OPERADOR DE MOTONIVELADORA","OPERADOR DE MOTOSCRAPER","OPERADOR DE MOTOSSERRA","OPERADOR DE PA CARREGADEIRA","OPERADOR DE PAVIMENTADORA","OPERADOR DE PERFURATRIZ","OPERADOR DE PTA","OPERADOR DE RECICLADORA","OPERADOR DE RETROESCAVADEIRA","OPERADOR DE ROLO CHAPA","OPERADOR DE ROLO PNEU","OPERADOR DE ROLO VIBRO","OPERADOR DE RYSTER","OPERADOR DE TRATOR DE ESTEIRA","OPERADOR DE TRATOR PNEU","OPERADOR DE USINA DE ASFALTO","OPERADOR DE USINA DE CONCRETO","OPERADOR DE VIBROACABADORA","PEDREIRO","RASTELEIRO","SINALEIRO"]],
+    ["M.O.I.","un","indireto",["ABASTECEDOR","ALMOXARIFE","ANALISTA","APONTADOR","APRENDIZ","APROPRIADOR","ASSISTENTE","AUXILIAR","BIOLOGO","BORRACHEIRO","CALDEIREIRO","COMPRADOR","CONTROLADOR DE MANUTENCAO","COORDENADOR","DIRETOR","ELETRICISTA CC","ELETRICISTA DE AUTO","ELETRICISTA INDUSTRIAL","ENCARREGADO","ENCARREGADO GERAL","ENFERMEIRO DO TRABALHO","ENGENHEIRO","FEITOR","GERENTE","GESTOR DE CONTRATO","GREIDISTA","LABORATORISTA","LAVADOR","LUBRIFICADOR","MECÂNICO DE EQUIPAMENTO LEVE","MECÂNICO DE EQUIPAMENTO PESADO","MECÂNICO INDUSTRIAL","MÉDICO DO TRABALHO","MOTORISTA DE CARRETA PRANCHA","MOTORISTA DE CAMINHÃO COMBOIO / ABASTECEDOR","MOTORISTA VEICULO LEVE","RECEPCIONISTA","SOLDADOR","SUPERVISOR","TECNICO","TOPOGRAFO","TORNEIRO MECÂNICO","TRAINEE","VETERINARIO","VIGIA","ZELADOR"]]
+  ];
+  var CAT_EQUIPAMENTOS=[   // 113 equipamentos
+    ["BALANCAS","un",["BR - BALANCA RODOVIARIA"]],
+    ["BRITAGEM","un",["AC - AERO CLASSIFICADOR","AV - ALIMENTADOR VIBRATORIO","BI - BRITADOR DE IMPACTO","BM - BRITADOR DE MANDIBULAS","BMM - BRITADOR MOVEL DE MANDIBULAS","BRM - BRITAGEM MOVEL","CSMP - CONJUNTO SEMIMOVEL DE PENEIRAS","CV - CALHA VIBRATORIA","MV - MESA VIBRATORIA","PR - CARRETA DE PERFURACAO DE ROCHA","PV - PENEIRA VIBRATORIA","RC - REBRITADOR DE CONE","RM - REBRITADOR DE MANDIBULAS","UBR - USINA BENEFICIAMENTO RAP"]],
+    ["CAMINHAO","un",["CAC - CAMINHAO APLICADOR DE CURA","CAP - CARRETA ABASTECIMENTO","CB - CAMINHAO BASCULANTE","CBC - CAMINHAO BOMBEAR CONCRETO","CBL - CAMINHAO BOMBA LANCA","CBM - CAMINHAO BASCULANTE MINERIO","CBP - CAMINHAO BASCULANTE PASSAGEIRO","CBR - CAMINHAO BASCULANTE ROLL ON ROLL O","CC - CAMINHAO CONCRETO","CEC - CAMINHAO ESPARGIDOR DE CIMENTO","CF - CAMINHAO FIXO","CFM - CAMINHAO FIXO MUNK","CFP - CAMINHAO FIXO PASSAGEIRO","CFV - CAMINHAO FIXO VIGA","CHS - CAMINHAO HIDROSEMEADURA","CL - CAMINHAO COMBOIO","CM - CAVALO MECANICO","CP - CAMINHAO PIPA","PA - PIPA ASFALTICO","TA - CAMINHAO TANQUE ABASTECEDOR DE COMB","VTP - VEICULO DE TRANPORTE DE PASSAGEIRO"]],
+    ["CARGA SEMI-REBOQUE","un",["JB - JUMBO SEMI REBOQUE","SR - SEMI REBOQUE"]],
+    ["CONTAINER","un",["CME - CONTAINER MARITIMO EXPORTACAO","CML - CONTEINER METALICO LUBRIFICACAO","CONTAINER JUMBO TANQUE FIXO"]],
+    ["EQUIPAMENTOS LEVES","un",["BOD - BOMBA D'AGUA","GSD - GRUPO DE SOLDA A DIESEL","MCC - MAQUINA DE CONCRETAR CANALETA","MCP - MAQUINA CORTAR PAVIMENTO","MMF - MAQUINA DE MEIO FIO","MTP - MICRO TRATOR DE PNEU","RB - REBOCADOR"]],
+    ["GERADOR","un",["GG - GRUPO GERADOR","GGPP - GRUPO GERADOR PEQUENO PORTE"]],
+    ["IMPLEMENTOS","un",["AA - ARADO AIVECA","AP - ARRUADOR PNEUMATICO","BCR - BOMBA DE CONCRETO REBOCADOR","BLA - BOMBA DE LAVAR AUTOS","BLS - BALSA MULTICASCO","BPC - BOMBA PROJETORA DE CONCRETO","BT - BETONEIRA","CA - COMPRESSOR DE AR","CAE - COMPRESSOR DE AR ESTACIONARIO","CES - COMPACTADOR ESTAQUEADOR DE SOLO","CR - ROLO DE GRELHA","CTA - CARRETA TANQUE AGRICOLA","EA - ESPALHADOR DE AGREGADOS","ER - ENXADA ROTATIVA","GD - GRADE DE DISCO","MLA - MAQUINA DE LAVAR AUTOS","MRH - MARTELO ROMPEDOR HIDRAULICO","MSR - MICRO SEMI REBOQUE","PH - PERFURATRIZ HIDRAULICA","RHA - ROCADEIRA HIDRAULICA ARTICULADA","RR - ROCADEIRA REBOCAVEL P/CAMPO","SRB - SEMI REBOQUE SANITARIO","SRD - SEMI REBOQUE DOLLY","TAUX - TANQUE AUXILIARES","TD - TANQUE DE DIESEL","TG - TRITURADOR DE GALHOS","TIL - TORRE DE ILUMINACAO","TL - TRELICA LANCADEIRA","TPA - TANQUE DE PRODUTO ASFALTICO","TTV - TANQUE TERMICO VERTICAL","VASSOURA RECOLHEDORA BOB CAT","VM - VASSOURA MECANICA","CBCI - CAMINHAO BOMBEAR CONCRETO IMPLEMENTO"]],
+    ["MAQUINA DE CORTE","un",["MSFH - MAQUINA DE SERRA FITA HIDRAULICA"]],
+    ["MAQUINAS PESADAS","un",["EP - EMPILHADEIRA","ES - ESCAVADEIRA HIDRAULICA","FRS - FRESADORA ESCAV  ELEVADORA FRIO","GHM - GUINDASTE HIDRAULICO MOVEL","MC - MINI CARREGADEIRA","MES - MINI ESCAVADEIRA","MN - MOTONIVELADORA","PAV - PAVIMENTADORA DE CONCRETO","PC - PA CARREGADEIRA","REC - RECICLADORA","RES - RETRO ESCAVADEIRA","RH - ROLO HYSTER","RP - ROLO DE PNEUS","RT - ROLO COMPACTADOR TAMPING","RTD - ROLO COMPACTADOR TANDEM","RV - ROLO COMPACTADOR VIBRATORIO","TE - TRATOR DE ESTEIRA","TP - TRATOR DE PNEUS","VA - VIBRO ACABADORA"]],
+    ["USINA DE ASFALTO","un",["MDA - MULTI DISTRIBUIDOR DE AGREGADOS","UA - USINA DE ASFALTO","UMP - USINA DE MICROPAVIMENTO","UMPB - USINA DE MICROPAVIMENTO BARRA"]],
+    ["USINA DE CONCRETO","un",["SC - SILO DE CIMENTO","UC - USINA DE CONCRETO","USINA DE CONCRETO MOVEL"]],
+    ["USINA DE SOLOS","un",["US - USINA DE SOLO"]],
+    ["VEICULOS PEQUENOS","un",["VP - VEICULO DE PASSEIO","VAF - VEÍCULO AUTO FOSSA"]]
+  ];
+  var CAT_APOIO=[   // 21 linhas de 3 níveis
+    ["INDIRETO ADMINISTRATIVO","0. Gerencia do Contrato","Gerencia do Contrato"],
+    ["INDIRETO ADMINISTRATIVO","1. Administrativo","Administrativo"],
+    ["INDIRETO ADMINISTRATIVO","1. Administrativo","RECURSOS HUMANO"],
+    ["INDIRETO ADMINISTRATIVO","1. Administrativo","SUPRIMENTOS"],
+    ["INDIRETO ADMINISTRATIVO","1. Administrativo","SERVIÇOS GERAIS"],
+    ["INDIRETO ADMINISTRATIVO","2. QSMS","QSMS"],
+    ["INDIRETO ADMINISTRATIVO","2. QSMS","SAÚDE"],
+    ["INDIRETO ADMINISTRATIVO","2. QSMS","SEGURANÇA"],
+    ["INDIRETO ADMINISTRATIVO","2. QSMS","MEIO AMBIENTE"],
+    ["INDIRETO ADMINISTRATIVO","2. QSMS","QUALIDADE"],
+    ["INDIRETO ADMINISTRATIVO","2. QSMS","LABORATÓRIO"],
+    ["INDIRETO ADMINISTRATIVO","3. Equipamentos","Equipamentos"],
+    ["INDIRETO ADMINISTRATIVO","4. Engenharia","Engenharia"],
+    ["INDIRETO ADMINISTRATIVO","4. Engenharia","PLANEJAMENTO, CONTROLE E CUSTOS"],
+    ["INDIRETO ADMINISTRATIVO","4. Engenharia","SEÇÃO TÉCNICA"],
+    ["INDIRETO ADMINISTRATIVO","5. Producao","ESTRADAS"],
+    ["INDIRETO ADMINISTRATIVO","5. Producao","OAE"],
+    ["INDIRETO ADMINISTRATIVO","6. Unidade Industrial","USINA DE ASFALTO"],
+    ["INDIRETO ADMINISTRATIVO","6. Unidade Industrial","USINA DE CONCRETO"],
+    ["INDIRETO ADMINISTRATIVO","6. Unidade Industrial","USINA DE SOLOS"],
+    ["INDIRETO ADMINISTRATIVO","6. Unidade Industrial","BRITADOR"]
+  ];
+  /** Achata o catálogo compacto na lista que o banco recebe. */
+  function catRecursos(tipo){
+    var fonte=(tipo==='funcao')?CAT_FUNCOES:CAT_EQUIPAMENTOS;
+    var out=[];
+    fonte.forEach(function(g){
+      var cat=g[0], un=g[1]||'un';
+      var classe=(tipo==='funcao')?(g[2]||''):'';
+      var nomes=(tipo==='funcao')?g[3]:g[2];
+      (nomes||[]).forEach(function(n){
+        out.push({nome:n,tipo:tipo,unidade:un,categoria:cat||null,classe:classe||null});
+      });
+    });
+    return out;
+  }
+  function catChaveRec(nome,tipo){ return String(nome||'').trim().toLowerCase()+'::'+tipo; }
+  function catChaveApoio(a,b,c){
+    return [a,b,c].map(function(x){ return String(x||'').trim().toLowerCase(); }).join('::');
+  }
+  /** O que o catálogo tem e esta obra ainda não. Nunca devolve o que já existe: recarregar o
+   *  catálogo é completar, não duplicar. */
+  function catFaltantes(tipo){
+    if(tipo==='apoio'){
+      var temA={};
+      APOIO.forEach(function(a){ temA[catChaveApoio(a.n1,a.n2,a.n3)]=true; });
+      return CAT_APOIO.filter(function(l){ return !temA[catChaveApoio(l[0],l[1],l[2])]; })
+        .map(function(l){ return {nivel1:l[0],nivel2:l[1],nivel3:l[2]}; });
+    }
+    var temR={};
+    RECURSOS.forEach(function(r){ temR[catChaveRec(r.n,r.tipo)]=true; });
+    return catRecursos(tipo).filter(function(x){ return !temR[catChaveRec(x.nome,x.tipo)]; });
+  }
+  /* Em blocos, e não uma linha por vez: o importador antigo mandava um insert por função, e
+   * 216 idas ao banco em série é a diferença entre dois segundos e quase um minuto de tela
+   * parada. O bloco tem tamanho modesto de propósito — um payload gigante é o tipo de coisa
+   * que falha só na obra com a conexão ruim. */
+  async function sbInserirEmBlocos(tabela,linhas){
+    if(!linhas.length)return [];
+    await sbRequireSession();
+    for(var i=0;i<linhas.length;i+=60){
+      var r=await SB.from(tabela).insert(linhas.slice(i,i+60));
+      if(r.error)throw r.error;
+    }
+    return linhas;
+  }
+  /** Põe na obra o que falta do catálogo padrão. Devolve quantos entraram de cada tipo.
+   *  Não apaga nem sobrescreve nada: o que a obra cadastrou por conta dela fica como está. */
+  async function catalogoAplicar(obraId,tipos){
+    var feito={funcao:0,equipamento:0,apoio:0};
+    var quais=tipos||['funcao','equipamento','apoio'];
+    for(var i=0;i<quais.length;i++){
+      var tipo=quais[i], falta=catFaltantes(tipo);
+      if(!falta.length)continue;
+      if(tipo==='apoio'){
+        var baseA=APOIO.length;
+        var linhasA=falta.map(function(x,k){
+          return {id:newUuid(),obra_id:obraId,nivel1:x.nivel1,nivel2:x.nivel2,nivel3:x.nivel3,ordem:baseA+k};
+        });
+        await sbInserirEmBlocos('apoio_admin',linhasA);
+        linhasA.forEach(function(x){ APOIO.push({id:x.id,n1:x.nivel1,n2:x.nivel2,n3:x.nivel3,cfg:{}}); });
+        feito.apoio=linhasA.length;
+      }else{
+        var baseR=RECURSOS.length;
+        var linhasR=falta.map(function(x,k){
+          return {id:newUuid(),obra_id:obraId,nome:x.nome,tipo:x.tipo,unidade:x.unidade,
+                  categoria:x.categoria,classe:x.classe,ordem:baseR+k};
+        });
+        await sbInserirEmBlocos('recursos',linhasR);
+        linhasR.forEach(function(x){
+          RECURSOS.push({id:x.id,n:x.nome,tipo:x.tipo,u:x.unidade,cat:x.categoria||'',
+                         classe:normClasse(x.classe,x.tipo),aliases:[]});
+        });
+        feito[tipo]=linhasR.length;
+      }
+    }
+    return feito;
+  }
+  var CAT_ROTULO={funcao:'função(ões)',equipamento:'equipamento(s)',apoio:'linha(s) de apoio administrativo'};
+  /** O botão "Catálogo padrão" das três telas. Diz o que vai entrar antes de entrar: quem
+   *  clica num botão de catálogo não espera 216 linhas novas sem aviso. */
+  async function catalogoClicado(tipo){
+    if(isReadOnly()){ alert('Seu perfil é só de visualização.'); return; }
+    if(!selectedObra){ alert('Abra uma obra antes.'); return; }
+    var falta=catFaltantes(tipo), NL=String.fromCharCode(10);
+    if(!falta.length){ toast('Esta obra já tem tudo o que o catálogo padrão traz.'); return; }
+    var amostra=falta.slice(0,6).map(function(x){ return tipo==='apoio'?(x.nivel2+' · '+x.nivel3):x.nome; });
+    if(!confirm('Carregar o catálogo padrão da construtora?'+NL+NL+
+      'Entram '+falta.length+' '+CAT_ROTULO[tipo]+' que esta obra ainda não tem:'+NL+
+      amostra.join(', ')+(falta.length>6?(' e mais '+(falta.length-6)):'')+'.'+NL+NL+
+      'Nada do que já está cadastrado é alterado ou apagado.'))return;
+    try{
+      var r=await catalogoAplicar(selectedObra.id,[tipo]);
+      toast((r[tipo]||0)+' '+CAT_ROTULO[tipo]+' do catálogo padrão.');
+      go(current);
+    }catch(e){ alert('Falha ao carregar o catálogo: '+((e&&e.message)||e)); }
+  }
+
   var APOIO=[]; // Apoio Administrativo — mão de obra/recursos indiretos em 3 níveis: {id,n1,n2,n3,cfg:{crew:[{resourceId,qtyPerTeam}]}}
   var APOIO_DIRTY={}, APOIO_SELECTED={};
   var REALIZADO_REC={}; // {"recursoId::data_semana(ISO)": quantidade TOTAL realizada}
@@ -4958,6 +5109,7 @@
     return head('Apoio Administrativo','Mão de obra e recursos indiretos da obra em 3 níveis de classificação.'+(dirty?' Há alterações não salvas.':''),
       '<button class="btn" id="apoioModelo">Modelo</button>'+
       '<button class="btn" id="apoioImportar">↥ Importar</button>'+
+      '<button class="btn" id="catApoioBtn" title="Cadastra a estrutura de apoio administrativo padrão da construtora que ainda falta nesta obra. Não altera nem apaga o que já existe.">▦ Catálogo padrão</button>'+
       '<button class="btn" id="apoioExportar">↧ Exportar</button>'+
       (selCount?'<button class="btn" id="delSelApoio" style="color:var(--crit);border-color:var(--crit)">✕ Excluir selecionados ('+selCount+')</button>':'')+
       '<button class="btn primary" id="addApoio">+ Adicionar</button>'+
@@ -5840,6 +5992,7 @@
     var catalogoFuncoes=sectionCard('catFuncoes','Funções ('+nFuncoes+')','Mão de obra cadastrada — nome, categoria, classificação (direto/indireto, vinda da categoria) e unidade.',
       '<button class="btn" id="histModelo">Modelo</button>'+
       '<button class="btn" id="histImportarFuncoes">↥ Importar Funções</button>'+
+      '<button class="btn" id="catFuncoesBtn" title="Cadastra as funções padrão da construtora que ainda faltam nesta obra. Não altera nem apaga o que já existe.">▦ Catálogo padrão</button>'+
       '<button class="btn" id="histExportar">↧ Exportar histograma</button>'+
       '<button class="btn primary" id="addFuncao">+ Adicionar função</button>'+
       '<button class="btn primary" id="saveRecursos"'+(recDirty?'':' disabled')+'>💾 Salvar alterações</button>',
@@ -5848,6 +6001,7 @@
     var catalogoEquip=sectionCard('catEquip','Equipamentos ('+nEquip+')','Equipamentos cadastrados — nome, categoria e unidade. Próprio × terceiro é apontado no realizado (o previsto é geral).',
       '<button class="btn" id="histModeloEquip">Modelo</button>'+
       '<button class="btn" id="histImportarEquip">↥ Importar Equipamentos</button>'+
+      '<button class="btn" id="catEquipBtn" title="Cadastra os equipamentos padrão da construtora que ainda faltam nesta obra. Não altera nem apaga o que já existe.">▦ Catálogo padrão</button>'+
       '<button class="btn primary" id="addEquip">+ Adicionar equipamento</button>',
       nEquip?'<div class="tbl-wrap"><table class="edtbl"><thead><tr>'+catHead+'</tr></thead><tbody>'+equipRows+'</tbody></table></div>'+classePorCatEq:'<div class="note">Nenhum equipamento cadastrado ainda.</div>'
     );
@@ -12115,6 +12269,8 @@
       if(modeloA)modeloA.addEventListener('click',downloadApoioModelo);
       var expA=document.getElementById('apoioExportar');
       if(expA)expA.addEventListener('click',exportApoioWorkbook);
+      var catA=document.getElementById('catApoioBtn');
+      if(catA)catA.addEventListener('click',function(){ catalogoClicado('apoio'); });
       var impA=document.getElementById('apoioImportar');
       if(impA)impA.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importApoioWorkbook).catch(function(err){alert('Falha na importação do Apoio Administrativo: '+((err&&err.message)||err));});});});
     }
@@ -12192,6 +12348,10 @@
       if(modelo)modelo.addEventListener('click',downloadResourcesTemplate);
       var modeloEquip=document.getElementById('histModeloEquip');
       if(modeloEquip)modeloEquip.addEventListener('click',downloadEquipTemplate);
+      var catF=document.getElementById('catFuncoesBtn');
+      if(catF)catF.addEventListener('click',function(){ catalogoClicado('funcao'); });
+      var catE=document.getElementById('catEquipBtn');
+      if(catE)catE.addEventListener('click',function(){ catalogoClicado('equipamento'); });
       var impFuncoes=document.getElementById('histImportarFuncoes');
       if(impFuncoes)impFuncoes.addEventListener('click',function(){pickExcelFile(function(file){readWorkbookFile(file).then(importFuncoesWorkbook).catch(function(err){alert('Falha ao ler o arquivo: '+((err&&err.message)||err));});});});
       var impEquip=document.getElementById('histImportarEquip');
@@ -26999,7 +27159,15 @@
       renderLanding(); return;
     }
     var nome=prompt('Nome da nova obra:','Nova obra'); if(nome===null)return;
-    try{ var id=await sbCreateObra({nome:nome}); await selectObra(id); }
+    try{
+      var id=await sbCreateObra({nome:nome});
+      /* A obra nasce com o catálogo da construtora: as funções, os equipamentos e a estrutura
+       * de apoio são os mesmos em toda obra, e começar do zero só rendia planilha importada à
+       * mão em cada uma. Falhar aqui não pode impedir de entrar na obra — ela existe, e o
+       * catálogo se carrega depois pelo botão. */
+      try{ RECURSOS=[]; APOIO=[]; await catalogoAplicar(id); }catch(e){}
+      await selectObra(id);
+    }
     catch(e){
       var m=(e&&e.message)||String(e);
       if(/row-level security|violates|42501/i.test(m))m='seu perfil não pode criar obras (só o desenvolvedor cria sem limite; planejador cria uma).';
@@ -27106,6 +27274,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
 
 
