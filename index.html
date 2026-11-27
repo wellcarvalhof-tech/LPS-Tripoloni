@@ -2047,10 +2047,12 @@
     ajSecao('comecar','Por onde começar numa obra nova',
       p('A ordem importa, porque cada passo usa o anterior:')+
       ul(['<b>Cadastro → Obra</b>: nome, data de início e o calendário de paralisações e chuva.',
-          '<b>Tempo Caminho → Serviços</b>: o que a obra executa, com unidade, produtividade por equipe e número de equipes.',
+          '<b>Cadastro → EAP de serviços</b>: a obra já nasce com a EAP padrão da construtora e todos os serviços dela criados no Tempo-Caminho. Aqui você <b>desmarca na coluna “No TC”</b> o que esta obra não vai executar — desmarcar o macrofluxo inteiro tira todos os serviços dele de uma vez. Só o que fica marcado existe no cronograma.',
+          '<b>Tempo Caminho → Serviços</b>: nos que sobraram, informe unidade, produtividade por equipe e número de equipes — é o que o modelo não tem como adivinhar.',
           '<b>Tempo Caminho → Lotes &amp; Quantidades</b>: os lotes na ordem executiva e o saldo de cada serviço em cada lote.',
           '<b>Matriz Tempo-Caminho</b>: o cronograma propriamente dito.',
-          'Quando o plano estiver de pé, <b>gere a linha de base</b> (REV00) em Cenários. É ela que vira o previsto da Curva S, do histograma, da AVA e dos relatórios.']))+
+          'Quando o plano estiver de pé, <b>gere a linha de base</b> (REV00) em Cenários. É ela que vira o previsto da Curva S, do histograma, da AVA e dos relatórios.'])+
+      p('Obra que já existia antes disso não foi alterada: o escopo dela foi montado à mão e continua como está. A coluna <b>No TC</b> aparece lá também, refletindo o que já estava vinculado.'))+
     ajSecao('matriz','Matriz Tempo-Caminho: automático × manual',
       p('A chave <b>“Como o cronograma é montado”</b> decide tudo o que o app calcula — Curva S, histograma, AVA e relatórios saem dali.')+
       ul(['<b>Automático</b>: o app distribui os lotes pelas equipes sozinho, respeitando predecessoras, fila e calendário. O que você fixar à mão continua valendo como âncora.',
@@ -17570,6 +17572,204 @@
   var EAP=null;
   var EAP_DIRTY=false;
   var EAP_OPEN={};
+  /* ================= EAP padrão da construtora =================
+   * O escopo-tipo de uma obra rodoviária da Tripoloni: os macrofluxos e, dentro de cada um, os
+   * serviços com a sigla de controle e a unidade de medição.
+   *
+   * Obra nova nasce com esta EAP inteira, todos os serviços marcados e já criados no
+   * Tempo-Caminho — depois se desmarca o que aquela obra não vai executar, que é muito mais
+   * rápido que cadastrar quarenta serviços do zero. Obra que já existe não é tocada: o escopo
+   * dela foi montado à mão e trocá-lo por este seria desfazer trabalho.
+   *
+   * [macrofluxo, [[serviço, sigla, unidade, cor], ...]] */
+  var CAT_EAP=[
+    ["SUPRESSÃO",[
+      ["LIMPEZA","LIMP","m²","#912727"],
+      ["DESTOCAMENTO","DEST","m²","#b93131"],
+      ["TRANSPORTE LIMPEZA","TL","m³","#d04e4e"]]],
+    ["TERRAPLENAGEM",[
+      ["TERRAPLENAGEM - ATERRO","TA","m³","#916627"],
+      ["TERRAPLENAGEM - CORTE","TC","m³","#d09c4e"]]],
+    ["ESTRUTURA DO PAVIMENTO",[
+      ["CFT DUP","CD","m","#7c9127"],
+      ["BASE DUP","BD","m","#869d2a"],
+      ["BASE MARG","BM","m","#8fa82d"],
+      ["RECICLAGEM DE BASE","REC","m","#99b430"],
+      ["BASE INTERSE","BI","m","#a3bf33"],
+      ["CFT INTERSE","CI","m","#acca37"],
+      ["CFT MARG","CM","m","#b1cd42"],
+      ["CFT DUP - SOLO","CDS","%","#b6d04e"]]],
+    ["PAVIMENTAÇÃO",[
+      ["PAVIMENTO RIGIDO","PR","m","#3c9127"],
+      ["CBUQ DUP","CD","m","#43a12b"],
+      ["PAVIMENTO RIGIDO MANUAL","PRMA","%","#49b12f"],
+      ["REMOÇÃO DE PAVIMENTO","RDP","%","#50c133"],
+      ["CBUQ INTERSE","CI","m","#5acc3e"],
+      ["CBUQ MARG","CM","m","#68d04e"]]],
+    ["DRENO",[
+      ["DRENO","DREN","m","#279151"],
+      ["BS SSB DUP","BSD","%","#4ed082"]]],
+    ["DREANGEM PROFUNDA",[
+      ["BUEIRO","BUEI","un","#31b9b9"]]],
+    ["DRENAGEM SUPERFICIAL",[
+      ["SARJETA","SARJ","m","#275191"],
+      ["VALETA","VALE","%","#3168b9"],
+      ["MEIO-FIO","MF","%","#4e82d0"]]],
+    ["CONTENÇÕES",[
+      ["CONTENÇÕES","CONT","un","#3c2791"],
+      ["CONT AFLEX","CA","%","#472eac"],
+      ["CONT GRAMP","CG","%","#5235c7"],
+      ["CONT GABI","CG","%","#684ed0"]]],
+    ["OAE",[
+      ["OAE INFRA","OI","%","#7c2791"],
+      ["OAE MESO","OM","%","#8d2ca5"],
+      ["OAE SUPER","OS","%","#9e31b9"],
+      ["OAE ENCONTRO","OE","%","#ae3acb"],
+      ["OAE LAJE APROX.","OLA","%","#b64ed0"]]],
+    ["SERVIÇOS DIVERSOS",[
+      ["GRAMA DUP","GD","%","#912766"],
+      ["GRAMA DISP","GD","%","#9d2a6f"],
+      ["GRAMA MARG","GM","%","#a82d77"],
+      ["HIDRO DUP","HD","%","#b4307f"],
+      ["HIDRO MARG","HM","%","#bf3387"],
+      ["HIDRO DISP","HD","%","#ca378f"],
+      ["NEW JERSEY","NJ","%","#cd4295"],
+      ["PASSEIO","PASS","%","#d04e9c"]]]
+  ];
+  /** A EAP padrão achatada, com os códigos hierárquicos já montados: o macrofluxo vira item de
+   *  nível 1 e cada serviço um filho dele. */
+  function catEapPlano(){
+    var out=[];
+    CAT_EAP.forEach(function(g,gi){
+      var cod=String(gi+1);
+      out.push({cod:cod,nome:g[0],un:'',sigla:'',cor:'',grupo:true});
+      (g[1]||[]).forEach(function(it,ii){
+        out.push({cod:cod+'.'+(ii+1),nome:it[0],sigla:it[1]||'',un:it[2]||'un',cor:it[3]||'',grupo:false});
+      });
+    });
+    return out;
+  }
+  /** A cor que a EAP padrão reserva para este serviço, pelo nome. Serve quando alguém remarca um
+   *  item: o serviço volta com a cor que tinha, e não com a próxima da paleta genérica. */
+  function catEapCor(nome){
+    var alvo=String(nome||'').trim().toLowerCase(), achou='';
+    CAT_EAP.forEach(function(g){ (g[1]||[]).forEach(function(it){
+      if(!achou&&String(it[0]).trim().toLowerCase()===alvo)achou=it[3]||'';
+    }); });
+    return achou;
+  }
+  /** Põe a EAP padrão numa obra recém-criada: cria os serviços no Tempo-Caminho e monta a EAP
+   *  com todos marcados. Só faz sentido em obra vazia — numa obra com escopo montado à mão isto
+   *  seria substituir o trabalho dela pelo modelo. */
+  async function catEapAplicar(obraId){
+    if(SERV.length||eapTem())return {servicos:0};
+    var plano=catEapPlano(), folhas=plano.filter(function(x){ return !x.grupo; });
+    var linhas=folhas.map(function(x,i){
+      return {id:newUuid(),obra_id:obraId,nome:x.nome,unidade:x.un,cor:x.cor||HEXPAL[i%6],
+              teams:1,produtividade:0,lag_semanas:0,config:{},codigo:x.sigla||null,ordem:i};
+    });
+    await sbInserirEmBlocos('servicos',linhas);
+    var idPorCod={};
+    linhas.forEach(function(l,i){
+      idPorCod[folhas[i].cod]=l.id;
+      SERV.push({id:l.id,n:l.nome,u:l.unidade,c:PALVARS[i%6],hex:l.cor,eq:1,p:'0',lag:0,cfg:{},
+                 codigo:l.codigo||'',eap:'',grupo:''});
+    });
+    EAP=eapVazio();
+    EAP.cfg.arquivo='EAP padrão'; EAP.cfg.importadoEm=new Date().toISOString();
+    plano.forEach(function(x){
+      EAP.itens.push({cod:x.cod,nome:x.nome,un:x.un,contratual:x.sigla||'',
+                      svc:x.grupo?null:(idPorCod[x.cod]||null),controle:[],orc:null,auto:!!x.grupo});
+    });
+    await sbUpdateObra(obraId,{eap:EAP});
+    window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
+    return {servicos:linhas.length};
+  }
+  /* ---------- marcar e desmarcar serviços na EAP ---------- */
+  /** O item está ligado a um serviço que existe de verdade? */
+  function eapMarcado(it){
+    return !!(it&&it.svc&&SERV.some(function(s){ return s.id===it.svc; }));
+  }
+  /** As folhas de um item (ele mesmo, se for folha). */
+  function eapFolhasDe(cod){
+    var itens=eapAtual().itens;
+    var dentro=function(c){ return c===cod||String(c).indexOf(cod+'.')===0; };
+    return itens.filter(function(x){ return dentro(x.cod)&&!x.auto; });
+  }
+  /** O que se perde ao tirar este serviço do Tempo-Caminho. Vale a pergunta antes de apagar:
+   *  desmarcar na EAP não parece uma operação destrutiva, e pode ser. */
+  function eapPerdasDoServico(svcId){
+    var si=-1; SERV.forEach(function(s,i){ if(s.id===svcId)si=i; });
+    if(si<0)return null;
+    var lotes=0;
+    LOTS.forEach(function(_,li){ if(orcNum((QTY[li]||[])[si])>0)lotes++; });
+    var apontado=(window.PROD_LIST||[]).filter(function(r){ return r.servId===svcId; }).length;
+    return {si:si,lotes:lotes,apontado:apontado};
+  }
+  /** Tira o serviço do Tempo-Caminho e desliga o item. Não apaga o serviço quando outro item da
+   *  EAP também aponta para ele — ali o item é que deixa de usá-lo. */
+  async function eapDesmarcaUm(it){
+    if(!eapMarcado(it))return false;
+    var svcId=it.svc;
+    var outros=eapAtual().itens.filter(function(x){ return x!==it&&x.svc===svcId; }).length;
+    if(!outros){
+      var p=eapPerdasDoServico(svcId);
+      await sbDeleteServico(svcId);
+      if(p){ SERV.splice(p.si,1); QTY.forEach(function(row){ row.splice(p.si,1); }); SVC_OPEN={}; }
+    }
+    it.svc=null;
+    return true;
+  }
+  /** Recria o serviço do item e religa. */
+  async function eapMarcaUm(it){
+    if(eapMarcado(it))return false;
+    var i=SERV.length;
+    var patch={nome:it.nome||'Serviço',unidade:it.un||'un',teams:1,produtividade:0,lag_semanas:0,
+               cor:catEapCor(it.nome)||HEXPAL[i%6],ordem:i};
+    if(it.contratual)patch.codigo=it.contratual;
+    var id=await sbCreateServico(selectedObra.id,patch);
+    SERV.push({id:id,n:patch.nome,u:patch.unidade,c:PALVARS[i%6],hex:patch.cor,eq:1,p:'0',lag:0,
+               cfg:{},codigo:patch.codigo||'',eap:'',grupo:''});
+    QTY.forEach(function(row){ row.push(0); });
+    it.svc=id;
+    return true;
+  }
+  /** O clique na caixa. Num grupo vale para todos os serviços dele de uma vez — "esta obra não
+   *  tem OAE" é uma decisão só, não cinco cliques. */
+  async function eapAlternar(cod,marcar){
+    if(!selectedObra){ alert('Abra uma obra.'); return; }
+    if(!eapPodeEditar()){ alert('Só planejador e desenvolvedor mexem na EAP.'); return; }
+    var alvos=eapFolhasDe(cod).filter(function(it){ return marcar?!eapMarcado(it):eapMarcado(it); });
+    if(!alvos.length){ go('cad-eap'); return; }
+    var NL=String.fromCharCode(10);
+    if(!marcar){
+      /* O aviso conta o que será apagado junto. Numa obra nova isso é sempre zero e a pergunta
+       * some: perguntar por nada ensina a clicar em "sim" sem ler. */
+      var comQtd=0, comApont=0;
+      alvos.forEach(function(it){
+        var p=it.svc?eapPerdasDoServico(it.svc):null;
+        if(!p)return;
+        if(p.lotes)comQtd++;
+        if(p.apontado)comApont++;
+      });
+      if(comQtd||comApont){
+        if(!confirm('Tirar '+alvos.length+' serviço(s) do Tempo-Caminho?'+NL+NL+
+          (comQtd?(comQtd+' tem quantidade lançada em algum lote — ela vai junto.'+NL):'')+
+          (comApont?(comApont+' tem produção já apontada em campo.'+NL):'')+NL+
+          'Para voltar depois é só marcar de novo, mas as quantidades terão de ser lançadas outra vez.'))return;
+      }
+    }
+    try{
+      for(var i=0;i<alvos.length;i++){
+        if(marcar)await eapMarcaUm(alvos[i]); else await eapDesmarcaUm(alvos[i]);
+      }
+      window.PESO=SERV.length?SERV.map(function(){return Math.round(100/SERV.length);}):[];
+      await sbUpdateObra(selectedObra.id,{eap:EAP});
+      toast(alvos.length+' serviço(s) '+(marcar?'no':'fora do')+' Tempo-Caminho.');
+      go('cad-eap');
+    }catch(e){ alert('Falha ao mudar o escopo: '+((e&&e.message)||e)); }
+  }
+
   function eapVazio(){ return {cfg:{arquivo:'',importadoEm:''},itens:[]}; }
   function eapAtual(){ return (EAP&&EAP.itens)?EAP:(EAP=eapVazio()); }
   function eapTem(){ return !!(EAP&&EAP.itens&&EAP.itens.length); }
@@ -17842,7 +18042,21 @@
     }).join('');
     var sugSvc=!!(it.sug&&it.sug.svc&&it.svc), sugOrc=!!(it.sug&&it.sug.orc&&it.orc);
     var pend=(sugSvc||sugOrc)?'<span class="pill warn" title="Veio de semelhança de nome — confirme">a confirmar</span>':'';
-    return '<tr class="eap-n'+eapNivel(it.cod)+'" data-eapcod="'+escAttr(it.cod)+'">'+
+    /* A caixa diz se o serviço existe no Tempo-Caminho. No grupo ela vale por todos os filhos,
+     * e fica em estado intermediário quando só parte deles está marcada. */
+    var folhas=eapFolhasDe(it.cod), marcadas=folhas.filter(eapMarcado).length;
+    var cheio=folhas.length&&marcadas===folhas.length;
+    var parcial=marcadas>0&&!cheio;
+    var cxTitulo=it.auto
+      ? (cheio?'Todos os serviços deste macrofluxo estão no Tempo-Caminho':'Marcar todos os serviços deste macrofluxo')
+      : (cheio?'Este serviço está no Tempo-Caminho':'Fora do Tempo-Caminho — marque para incluir');
+    var caixa=folhas.length
+      ? ('<input type="checkbox" data-eapsvc="'+escAttr(it.cod)+'"'+(cheio?' checked':'')+
+         (parcial?' data-parcial="1"':'')+(pode?'':' disabled')+' title="'+escAttr(cxTitulo)+'">')
+      : '';
+    return '<tr class="eap-n'+eapNivel(it.cod)+'" data-eapcod="'+escAttr(it.cod)+'"'+
+      ((folhas.length&&!marcadas)?' style="opacity:.5"':'')+'>'+
+      '<td style="text-align:center">'+caixa+'</td>'+
       '<td style="padding-left:'+(6+(eapNivel(it.cod)-1)*16)+'px;white-space:nowrap">'+
         (temFilho?('<button class="iconbtn" data-eaptog="'+escAttr(it.cod)+'" style="margin-right:4px">'+(aberto?'▾':'▸')+'</button>'):'<span style="display:inline-block;width:22px"></span>')+
         '<b class="mono">'+escAttr(it.cod)+'</b></td>'+
@@ -17905,6 +18119,7 @@
         (pode&&aConfirmar?('<button class="btn primary" id="eapConfirmar" style="padding:4px 10px;font-size:11.5px">Confirmar as '+aConfirmar+' sugestões</button>'):'')+
       '</div></div>'+
       '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th title="Marcado = o serviço existe no Tempo-Caminho">No TC</th>'+
         '<th>Código</th><th>Descrição</th><th>Un.</th><th>Contratual</th>'+
         '<th>Serviço planejado</th><th>Serviço controlado (apelidos)</th><th>Item do orçamento</th><th></th>'+
       '</tr></thead><tbody>'+vis.map(function(it){ return eapLinhaHTML(it,pode); }).join('')+'</tbody></table></div></div>';
@@ -17935,6 +18150,15 @@
     if((b=document.getElementById('eapLimpar')))b.addEventListener('click',function(){
       if(!confirm('Apagar a EAP desta obra? Os vínculos com serviços e com o orçamento vão junto.'))return;
       EAP=eapVazio(); eapSujo(); go('cad-eap');
+    });
+    document.querySelectorAll('[data-eapsvc]').forEach(function(cx){
+      /* Em estado intermediário o navegador trataria o clique como "desmarcar"; aqui o que a
+       * pessoa quer é o contrário — completar o grupo. */
+      if(cx.getAttribute('data-parcial')==='1')cx.indeterminate=true;
+      cx.addEventListener('change',function(){
+        var parcialAntes=(cx.getAttribute('data-parcial')==='1');
+        eapAlternar(cx.getAttribute('data-eapsvc'),parcialAntes?true:cx.checked);
+      });
     });
     document.querySelectorAll('[data-eaptog]').forEach(function(t){
       t.addEventListener('click',function(){
@@ -27171,6 +27395,9 @@
        * mão em cada uma. Falhar aqui não pode impedir de entrar na obra — ela existe, e o
        * catálogo se carrega depois pelo botão. */
       try{ RECURSOS=[]; APOIO=[]; await catalogoAplicar(id); }catch(e){}
+      /* E com o escopo-tipo: a EAP padrão e os serviços dela já no Tempo-Caminho. Desmarcar o
+       * que a obra não executa é muito mais rápido que cadastrar quarenta serviços do zero. */
+      try{ SERV=[]; EAP=null; await catEapAplicar(id); }catch(e){}
       await selectObra(id);
     }
     catch(e){
@@ -27279,6 +27506,7 @@
       setTimeout(function(){ location.reload(); },2500);
     });
   }
+
 
 
 
