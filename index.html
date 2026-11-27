@@ -3814,30 +3814,79 @@
     });
     var liDe={}; (window._LOTIDS||[]).forEach(function(id,li){ liDe[id]=li; });
     var siDe={}; SERV.forEach(function(s,si){ siDe[s.id]=si; });
+    /* Apontamento ANTERIOR à semana 1 não tem semana de plano — mapaSemanaPorData devolve null.
+     * Antes isso era descartado calado, e numa obra que continua um contrato (os "anos 03 e 04"
+     * de Irati, por exemplo) toda a produção dos anos anteriores sumia: a tela abria em 0%
+     * executado e ninguém via por quê. Agora essas semanas existem na linha do tempo, antes da
+     * semana 1, com o plano em zero — que é a verdade: o plano desta obra só começa depois. */
+    var preAcc={}, preMin=null;
     (window.PROD_LIST||[]).forEach(function(r){
       var li=liDe[r.loteId], si=siDe[r.servId];
       if(li==null||si==null||!lotInView(li))return;
-      var w=semDa(r.data); if(!w)return;
-      var a=cel(real,si+'::'+li,w); a[w]+=r.qtd||0;
-      if(w>maxW)maxW=w;
+      var k=si+'::'+li, w=semDa(r.data);
+      if(w){ var a=cel(real,k,w); a[w]+=r.qtd||0; if(w>maxW)maxW=w; return; }
+      if(!r.data)return;
+      var mon=mondayOfIso(r.data);
+      (preAcc[mon]||(preAcc[mon]={}))[k]=((preAcc[mon]||{})[k]||0)+(r.qtd||0);
+      if(!preMin||mon<preMin)preMin=mon;
     });
+    var mons=mondaysDoPlano(maxW), pre=[];
+    if(preMin&&mons[1]){
+      var ini=new Date(preMin+'T00:00:00'), lim=mons[1];
+      /* Teto de 2 anos: uma data digitada errada (1999, 2000) não pode esticar a linha do tempo
+       * até ficar inútil. O que for mais velho que isso entra na primeira coluna. */
+      var teto=new Date(lim.getTime()); teto.setDate(teto.getDate()-7*104);
+      if(ini<teto)ini=teto;
+      for(var d=new Date(ini.getTime()); d<lim; d.setDate(d.getDate()+7))pre.push(new Date(d.getTime()));
+    }
+    var off=pre.length;
+    if(off){   // as semanas do plano andam para a direita; as de antes ocupam 1..off
+      [prev,real].forEach(function(o){
+        Object.keys(o).forEach(function(k){
+          var a=o[k], b=[];
+          for(var w=1;w<=maxW;w++)if(a[w])b[off+w]=a[w];
+          o[k]=b;
+        });
+      });
+      var preIdx={}; pre.forEach(function(dd,i){ preIdx[dd.toISOString().slice(0,10)]=i+1; });
+      Object.keys(preAcc).forEach(function(mon){
+        var c=preIdx[mon]||1, m=preAcc[mon];
+        Object.keys(m).forEach(function(k){ var a=cel(real,k,c); a[c]+=m[k]; });
+      });
+    }
+    var cols=[null];
+    pre.forEach(function(dd){ cols.push({mon:dd,w:0}); });
+    for(var w2=1;w2<=maxW;w2++)cols.push({mon:mons[w2]||null,w:w2});
+    var N=cols.length-1;
     function soma(o){
       Object.keys(o).forEach(function(k){
-        var a=o[k], s=0;
-        for(var w=1;w<=maxW;w++){ s+=a[w]||0; a[w]=s; }
+        var a=o[k], t=0;
+        for(var w=1;w<=N;w++){ t+=a[w]||0; a[w]=t; }
       });
     }
     soma(prev); soma(real);
-    return {prev:prev,real:real,tw:maxW,mondays:mondaysDoPlano(maxW)};
+    return {prev:prev,real:real,tw:N,twPlano:maxW,plan0:off,cols:cols,
+            mondays:cols.map(function(c){ return c?c.mon:null; })};
   }
-  /** A semana do plano em que estamos hoje (limitada ao horizonte). */
-  function retiSemanaHoje(tw){
-    var w=mapaSemanaPorData(520)(new Date().toISOString().slice(0,10));
-    return Math.max(1,Math.min(tw,w||tw));
+  /** A coluna da linha do tempo em que estamos hoje: a última cujo início já passou. */
+  function retiSemanaHoje(A){
+    var hoje=mondayOfIso(new Date().toISOString().slice(0,10)), r=0;
+    for(var i=1;i<=A.tw;i++){
+      var c=A.cols[i];
+      if(!c||!c.mon)continue;
+      if(c.mon.toISOString().slice(0,10)<=hoje)r=i; else break;
+    }
+    return r||A.tw;
   }
-  function retiSemana(tw){
-    var s=(RETI.sem==null)?retiSemanaHoje(tw):RETI.sem;
-    return Math.max(1,Math.min(tw,s));
+  function retiSemana(A){
+    var s=(RETI.sem==null)?retiSemanaHoje(A):RETI.sem;
+    return Math.max(1,Math.min(A.tw,s));
+  }
+  /** Como se chama a coluna w: semana do plano, ou o período anterior a ele. */
+  function retiRotSem(w,A){
+    var c=A&&A.cols&&A.cols[w];
+    if(c&&!c.w)return 'antes do plano';
+    return 'semana '+((c&&c.w)||w);
   }
   /** A etapa (item de nível 1 da EAP) a que o serviço pertence. */
   function retiEtapaDe(svcId){
@@ -3935,7 +3984,7 @@
         var atraso=Math.round((f.real-f.prev)*100);
         var dica=escAttr(L.nome+' · '+LOTS[lo.li]+'\nrealizado '+Math.round(f.real*100)+'% · previsto '+
                  Math.round(f.prev*100)+'%\n'+(atraso<0?(-atraso+' pontos atrás do plano'):(atraso>0?(atraso+' pontos à frente'):'em dia'))+
-                 '\nsemana '+w);
+                 '\n'+retiRotSem(w,A));
         if(f.real>0){
           var x1r=Math.min(b,Math.max(a,xr));
           if(x1r>a)s+='<rect x="'+a.toFixed(1)+'" y="'+y+'" width="'+(x1r-a).toFixed(1)+'" height="'+bh+
@@ -3981,13 +4030,46 @@
       return f?f.real:0;
     };
     var corte=cssHex('--c1')||'#b06a3b', aterro=cssHex('--c2')||'#3a51a3';
+    /* Contorno arredondado em vez de serra. É uma spline cúbica MONÓTONA (Fritsch–Carlson): a
+     * spline comum arredonda bonito mas estoura entre dois pontos — passaria abaixo da linha do
+     * zero e desenharia volume que não existe, ou subiria acima do pico real. A monótona só
+     * arredonda o que está entre os dois valores vizinhos, então a leitura continua honesta:
+     * nenhum km ganha ou perde volume, só o traço deixa de ter bico. */
+    function suave(p){
+      var n=p.length; if(n<2)return '';
+      var d=[], m=[], i;
+      for(i=0;i<n-1;i++){ var h=p[i+1].x-p[i].x; d[i]=h?((p[i+1].y-p[i].y)/h):0; }
+      m[0]=d[0]; m[n-1]=d[n-2];
+      for(i=1;i<n-1;i++)m[i]=(d[i-1]*d[i]<=0)?0:((d[i-1]+d[i])/2);
+      for(i=0;i<n-1;i++){
+        if(d[i]===0){ m[i]=0; m[i+1]=0; continue; }
+        var a=m[i]/d[i], b=m[i+1]/d[i], q=a*a+b*b;
+        if(q>9){ var t=3/Math.sqrt(q); m[i]=t*a*d[i]; m[i+1]=t*b*d[i]; }
+      }
+      var out='';
+      for(i=0;i<n-1;i++){
+        var hh=(p[i+1].x-p[i].x)/3;
+        out+=' C '+(p[i].x+hh).toFixed(1)+' '+(p[i].y+m[i]*hh).toFixed(1)+
+             ' '+(p[i+1].x-hh).toFixed(1)+' '+(p[i+1].y-m[i+1]*hh).toFixed(1)+
+             ' '+p[i+1].x.toFixed(1)+' '+p[i+1].y.toFixed(1);
+      }
+      return out;
+    }
     function area(valor,yf,cor,op){
-      var d='M '+X(R.celulas[0].x).toFixed(1)+' '+yMid.toFixed(1);
-      R.celulas.forEach(function(c){ d+=' L '+X(c.x).toFixed(1)+' '+yf(valor(c)).toFixed(1); });
-      var ult=R.celulas[R.celulas.length-1];
-      d+=' L '+X(ult.x+R.passoM).toFixed(1)+' '+yf(valor(ult)).toFixed(1)+
-         ' L '+X(ult.x+R.passoM).toFixed(1)+' '+yMid.toFixed(1)+' Z';
-      return '<path d="'+d+'" fill="'+cor+'" fill-opacity="'+op+'"/>';
+      var cs=R.celulas, ult=cs[cs.length-1];
+      /* O valor é do km inteiro, então o ponto fica no MEIO da célula; as pontas descem para a
+       * linha do zero nas bordas da primeira e da última. */
+      var brutos=[{x:X(cs[0].x),y:yMid}];
+      cs.forEach(function(c){ brutos.push({x:X(c.x+R.passoM/2),y:yf(valor(c))}); });
+      brutos.push({x:X(ult.x+R.passoM),y:yMid});
+      var p=[brutos[0]];
+      for(var i=1;i<brutos.length;i++)if(brutos[i].x>p[p.length-1].x+0.01)p.push(brutos[i]);
+      var fim=brutos[brutos.length-1];
+      if(p[p.length-1]!==fim)p.push({x:p[p.length-1].x+0.01,y:fim.y});
+      if(p.length<2)return '';
+      var d='M '+p[0].x.toFixed(1)+' '+p[0].y.toFixed(1)+suave(p)+' Z';
+      return '<path d="'+d+'" fill="'+cor+'" fill-opacity="'+op+'" stroke="'+cor+
+             '" stroke-opacity="'+(op*0.7).toFixed(2)+'" stroke-width="1" stroke-linejoin="round"/>';
     }
     /* Executado é posição, não altura: a parte escura cobre o TRECHO já feito, do começo do lote
      * até onde o avanço chegou — a mesma convenção das faixas logo abaixo. Escurecer a área
@@ -4035,7 +4117,7 @@
       return retiCard(L.nome,L.cor,p.real,p.prev,'');
     }).join('');
     var gr=tot.qt>0?Math.round(tot.re/tot.qt):0, gp=tot.qt>0?Math.round(tot.pr/tot.qt):0;
-    return retiCard('Obra executada',cssHex('--accent')||'#3b82f6',gr,gp,'semana '+w)+cards;
+    return retiCard('Obra executada',cssHex('--accent')||'#3b82f6',gr,gp,retiRotSem(w,A))+cards;
   }
   function retiHTML(){
     massaInit();
@@ -4060,7 +4142,7 @@
     var E=retiEixo();
     if(!E)return head('Retigráfico','',null)+barra+'<div class="card"><div class="note">'+
       (MASSAS_CARREGANDO?'Carregando…':'Os lotes ainda não têm extensão nem km de projeto. Preencha o comprimento do lote em <b>Cadastro → Lotes &amp; Quantidades</b> (ou importe a cubação) para o traçado existir.')+'</div></div>';
-    var A=retiAcumulado(), w=retiSemana(A.tw);
+    var A=retiAcumulado(), w=retiSemana(A);
     var d=A.mondays[w];
     var tempo='<div class="card" style="margin-bottom:12px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
       '<button class="btn" id="retiPlay" title="Roda a obra do começo até a semana atual">▶ Animar</button>'+
@@ -4068,7 +4150,13 @@
       '<input type="range" id="retiSem" min="1" max="'+A.tw+'" value="'+w+'" style="flex:1;min-width:220px">'+
       '<button class="btn" id="retiFim" title="Fim do horizonte">⏭</button>'+
       '<span class="mono" id="retiTlab" style="min-width:210px;text-align:right">'+retiTlab(w,A)+'</span>'+
-      '</div></div>';
+      '</div>'+
+      (A.plan0?('<div class="note" style="margin-top:8px">A linha do tempo começa em <b>'+
+        brDate(A.mondays[1].toISOString().slice(0,10))+'</b>, '+A.plan0+' semana'+(A.plan0>1?'s':'')+
+        ' antes da semana 1 do plano: é produção apontada com data anterior ao início desta obra. '+
+        'Nessas semanas o plano aparece em zero — ele só começa em '+
+        brDate(A.mondays[A.plan0+1].toISOString().slice(0,10))+'.</div>'):'')+
+      '</div>';
     var tab='<div class="card" style="margin-top:12px"><div class="eyebrow">Volume por '+(RETI.passo==='estaca'?'estaca':'quilômetro')+'</div>'+
       '<div style="display:flex;gap:4px;margin:6px 0">'+
         '<button class="subtab'+(RETI.passo==='km'?' active':'')+'" data-retipasso="km">Quilômetro</button>'+
@@ -4084,8 +4172,9 @@
       '<div class="note" style="margin-top:6px"><b>Cheio</b> = lote concluído · <b>claro</b> = em andamento · <b>tracejado</b> = posição do plano na mesma semana · vazio = o serviço não existe naquele lote.</div></div>'+tab;
   }
   function retiTlab(w,A){
-    var d=A.mondays[w];
-    return (d?brDate(d.toISOString().slice(0,10)):('semana '+w))+' · semana '+w+' de '+A.tw;
+    var d=A.mondays[w], c=A.cols&&A.cols[w];
+    return (d?brDate(d.toISOString().slice(0,10)):('semana '+w))+' · '+
+      ((c&&!c.w)?'antes do plano':('semana '+((c&&c.w)||w)+' de '+(A.twPlano||A.tw)));
   }
   function retiTabela(){
     var R=retiDados(), D=massasDados();
@@ -4109,7 +4198,7 @@
     var E=retiEixo(); if(!E)return;
     var A=(retiDraw._A&&retiDraw._A.obra===((selectedObra&&selectedObra.id)||'')&&!retiDraw._sujo)?retiDraw._A.dados:null;
     if(!A){ A=retiAcumulado(); retiDraw._A={obra:(selectedObra&&selectedObra.id)||'',dados:A}; retiDraw._sujo=false; }
-    var w=retiSemana(A.tw);
+    var w=retiSemana(A);
     retiProdSVG(el,E,A,w);
     retiVolSVG(document.getElementById('retiVol'),E,A,w);
     var r=document.getElementById('retiResumo'); if(r)r.innerHTML=retiResumoHTML(E,A,w);
