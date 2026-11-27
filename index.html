@@ -17674,59 +17674,113 @@
    * dela foi montado à mão e trocá-lo por este seria desfazer trabalho.
    *
    * [macrofluxo, [[serviço, sigla, unidade, cor], ...]] */
+  /* Os serviços do padrão: o que vai para o Tempo-Caminho — nome, sigla, unidade e cor.
+   * A EAP abaixo aponta para esta lista pelo nome. Dois itens de medição podem apontar
+   * para o MESMO serviço (implantação e restauração do pavimento rígido são duas linhas
+   * de medição e um só serviço no cronograma), e por isso a EAP tem mais itens do que
+   * esta lista tem serviços. */
+  var CAT_EAP_SERV=[
+    ["LIMPEZA","LIMP","m²","#912727"],
+    ["DESTOCAMENTO","DEST","m²","#b93131"],
+    ["TRANSPORTE LIMPEZA","TL","m³","#d04e4e"],
+    ["TERRAPLENAGEM - ATERRO","TA","m³","#916627"],
+    ["TERRAPLENAGEM - CORTE","TC","m³","#d09c4e"],
+    ["CFT DUP","CD","m","#7c9127"],
+    ["BASE DUP","BD","m","#869d2a"],
+    ["BASE MARG","BM","m","#8fa82d"],
+    ["RECICLAGEM DE BASE","REC","m","#99b430"],
+    ["BASE INTERSE","BI","m","#a3bf33"],
+    ["CFT INTERSE","CI","m","#acca37"],
+    ["CFT MARG","CM","m","#b1cd42"],
+    ["CFT DUP - SOLO","CDS","%","#b6d04e"],
+    ["REMOÇÃO DE PAVIMENTO","RDP","%","#50c133"],
+    ["PAVIMENTO RIGIDO","PR","m","#3c9127"],
+    ["PAVIMENTO RIGIDO MANUAL","PRMA","%","#49b12f"],
+    ["CBUQ DUP","CD","m","#43a12b"],
+    ["CBUQ INTERSE","CI","m","#5acc3e"],
+    ["CBUQ MARG","CM","m","#68d04e"],
+    ["DRENO","DREN","m","#279151"],
+    ["BS SSB DUP","BSD","%","#4ed082"],
+    ["BUEIRO","BUEI","un","#31b9b9"],
+    ["SARJETA","SARJ","m","#275191"],
+    ["VALETA","VALE","%","#3168b9"],
+    ["MEIO-FIO","MF","%","#4e82d0"],
+    ["CONTENÇÕES","CONT","un","#3c2791"],
+    ["CONT AFLEX","CA","%","#472eac"],
+    ["CONT GRAMP","CG","%","#5235c7"],
+    ["CONT GABI","CG","%","#684ed0"],
+    ["OAE INFRA","OI","%","#7c2791"],
+    ["OAE MESO","OM","%","#8d2ca5"],
+    ["OAE SUPER","OS","%","#9e31b9"],
+    ["OAE ENCONTRO","OE","%","#ae3acb"],
+    ["OAE LAJE APROX.","OLA","%","#b64ed0"],
+    ["GRAMA DUP","GD","%","#912766"],
+    ["GRAMA DISP","GD","%","#9d2a6f"],
+    ["GRAMA MARG","GM","%","#a82d77"],
+    ["HIDRO DUP","HD","%","#b4307f"],
+    ["HIDRO MARG","HM","%","#bf3387"],
+    ["HIDRO DISP","HD","%","#ca378f"],
+    ["NEW JERSEY","NJ","%","#cd4295"],
+    ["PASSEIO","PASS","%","#d04e9c"]
+  ];
+  /* A EAP padrão da construtora: macrofluxo -> itens de medição. Cada item é
+   * [descrição, contratual, unidade] e, quando o serviço do Tempo-Caminho tem outro
+   * nome, um quarto campo com o nome dele. */
   var CAT_EAP=[
     ["SUPRESSÃO",[
-      ["LIMPEZA","LIMP","m²","#912727"],
-      ["DESTOCAMENTO","DEST","m²","#b93131"],
-      ["TRANSPORTE LIMPEZA","TL","m³","#d04e4e"]]],
+      ["LIMPEZA","LIMP","m²"],
+      ["DESTOCAMENTO","DEST","m²"],
+      ["TRANSPORTE LIMPEZA","TL","m³"]]],
     ["TERRAPLENAGEM",[
-      ["TERRAPLENAGEM - ATERRO","TA","m³","#916627"],
-      ["TERRAPLENAGEM - CORTE","TC","m³","#d09c4e"]]],
+      ["TERRAPLENAGEM - ATERRO","TA","m³"],
+      ["TERRAPLENAGEM - CORTE","TC","m³"]]],
     ["ESTRUTURA DO PAVIMENTO",[
-      ["CFT DUP","CD","m","#7c9127"],
-      ["BASE DUP","BD","m","#869d2a"],
-      ["BASE MARG","BM","m","#8fa82d"],
-      ["RECICLAGEM DE BASE","REC","m","#99b430"],
-      ["BASE INTERSE","BI","m","#a3bf33"],
-      ["CFT INTERSE","CI","m","#acca37"],
-      ["CFT MARG","CM","m","#b1cd42"],
-      ["CFT DUP - SOLO","CDS","%","#b6d04e"]]],
+      ["CFT DUP","CD","m"],
+      ["BASE DUP","BD","m"],
+      ["BASE MARG","BM","m"],
+      ["RECICLAGEM DE BASE","REC","m"],
+      ["BASE INTERSE","BI","m"],
+      ["CFT INTERSE","CI","m"],
+      ["CFT MARG","CM","m"],
+      ["CFT DUP - SOLO","CDS","%"]]],
     ["PAVIMENTAÇÃO",[
-      ["PAVIMENTO RIGIDO","PR","m","#3c9127"],
-      ["CBUQ DUP","CD","m","#43a12b"],
-      ["PAVIMENTO RIGIDO MANUAL","PRMA","%","#49b12f"],
-      ["REMOÇÃO DE PAVIMENTO","RDP","%","#50c133"],
-      ["CBUQ INTERSE","CI","m","#5acc3e"],
-      ["CBUQ MARG","CM","m","#68d04e"]]],
+      ["REMOÇÃO DE PAVIMENTO","RDP","%"],
+      ["PAVIMENTO RIGIDO IMPLANTAÇÃO","PRI","m","PAVIMENTO RIGIDO"],
+      ["PAVIMENTO RIGIDO RESTAURAÇÃO","PRR","m","PAVIMENTO RIGIDO"],
+      ["PAVIMENTO RIGIDO MANUAL","PRMA","%"],
+      ["CBUQ IMPLANTAÇÃO","CDI","m","CBUQ DUP"],
+      ["CBUQ RESTAURAÇÃO","CDR","m","CBUQ DUP"],
+      ["CBUQ INTERSE","CI","m"],
+      ["CBUQ MARG","CM","m"]]],
     ["DRENO",[
-      ["DRENO","DREN","m","#279151"],
-      ["BS SSB DUP","BSD","%","#4ed082"]]],
+      ["DRENO","DREN","m"],
+      ["BS SSB DUP","BSD","%"]]],
     ["DREANGEM PROFUNDA",[
-      ["BUEIRO","BUEI","un","#31b9b9"]]],
+      ["BUEIRO","BUEI","un"]]],
     ["DRENAGEM SUPERFICIAL",[
-      ["SARJETA","SARJ","m","#275191"],
-      ["VALETA","VALE","%","#3168b9"],
-      ["MEIO-FIO","MF","%","#4e82d0"]]],
+      ["SARJETA","SARJ","m"],
+      ["VALETA","VALE","%"],
+      ["MEIO-FIO","MF","%"]]],
     ["CONTENÇÕES",[
-      ["CONTENÇÕES","CONT","un","#3c2791"],
-      ["CONT AFLEX","CA","%","#472eac"],
-      ["CONT GRAMP","CG","%","#5235c7"],
-      ["CONT GABI","CG","%","#684ed0"]]],
+      ["CONTENÇÕES","CONT","un"],
+      ["CONT AFLEX","CA","%"],
+      ["CONT GRAMP","CG","%"],
+      ["CONT GABI","CG","%"]]],
     ["OAE",[
-      ["OAE INFRA","OI","%","#7c2791"],
-      ["OAE MESO","OM","%","#8d2ca5"],
-      ["OAE SUPER","OS","%","#9e31b9"],
-      ["OAE ENCONTRO","OE","%","#ae3acb"],
-      ["OAE LAJE APROX.","OLA","%","#b64ed0"]]],
+      ["OAE INFRA","OI","%"],
+      ["OAE MESO","OM","%"],
+      ["OAE SUPER","OS","%"],
+      ["OAE ENCONTRO","OE","%"],
+      ["OAE LAJE APROX.","OLA","%"]]],
     ["SERVIÇOS DIVERSOS",[
-      ["GRAMA DUP","GD","%","#912766"],
-      ["GRAMA DISP","GD","%","#9d2a6f"],
-      ["GRAMA MARG","GM","%","#a82d77"],
-      ["HIDRO DUP","HD","%","#b4307f"],
-      ["HIDRO MARG","HM","%","#bf3387"],
-      ["HIDRO DISP","HD","%","#ca378f"],
-      ["NEW JERSEY","NJ","%","#cd4295"],
-      ["PASSEIO","PASS","%","#d04e9c"]]]
+      ["GRAMA DUP","GD","%"],
+      ["GRAMA DISP","GD","%"],
+      ["GRAMA MARG","GM","%"],
+      ["HIDRO DUP","HD","%"],
+      ["HIDRO MARG","HM","%"],
+      ["HIDRO DISP","HD","%"],
+      ["NEW JERSEY","NJ","%"],
+      ["PASSEIO","PASS","%"]]]
   ];
   /** A EAP padrão achatada, com os códigos hierárquicos já montados: o macrofluxo vira item de
    *  nível 1 e cada serviço um filho dele. */
@@ -17734,21 +17788,25 @@
     var out=[];
     CAT_EAP.forEach(function(g,gi){
       var cod=String(gi+1);
-      out.push({cod:cod,nome:g[0],un:'',sigla:'',cor:'',grupo:true});
+      out.push({cod:cod,nome:g[0],un:'',sigla:'',serv:'',grupo:true});
       (g[1]||[]).forEach(function(it,ii){
-        out.push({cod:cod+'.'+(ii+1),nome:it[0],sigla:it[1]||'',un:it[2]||'un',cor:it[3]||'',grupo:false});
+        out.push({cod:cod+'.'+(ii+1),nome:it[0],sigla:it[1]||'',un:it[2]||'un',
+                  serv:it[3]||it[0],grupo:false});
       });
     });
     return out;
   }
+  /** O serviço do padrão com este nome, ou nada. */
+  function catEapServPadrao(nome){
+    var alvo=chaveNomeServ(nome), achou=null;
+    CAT_EAP_SERV.forEach(function(x){ if(!achou&&chaveNomeServ(x[0])===alvo)achou=x; });
+    return achou;
+  }
   /** A cor que a EAP padrão reserva para este serviço, pelo nome. Serve quando alguém remarca um
    *  item: o serviço volta com a cor que tinha, e não com a próxima da paleta genérica. */
   function catEapCor(nome){
-    var alvo=String(nome||'').trim().toLowerCase(), achou='';
-    CAT_EAP.forEach(function(g){ (g[1]||[]).forEach(function(it){
-      if(!achou&&String(it[0]).trim().toLowerCase()===alvo)achou=it[3]||'';
-    }); });
-    return achou;
+    var d=catEapServPadrao(nome);
+    return (d&&d[3])||'';
   }
   /** Põe a EAP padrão numa obra recém-criada: cria os serviços no Tempo-Caminho e monta a EAP
    *  com todos marcados. Só faz sentido em obra vazia — numa obra com escopo montado à mão isto
@@ -17776,24 +17834,36 @@
     var usados={}, criadas=0, casados=0;
 
     if(obraVazia){
-      var linhas=folhas.map(function(x,i){
-        return {id:newUuid(),obra_id:obraId,nome:x.nome,unidade:x.un,cor:x.cor||HEXPAL[i%6],
-                teams:1,produtividade:0,lag_semanas:0,config:{},codigo:x.sigla||null,ordem:i};
+      /* Um serviço por NOME, não um por item de medição: implantação e restauração do pavimento
+       * rígido são duas linhas na EAP e um serviço só no cronograma. */
+      var noPlano={};
+      folhas.forEach(function(x){ noPlano[chaveNomeServ(x.serv)]=true; });
+      var defs=CAT_EAP_SERV.filter(function(d){ return noPlano[chaveNomeServ(d[0])]; });
+      var linhas=defs.map(function(d,i){
+        return {id:newUuid(),obra_id:obraId,nome:d[0],unidade:d[2]||'un',cor:d[3]||HEXPAL[i%6],
+                teams:1,produtividade:0,lag_semanas:0,config:{},codigo:d[1]||null,ordem:i};
       });
       await sbInserirEmBlocos('servicos',linhas);
       linhas.forEach(function(l,i){
-        folhas[i].svcId=l.id;
-        SERV.push({id:l.id,n:l.nome,u:l.unidade,c:PALVARS[i%6],hex:l.cor,eq:1,p:'0',lag:0,cfg:{},
-                   codigo:l.codigo||'',eap:'',grupo:''});
+        var sv={id:l.id,n:l.nome,u:l.unidade,c:PALVARS[i%6],hex:l.cor,eq:1,p:'0',lag:0,cfg:{},
+                codigo:l.codigo||'',eap:'',grupo:''};
+        SERV.push(sv);
+        svcPorNome[chaveNomeServ(sv.n)]=sv;
+        /* A coluna de quantidade acompanha o serviço: linha de QTY mais curta que SERV faz o
+         * valor de um serviço aparecer na coluna de outro quando alguém marca o próximo. */
+        QTY.forEach(function(row){ row.push(0); });
       });
       criadas=linhas.length;
-    }else{
-      folhas.forEach(function(x){
-        var achado=svcPorNome[chaveNomeServ(x.nome)];
-        if(achado){ x.svcId=achado.id; usados[achado.id]=true; casados++; }
-        else x.svcId=null;
-      });
     }
+    /* O item aponta para o serviço pelo nome — o mesmo caminho nos dois casos, obra vazia ou
+     * obra em operação. Dois itens podem cair no mesmo serviço, e aí ele conta uma vez. */
+    folhas.forEach(function(x){
+      var achado=svcPorNome[chaveNomeServ(x.serv)];
+      if(!achado){ x.svcId=null; return; }
+      x.svcId=achado.id;
+      if(!usados[achado.id])casados++;
+      usados[achado.id]=true;
+    });
 
     EAP=eapVazio();
     EAP.cfg.arquivo='EAP padrão'; EAP.cfg.importadoEm=new Date().toISOString();
@@ -17802,6 +17872,7 @@
     plano.forEach(function(x){
       var f=porCod[x.cod];
       EAP.itens.push({cod:x.cod,nome:x.nome,un:x.un,contratual:x.sigla||'',
+                      serv:x.grupo?'':(x.serv||''),
                       svc:x.grupo?null:((f&&f.svcId)||null),controle:[],orc:null,auto:!!x.grupo});
     });
 
@@ -17905,10 +17976,23 @@
   /** Recria o serviço do item e religa. */
   async function eapMarcaUm(it){
     if(eapMarcado(it))return false;
+    /* O item pode falar de um serviço que a obra ainda tem — é o caso de dois itens de medição
+     * sobre o mesmo serviço, em que desmarcar um não apagou nada. Aí religa nele, em vez de criar
+     * um segundo serviço com o mesmo nome. */
+    var nome=it.serv||it.nome||'Serviço';
+    var jaTem=null;
+    SERV.forEach(function(x){ if(!jaTem&&chaveNomeServ(x.n)===chaveNomeServ(nome))jaTem=x; });
+    if(jaTem){ it.svc=jaTem.id; return true; }
     var i=SERV.length;
-    var patch={nome:it.nome||'Serviço',unidade:it.un||'un',teams:1,produtividade:0,lag_semanas:0,
-               cor:catEapCor(it.nome)||HEXPAL[i%6],ordem:i};
-    if(it.contratual)patch.codigo=it.contratual;
+    var def=catEapServPadrao(nome);
+    /* Quando o item tem nome próprio (CBUQ IMPLANTAÇÃO) e o serviço tem outro (CBUQ DUP), a
+     * unidade e a sigla que valem são as do serviço, não as da linha de medição. */
+    var doServ=!!(def&&it.serv&&chaveNomeServ(it.serv)!==chaveNomeServ(it.nome));
+    var patch={nome:nome,unidade:(doServ?def[2]:(it.un||(def&&def[2])))||'un',
+               teams:1,produtividade:0,lag_semanas:0,
+               cor:catEapCor(nome)||HEXPAL[i%6],ordem:i};
+    var sig=doServ?def[1]:(it.contratual||(def&&def[1])||'');
+    if(sig)patch.codigo=sig;
     var id=await sbCreateServico(selectedObra.id,patch);
     SERV.push({id:id,n:patch.nome,u:patch.unidade,c:PALVARS[i%6],hex:patch.cor,eq:1,p:'0',lag:0,
                cfg:{},codigo:patch.codigo||'',eap:'',grupo:''});
@@ -18390,7 +18474,7 @@
         var it=eapItemPorCod(tr.getAttribute('data-eapcod')); if(!it)return;
         var campo=el.getAttribute('data-eapf'), v=el.value;
         if(campo==='controle')it.controle=v.split(';').map(function(x){ return x.trim(); }).filter(Boolean);
-        else if(campo==='svc'){ it.svc=v||null; if(it.sug)delete it.sug.svc; }
+        else if(campo==='svc'){ it.svc=v||null; it.serv=eapServicoNome(it.svc); if(it.sug)delete it.sug.svc; }
         else if(campo==='orc'){ it.orc=v||null; if(it.sug)delete it.sug.orc; }
         else it[campo]=v.trim();
         if(it.auto&&campo==='nome'&&v.trim())delete it.auto;
