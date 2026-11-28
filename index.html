@@ -1233,11 +1233,19 @@
       sbSelectApontamentos(obraId),
       SB.from('cenarios').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
       sbTudo(function(){return SB.from('producao_diaria').select('*').eq('obra_id',obraId).order('data',{ascending:false}).order('id',{ascending:true});}),
-      SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true})
+      SB.from('apoio_admin').select('*').eq('obra_id',obraId).order('ordem',{ascending:true}),
+      /* O RDO (migração 42) entra fora da conferência de erro de propósito: enquanto a migração
+       * não rodar, a tabela não existe, e um erro aqui derrubaria a carga inteira da obra. Sem
+       * ela o app abre igual — só sem cabeçalho de dia. */
+      (async function(){
+        var r=await sbTudo(function(){return SB.from('rdo_dia').select('*').eq('obra_id',obraId).order('data',{ascending:false});});
+        return r.error?{data:[],semTabela:true}:{data:r.data||[]};
+      })()
     ]);
     res.forEach(function(x){if(x.error)throw x.error;});
     return {obra:res[0].data,svc:res[1].data||[],lot:res[2].data||[],q:res[3].data||[],rec:res[4].data||[],
-            apr:res[5].data||[],cen:res[6].data||[],prod:res[7].data||[],apo:res[8].data||[]};
+            apr:res[5].data||[],cen:res[6].data||[],prod:res[7].data||[],apo:res[8].data||[],
+            rdo:res[9].data||[],semRdo:!!res[9].semTabela};
   }
   function aplicarCadastro(d){
     var obra=d.obra, svc=d.svc||[], lot=d.lot||[], q=d.q||[], rec=d.rec||[], apr=d.apr||[], cen=d.cen||[], prod=d.prod||[], apo=d.apo||[];
@@ -1257,7 +1265,12 @@
       REALIZADO_TERC[k]=Number(r.quantidade_terceiro)||0;
     });
     CENARIOS=cen.map(function(r){return {id:r.id,nome:r.nome,tipo:r.tipo||'rascunho',revisao:r.revisao||null,ativo:!!r.ativo,snap:normalizeSnap(r.ajustes_manuais),ordem:r.ordem||0,congeladoEm:r.congelado_em,criadoPor:r.criado_por||null};});
-    window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0};});
+    window.PROD_LIST=prod.map(function(r){return {id:r.id,data:r.data,servId:r.servico_id,loteId:r.lote_id,qtd:Number(r.quantidade)||0,
+      estIni:r.estaca_ini||'',estFim:r.estaca_fim||'',obs:r.observacao||''};});
+    /* Cabeçalho do dia, por data. Tabela ausente = migração 42 pendente: a tela avisa dentro do
+     * RDO em vez de sumir com o campo. */
+    RDO_DIA={}; (d.rdo||[]).forEach(function(r){ if(r&&r.data)RDO_DIA[r.data]=r; });
+    SEM_TAB_RDO=!!d.semRdo;
     APOIO=apo.map(function(r){return {id:r.id,n1:r.nivel1||'',n2:r.nivel2||'',n3:r.nivel3||'',cfg:r.config||{}};});
     /* Equipe por macro-grupo (migração 36). Coluna ausente = recurso ainda não disponível;
      * a tela avisa na hora de salvar em vez de quebrar a carga da obra. */
@@ -11932,6 +11945,328 @@
           ? '<div class="note" style="margin:4px 0 0;color:var(--crit)">O apontado já passou o cadastrado neste lote.</div>'
           : ''));
   }
+  /* ================= RDO — o diário de obra =================
+   * A Produção Diária registrava QUANTO e em QUAL LOTE. Lote é grosso demais para rastrear onde
+   * a equipe esteve: num lote de 2 km, "12.000 m³ no 255" não diz se a frente andou no começo ou
+   * no fim — e é disso que o retigráfico, a medição e a discussão de atraso precisam.
+   *
+   * Agora cada lançamento pode dizer o intervalo de estacas e os detalhes, e o DIA passa a ter
+   * cabeçalho: clima, condição de trabalho, efetivo, equipamentos e ocorrências. Isso é o RDO.
+   *
+   * O intervalo é texto livre de propósito. Obra sem cubação importada não tem estaca cadastrada
+   * e mesmo assim a equipe sabe dizer "de 255+000 a 258+020"; quando o lote TEM estacas, elas
+   * aparecem como sugestão na própria caixa. Lista fechada deixaria metade das obras sem campo.
+   *
+   * A tela deixa de ser uma lista de linhas soltas e passa a ser uma lista de DIAS: abrir um dia
+   * mostra o cabeçalho e todos os serviços lançados nele, com editar, adicionar e remover no
+   * mesmo lugar. É assim que o diário é preenchido em obra — por dia, não por linha. */
+  var RDO_DIA={};          // 'YYYY-MM-DD' -> linha de rdo_dia
+  var SEM_TAB_RDO=false;   // true enquanto a migração 42 não rodar
+  var RDO_CLIMA=[['bom','Bom'],['nublado','Nublado'],['chuva','Chuva'],['chuva_forte','Chuva forte']];
+  var RDO_COND=[['praticavel','Praticável'],['parcial','Parcialmente praticável'],['impraticavel','Impraticável']];
+  function rdoRot(lista,v){ var r=''; lista.forEach(function(p){ if(p[0]===v)r=p[1]; }); return r; }
+  function rdoOpts(lista,v){
+    return '<option value="">—</option>'+lista.map(function(p){
+      return '<option value="'+p[0]+'"'+(p[0]===v?' selected':'')+'>'+p[1]+'</option>';
+    }).join('');
+  }
+  function rdoCor(cond){ return cond==='impraticavel'?'--crit':(cond==='parcial'?'--warn':'--good'); }
+  function rdoDoDia(data){ return RDO_DIA[data]||{data:data}; }
+  function prodDoDia(data){ return (window.PROD_LIST||[]).filter(function(r){ return r.data===data; }); }
+  /** Os dias que existem: todo dia com produção, mais todo dia que já tem cabeçalho de RDO
+   *  (dia de chuva sem produção nenhuma é informação, não ausência de informação). */
+  function rdoDias(){
+    var set={};
+    (window.PROD_LIST||[]).forEach(function(r){ if(r.data)set[r.data]=1; });
+    Object.keys(RDO_DIA).forEach(function(d){ set[d]=1; });
+    return Object.keys(set).sort().reverse();
+  }
+  function servPorId(id){ return SERV.filter(function(s){ return s.id===id; })[0]||null; }
+  function loteNomeDe(loteId){
+    var li=(window._LOTIDS||[]).indexOf(loteId);
+    return li>=0?LOTS[li]:'—';
+  }
+  /** O trecho de um lançamento, escrito do jeito que se fala em obra. */
+  function rdoTrecho(r){
+    if(r.estIni&&r.estFim)return 'est. '+r.estIni+' a '+r.estFim;
+    if(r.estIni)return 'a partir de '+r.estIni;
+    if(r.estFim)return 'até '+r.estFim;
+    return '';
+  }
+  /* ---------- sugestões de estaca ---------- */
+  function rdoEstOpts(loteId){
+    var arr=ESTACAS[loteId]||[], li=(window._LOTIDS||[]).indexOf(loteId);
+    var nome=li>=0?LOTS[li]:'';
+    return arr.slice(0,600).map(function(e){
+      return '<option value="'+escAttr(estLabel(nome,e.dist))+'">';
+    }).join('');
+  }
+  /** Busca as estacas do lote em segundo plano e repinta a lista de sugestões. Falha em silêncio:
+   *  sugestão é conveniência, e lote sem estaca cadastrada é o caso normal. */
+  function rdoCarregaEstacas(loteId,dlId){
+    if(!loteId||!dlId)return;
+    var dl=document.getElementById(dlId);
+    if(ESTACAS[loteId]!=null){ if(dl)dl.innerHTML=rdoEstOpts(loteId); return; }
+    if(!SB||OFFLINE_MODE)return;
+    sbLoadEstacas(loteId).then(function(){
+      var el=document.getElementById(dlId);
+      if(el)el.innerHTML=rdoEstOpts(loteId);
+    }).catch(function(){});
+  }
+  /* ---------- gravação ---------- */
+  /** Grava o cabeçalho do dia. Uma linha por obra+dia — por isso upsert pela chave, e não insert. */
+  async function sbSalvaRdoDia(data,patch){
+    if(SEM_TAB_RDO)return null;
+    await sbRequireSession();
+    var atual=RDO_DIA[data];
+    if(atual&&atual.id){
+      var r=await SB.from('rdo_dia').update(Object.assign({updated_at:new Date().toISOString()},patch)).eq('id',atual.id);
+      if(r.error)throw r.error;
+      RDO_DIA[data]=Object.assign({},atual,patch);
+      return atual.id;
+    }
+    var id=newUuid();
+    var r2=await SB.from('rdo_dia').insert(Object.assign({id:id,obra_id:selectedObra.id,data:data},patch));
+    if(r2.error)throw r2.error;
+    RDO_DIA[data]=Object.assign({id:id,obra_id:selectedObra.id,data:data},patch);
+    return id;
+  }
+  /* Sem a migração 42 as colunas de estaca não existem e o insert inteiro falharia. Em vez de
+   * esconder os campos (quem não rodou a migração não sabe que eles existem), tenta com elas e
+   * recua uma vez — e a partir daí a tela já sabe e avisa. */
+  function rdoSemEstaca(e){ return /estaca_ini|estaca_fim/.test((e&&e.message)||''); }
+  /** Tira o que a migração 42 ainda não criou. Depois da primeira descoberta não adianta
+   *  insistir: seria uma ida ao banco só para ouvir o mesmo erro. */
+  function rdoLimpa(patch){
+    if(!SEM_TAB_RDO)return patch;
+    var p=Object.assign({},patch); delete p.estaca_ini; delete p.estaca_fim; return p;
+  }
+  async function prodCria(patch){
+    patch=rdoLimpa(patch);
+    try{ return await sbCreateProducao(selectedObra.id,patch); }
+    catch(e){
+      if(!rdoSemEstaca(e))throw e;
+      SEM_TAB_RDO=true;
+      var p=Object.assign({},patch); delete p.estaca_ini; delete p.estaca_fim;
+      return await sbCreateProducao(selectedObra.id,p);
+    }
+  }
+  async function prodAtualiza(id,patch){
+    patch=rdoLimpa(patch);
+    try{ await sbUpdateProducao(id,patch); }
+    catch(e){
+      if(!rdoSemEstaca(e))throw e;
+      SEM_TAB_RDO=true;
+      var p=Object.assign({},patch); delete p.estaca_ini; delete p.estaca_fim;
+      await sbUpdateProducao(id,p);
+    }
+  }
+  /* ---------- a lista de dias ---------- */
+  function rdoLinhaResumo(r){
+    var sv=servPorId(r.servId), tre=rdoTrecho(r);
+    return '<tr>'+
+      '<td>'+escAttr(sv?sv.n:'—')+'</td>'+
+      '<td>'+escAttr(loteNomeDe(r.loteId))+'</td>'+
+      '<td class="mono note" style="margin:0">'+escAttr(tre||'—')+'</td>'+
+      '<td class="r num">'+fmtBR(r.qtd)+' '+escAttr(sv?sv.u:'')+'</td>'+
+      '<td class="note" style="margin:0;max-width:280px">'+escAttr(r.obs||'')+'</td>'+
+      '<td style="width:30px"><button class="iconbtn" data-pddel="'+escAttr(r.id)+'" title="Excluir este lançamento">✕</button></td></tr>';
+  }
+  function rdoDiaHTML(data){
+    var linhas=prodDoDia(data), h=rdoDoDia(data);
+    var lotes={}; linhas.forEach(function(r){ lotes[r.loteId]=1; });
+    var cab=[];
+    if(h.clima_manha||h.clima_tarde)cab.push('manhã '+(rdoRot(RDO_CLIMA,h.clima_manha)||'—')+' · tarde '+(rdoRot(RDO_CLIMA,h.clima_tarde)||'—'));
+    if(h.condicao)cab.push('<b style="color:var('+rdoCor(h.condicao)+')">'+rdoRot(RDO_COND,h.condicao)+'</b>');
+    if(h.efetivo)cab.push('efetivo '+h.efetivo);
+    if(h.ocorrencias)cab.push('<span title="'+escAttr(h.ocorrencias)+'">ocorrências ✎</span>');
+    return '<div class="assign" style="margin-bottom:10px;padding:10px 12px">'+
+      '<div data-rdoabre="'+data+'" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer">'+
+        '<div><b class="mono">'+brDate(data)+'</b> <span class="note" style="margin:0">· '+linhas.length+' serviço(s) · '+
+          Object.keys(lotes).length+' lote(s)</span></div>'+
+        '<div class="note" style="margin:0">'+(cab.length?cab.join(' · '):'<span style="color:var(--warn)">sem cabeçalho do dia</span>')+
+          ' · <b>abrir RDO ›</b></div>'+
+      '</div>'+
+      (linhas.length?('<div class="tbl-wrap" style="margin-top:8px"><table class="edtbl" style="font-size:12px"><tbody>'+
+        linhas.map(rdoLinhaResumo).join('')+'</tbody></table></div>'):'')+
+      '</div>';
+  }
+  function rdoListaHTML(){
+    var dias=rdoDias(), MAX=60;
+    var corte=dias.slice(0,MAX);
+    return '<div class="card"><div class="eyebrow" style="margin-bottom:4px">Lançamentos por dia</div>'+
+      '<div class="note" style="margin-bottom:10px">Clique num dia para abrir o <b>RDO</b>: o cabeçalho (clima, condição, efetivo, ocorrências) e todos os serviços lançados nele — dá para editar, acrescentar e remover serviço ali dentro.</div>'+
+      (corte.length?corte.map(rdoDiaHTML).join(''):'<div class="note">Nada lançado ainda.</div>')+
+      (dias.length>MAX?('<div class="note">Mostrando os '+MAX+' dias mais recentes de '+dias.length+'.</div>'):'')+
+      '</div>';
+  }
+  /* ---------- o RDO do dia ---------- */
+  function rdoDialogo(data){
+    if(!selectedObra)return;
+    var somenteLer=isReadOnly();
+    var back=document.createElement('div'); back.className='segmenu-backdrop';
+    var h=rdoDoDia(data);
+    /* O estado de edição vive aqui, não no DOM: acrescentar ou remover uma linha redesenha a
+     * tabela, e o que já estava digitado nas outras tem de sobreviver a isso. */
+    var linhas=prodDoDia(data).map(function(r){
+      return {id:r.id,servId:r.servId,loteId:r.loteId,estIni:r.estIni||'',estFim:r.estFim||'',qtd:r.qtd,obs:r.obs||''};
+    });
+    var apagar=[];   // ids que existiam e saíram
+    var svcOpts=function(sel){
+      return SERV.map(function(s){ return '<option value="'+s.id+'"'+(s.id===sel?' selected':'')+'>'+escAttr(s.n)+'</option>'; }).join('');
+    };
+    var lotOpts=function(sel){
+      return LOTS.map(function(l,i){
+        var id=(window._LOTIDS||[])[i]||'';
+        return '<option value="'+id+'"'+(id===sel?' selected':'')+'>'+escAttr(l)+'</option>';
+      }).join('');
+    };
+    function leDom(){
+      back.querySelectorAll('[data-rdoix]').forEach(function(tr){
+        var ix=+tr.getAttribute('data-rdoix'), L=linhas[ix];
+        if(!L)return;
+        var g=function(c){ var e=tr.querySelector('[data-rdof="'+c+'"]'); return e?e.value:''; };
+        L.servId=g('serv'); L.loteId=g('lote');
+        L.estIni=(g('ini')||'').trim(); L.estFim=(g('fim')||'').trim();
+        L.qtd=+g('qtd')||0; L.obs=(g('obs')||'').trim();
+      });
+    }
+    function cabDom(){
+      var g=function(id){ var e=back.querySelector('#'+id); return e?e.value:''; };
+      return {clima_manha:g('rdoCm')||null,clima_tarde:g('rdoCt')||null,condicao:g('rdoCo')||null,
+              efetivo:g('rdoEf')!==''?(+g('rdoEf')||0):null,
+              equipamentos:(g('rdoEq')||'').trim()||null,
+              ocorrencias:(g('rdoOc')||'').trim()||null};
+    }
+    function linhasHTML(){
+      if(!linhas.length)return '<div class="note">Nenhum serviço neste dia. Use <b>+ Adicionar serviço</b>.</div>';
+      return '<div class="tbl-wrap"><table class="edtbl" style="font-size:12px"><thead><tr>'+
+        '<th>Serviço</th><th>Lote</th><th>Estaca inicial</th><th>Estaca final</th><th class="r">Quantidade</th><th>Detalhes</th><th></th>'+
+        '</tr></thead><tbody>'+linhas.map(function(L,ix){
+          var sv=servPorId(L.servId);
+          return '<tr data-rdoix="'+ix+'">'+
+            '<td><select class="einp" data-rdof="serv" style="min-width:170px"'+(somenteLer?' disabled':'')+'>'+svcOpts(L.servId)+'</select></td>'+
+            '<td><select class="einp" data-rdof="lote" style="min-width:90px"'+(somenteLer?' disabled':'')+'>'+lotOpts(L.loteId)+'</select></td>'+
+            '<td><input class="einp" data-rdof="ini" list="rdoEst'+ix+'" style="width:110px" placeholder="255+000" value="'+escAttr(L.estIni)+'"'+(somenteLer?' disabled':'')+'>'+
+              '<datalist id="rdoEst'+ix+'">'+rdoEstOpts(L.loteId)+'</datalist></td>'+
+            '<td><input class="einp" data-rdof="fim" list="rdoEst'+ix+'" style="width:110px" placeholder="258+020" value="'+escAttr(L.estFim)+'"'+(somenteLer?' disabled':'')+'></td>'+
+            '<td class="r"><input class="einp" data-rdof="qtd" type="number" min="0" style="width:100px;text-align:right" value="'+(L.qtd||'')+'"'+(somenteLer?' disabled':'')+'>'+
+              '<span class="note" style="margin:0"> '+escAttr(sv?sv.u:'')+'</span></td>'+
+            '<td><input class="einp" data-rdof="obs" style="min-width:200px" placeholder="o que foi feito, frente, material" value="'+escAttr(L.obs)+'"'+(somenteLer?' disabled':'')+'></td>'+
+            '<td style="width:30px">'+(somenteLer?'':'<button class="iconbtn" data-rdodel="'+ix+'" title="Tirar este serviço do dia">✕</button>')+'</td></tr>';
+        }).join('')+'</tbody></table></div>';
+    }
+    function pintaLinhas(){
+      var alvo=back.querySelector('#rdoLinhas');
+      if(!alvo)return;
+      alvo.innerHTML=linhasHTML();
+      alvo.querySelectorAll('[data-rdodel]').forEach(function(b){
+        b.addEventListener('click',function(){
+          leDom();
+          var ix=+b.getAttribute('data-rdodel'), L=linhas[ix];
+          if(L&&L.id)apagar.push(L.id);
+          linhas.splice(ix,1);
+          pintaLinhas();
+        });
+      });
+      /* Trocar o lote troca as sugestões de estaca daquela linha. */
+      alvo.querySelectorAll('[data-rdof="lote"]').forEach(function(sel){
+        sel.addEventListener('change',function(){
+          var tr=sel.closest('tr'), ix=tr?tr.getAttribute('data-rdoix'):null;
+          if(ix==null)return;
+          rdoCarregaEstacas(sel.value,'rdoEst'+ix);
+        });
+      });
+      /* Mudar o serviço atualiza a unidade mostrada ao lado da quantidade. */
+      alvo.querySelectorAll('[data-rdof="serv"]').forEach(function(sel){
+        sel.addEventListener('change',function(){ leDom(); pintaLinhas(); });
+      });
+      linhas.forEach(function(L,ix){ rdoCarregaEstacas(L.loteId,'rdoEst'+ix); });
+    }
+    back.innerHTML='<div class="segmenu-panel card" style="max-width:1020px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'+
+        '<div><div class="eyebrow" style="margin-bottom:2px">Relatório Diário de Obra</div>'+
+        '<div style="font-size:17px;font-weight:700">'+brDate(data)+'</div></div>'+
+        '<div class="note" style="margin:0">'+escAttr((selectedObra&&selectedObra.nome)||'')+'</div>'+
+      '</div>'+
+      (SEM_TAB_RDO?'<div class="banner" style="margin:10px 0;border-color:var(--crit)">A migração <b>sql/42_rdo.sql</b> ainda não rodou no Supabase: o cabeçalho do dia e o intervalo de estacas não têm onde ser gravados. O resto do lançamento funciona normalmente.</div>':'')+
+      '<div class="mpgrid" style="margin-top:12px">'+
+        fwrap('Clima de manhã','<select class="einp" id="rdoCm" style="width:100%"'+(somenteLer?' disabled':'')+'>'+rdoOpts(RDO_CLIMA,h.clima_manha)+'</select>')+
+        fwrap('Clima à tarde','<select class="einp" id="rdoCt" style="width:100%"'+(somenteLer?' disabled':'')+'>'+rdoOpts(RDO_CLIMA,h.clima_tarde)+'</select>')+
+        fwrap('Condição de trabalho','<select class="einp" id="rdoCo" style="width:100%"'+(somenteLer?' disabled':'')+'>'+rdoOpts(RDO_COND,h.condicao)+'</select>')+
+        fwrap('Efetivo (pessoas)','<input class="einp" id="rdoEf" type="number" min="0" style="width:100%" placeholder="0" value="'+(h.efetivo!=null?h.efetivo:'')+'"'+(somenteLer?' disabled':'')+'>')+
+        '<div class="mpf" style="grid-column:span 2"><label>Equipamentos</label>'+
+          '<input class="einp" id="rdoEq" style="width:100%" placeholder="2 escavadeiras, 6 caçambas, 1 rolo" value="'+escAttr(h.equipamentos||'')+'"'+(somenteLer?' disabled':'')+'></div>'+
+        '<div class="mpf" style="grid-column:span 3"><label>Ocorrências do dia</label>'+
+          '<textarea class="einp" id="rdoOc" style="width:100%;height:60px;padding:8px;resize:vertical" placeholder="chuva às 15h parou a frente 2; visita da fiscalização; quebra do rolo"'+(somenteLer?' disabled':'')+'>'+escAttr(h.ocorrencias||'')+'</textarea></div>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px;gap:10px;flex-wrap:wrap">'+
+        '<div class="eyebrow" style="margin:0">Serviços do dia</div>'+
+        (somenteLer?'':'<button class="btn" id="rdoAdd" style="padding:4px 10px;font-size:11.5px">+ Adicionar serviço</button>')+
+      '</div>'+
+      '<div id="rdoLinhas"></div>'+
+      '<div class="note" style="margin-top:8px">O intervalo de estacas é opcional e aceita texto livre — quando o lote tem estacas cadastradas, elas aparecem como sugestão na caixa.</div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+        '<button class="btn" id="rdoFechar">Fechar</button>'+
+        (somenteLer?'':'<button class="btn primary" id="rdoSalvar">💾 Salvar RDO</button>')+
+      '</div></div>';
+    document.body.appendChild(back);
+    pintaLinhas();
+    function fecha(){ back.remove(); }
+    back.addEventListener('pointerdown',function(e){ if(e.target===back)fecha(); });
+    back.querySelector('#rdoFechar').addEventListener('click',fecha);
+    var bAdd=back.querySelector('#rdoAdd');
+    if(bAdd)bAdd.addEventListener('click',function(){
+      leDom();
+      var ult=linhas[linhas.length-1];
+      linhas.push({id:null,servId:(SERV[0]||{}).id||'',
+                   loteId:(ult?ult.loteId:((window._LOTIDS||[])[0]||'')),
+                   estIni:'',estFim:'',qtd:0,obs:''});
+      pintaLinhas();
+    });
+    var bOk=back.querySelector('#rdoSalvar');
+    if(bOk)bOk.addEventListener('click',async function(){
+      leDom();
+      var ruim=null;
+      linhas.forEach(function(L,ix){
+        if(ruim)return;
+        if(!L.servId||!L.loteId)ruim='Linha '+(ix+1)+': escolha o serviço e o lote.';
+        else if(!(L.qtd>0))ruim='Linha '+(ix+1)+': a quantidade precisa ser maior que zero.';
+      });
+      if(ruim){ toast(ruim); return; }
+      bOk.disabled=true; bOk.textContent='Salvando…';
+      try{
+        await sbSalvaRdoDia(data,cabDom());
+        for(var i=0;i<apagar.length;i++){
+          await sbDeleteProducao(apagar[i]);
+          window.PROD_LIST=window.PROD_LIST.filter(function(r){ return r.id!==apagar[i]; });
+        }
+        apagar=[];
+        for(var j=0;j<linhas.length;j++){
+          var L=linhas[j];
+          var patch={servico_id:L.servId,lote_id:L.loteId,data:data,quantidade:L.qtd,
+                     estaca_ini:L.estIni||null,estaca_fim:L.estFim||null,observacao:L.obs||null};
+          if(L.id){
+            await prodAtualiza(L.id,patch);
+            window.PROD_LIST.forEach(function(r){
+              if(r.id!==L.id)return;
+              r.servId=L.servId; r.loteId=L.loteId; r.qtd=L.qtd;
+              r.estIni=L.estIni; r.estFim=L.estFim; r.obs=L.obs;
+            });
+          } else {
+            var novo=await prodCria(patch);
+            L.id=novo;
+            window.PROD_LIST.unshift({id:novo,data:data,servId:L.servId,loteId:L.loteId,qtd:L.qtd,
+                                      estIni:L.estIni,estFim:L.estFim,obs:L.obs});
+          }
+        }
+        fecha(); renderProd(); toast('RDO de '+brDate(data)+' salvo.');
+      }catch(e){
+        alert('Falha ao salvar o RDO: '+((e&&e.message)||e));
+        bOk.disabled=false; bOk.textContent='💾 Salvar RDO';
+      }
+    });
+  }
   function renderProd(){
     var root=document.getElementById('prodRoot');if(!root)return;
     /* O botão de puxar o realizado das estacas vivia só na aba Matriz de estacas, e é na
@@ -11949,20 +12284,24 @@
     if(window._prodMode==='lista'){
       var svcOpts=SERV.map(function(s){return '<option value="'+s.id+'">'+s.n+'</option>';}).join('');
       var lotOpts=LOTS.map(function(l,i){var id=(window._LOTIDS||[])[i]||''; return '<option value="'+id+'">'+l+'</option>';}).join('');
+      /* O lançamento rápido continua existindo para o caso de uma linha só; o dia inteiro se
+       * edita abrindo o RDO logo abaixo. Estaca e detalhes são opcionais — exigir trecho em toda
+       * linha faria a equipe inventar número para conseguir salvar. */
       var form='<div class="assign" style="margin:0 0 14px"><div class="mpgrid">'+
         fwrap('Data','<input id="pdData" class="einp" type="date" style="width:100%" value="'+todayISO()+'">')+
         fwrap('Serviço','<select id="pdServ" class="einp" style="width:100%">'+svcOpts+'</select>')+
         fwrap('Lote','<select id="pdLote" class="einp" style="width:100%">'+lotOpts+'</select>')+
+        fwrap('Estaca inicial <span class="note" style="margin:0">(opcional)</span>','<input id="pdEstIni" class="einp" list="pdEstList" style="width:100%" placeholder="255+000">')+
+        fwrap('Estaca final <span class="note" style="margin:0">(opcional)</span>','<input id="pdEstFim" class="einp" list="pdEstList" style="width:100%" placeholder="258+020">')+
         fwrap('Quantidade <span id="pdUn" class="note" style="margin:0"></span>','<input id="pdQtd" class="einp" type="number" min="0" style="width:100%" placeholder="0">')+
-        '<div class="mpf" style="grid-column:span 2"><label>Saldo deste serviço neste lote</label>'+
+        '<div class="mpf" style="grid-column:span 2"><label>Detalhes <span class="note" style="margin:0">(opcional)</span></label>'+
+          '<input id="pdObs" class="einp" style="width:100%" placeholder="frente, material, equipamento — o que ajuda a entender o lançamento depois"></div>'+
+        '<div class="mpf"><label>Saldo deste serviço neste lote</label>'+
           '<div id="pdSaldo" class="pd-saldo"></div></div>'+
-        '</div><div style="margin-top:10px"><button class="btn primary" id="pdAdd">+ Lançar produção</button></div></div>';
-      var rows=window.PROD_LIST.map(function(r){
-        var sv=SERV.filter(function(x){return x.id===r.servId;})[0];
-        var li=(window._LOTIDS||[]).indexOf(r.loteId), loteName=li>=0?LOTS[li]:'—';
-        return '<tr><td class="mono">'+brDate(r.data)+'</td><td>'+(sv?sv.n:'—')+'</td><td>'+loteName+'</td><td class="r num">'+fmtBR(r.qtd)+' '+(sv?sv.u:'')+'</td><td><button class="iconbtn" data-pddel="'+r.id+'">✕</button></td></tr>';
-      }).join('');
-      content=form+'<div class="card"><div class="eyebrow">Lançamentos</div><div class="tbl-wrap"><table class="edtbl"><thead><tr><th>Data</th><th>Serviço</th><th>Lote</th><th class="r">Quantidade</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+        '</div><datalist id="pdEstList"></datalist>'+
+        '<div style="margin-top:10px"><button class="btn primary" id="pdAdd">+ Lançar produção</button></div></div>';
+      content=(SEM_TAB_RDO?'<div class="banner" style="margin-bottom:12px;border-color:var(--crit)">A migração <b>sql/42_rdo.sql</b> ainda não rodou no Supabase. O lançamento funciona, mas o <b>intervalo de estacas</b> e o <b>cabeçalho do dia</b> (clima, condição, efetivo, ocorrências) não têm onde ser gravados.</div>':'')+
+        form+rdoListaHTML();
     } else if(window._prodMode==='tc'){
       var realSem=realizadoPorSemana();
       content='<div class="banner" style="margin-bottom:12px">Modo <b>Tempo-Caminho</b>: a matriz vem pintada igual ao planejado, mas com os valores em branco — '+
@@ -12005,6 +12344,14 @@
       var e=document.getElementById(id);
       if(e)e.addEventListener('change',pdAtualizaSaldo);
     });
+    var selLote=document.getElementById('pdLote');
+    if(selLote){
+      selLote.addEventListener('change',function(){ rdoCarregaEstacas(selLote.value,'pdEstList'); });
+      rdoCarregaEstacas(selLote.value,'pdEstList');
+    }
+    root.querySelectorAll('[data-rdoabre]').forEach(function(el){
+      el.addEventListener('click',function(){ rdoDialogo(el.getAttribute('data-rdoabre')); });
+    });
     var qEl=document.getElementById('pdQtd');
     if(qEl){ qEl.addEventListener('input',pdAtualizaSaldo); qEl.addEventListener('change',pdAtualizaSaldo); }
     pdAtualizaSaldo();
@@ -12014,11 +12361,15 @@
       var data=document.getElementById('pdData').value||todayISO();
       var servId=document.getElementById('pdServ').value, loteId=document.getElementById('pdLote').value;
       var qtd=+document.getElementById('pdQtd').value||0;
+      var eIni=(document.getElementById('pdEstIni').value||'').trim();
+      var eFim=(document.getElementById('pdEstFim').value||'').trim();
+      var obs=(document.getElementById('pdObs').value||'').trim();
       if(!servId||!loteId||qtd<=0)return;
       add.disabled=true;
       try{
-        var id=await sbCreateProducao(selectedObra.id,{servico_id:servId,lote_id:loteId,data:data,quantidade:qtd});
-        window.PROD_LIST.unshift({id:id,data:data,servId:servId,loteId:loteId,qtd:qtd});
+        var id=await prodCria({servico_id:servId,lote_id:loteId,data:data,quantidade:qtd,
+                               estaca_ini:eIni||null,estaca_fim:eFim||null,observacao:obs||null});
+        window.PROD_LIST.unshift({id:id,data:data,servId:servId,loteId:loteId,qtd:qtd,estIni:eIni,estFim:eFim,obs:obs});
         renderProd(); toast('Produção lançada.');
       }catch(e){ alert('Falha ao lançar: '+((e&&e.message)||e)); }
       add.disabled=false;
