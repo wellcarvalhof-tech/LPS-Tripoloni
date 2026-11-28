@@ -1994,6 +1994,39 @@
     }
     return linhas;
   }
+  /** Os recursos citados na composição dos itens de apoio que vão entrar, e que esta obra
+   *  ainda não tem. Cria só esses — não o catálogo inteiro: quem pediu apoio pediu apoio. */
+  async function catRecursosDoApoio(obraId,itens,feito){
+    var tem={};
+    RECURSOS.forEach(function(r){ tem[r.tipo+'::'+catChaveRec(r.n,r.tipo)]=true; });
+    var doCat={};
+    ['funcao','equipamento'].forEach(function(t){
+      catRecursos(t).forEach(function(x){ doCat[t+'::'+catChaveRec(x.nome,t)]=x; });
+    });
+    var novos=[], visto={};
+    (itens||[]).forEach(function(it){
+      (it.crew||[]).forEach(function(c){
+        var t=(c[0]==='e')?'equipamento':'funcao', k=t+'::'+catChaveRec(c[1],t);
+        if(tem[k]||visto[k])return;
+        var def=doCat[k];
+        if(!def)return;            // nome que nem o catálogo conhece: deixa passar, o item entra sem ele
+        visto[k]=true; novos.push(def);
+      });
+    });
+    if(!novos.length)return 0;
+    var base=RECURSOS.length;
+    var linhas=novos.map(function(x,k){
+      return {id:newUuid(),obra_id:obraId,nome:x.nome,tipo:x.tipo,unidade:x.unidade,
+              categoria:x.categoria,classe:x.classe,ordem:base+k};
+    });
+    await sbInserirEmBlocos('recursos',linhas);
+    linhas.forEach(function(x){
+      RECURSOS.push({id:x.id,n:x.nome,tipo:x.tipo,u:x.unidade,cat:x.categoria||'',
+                     classe:normClasse(x.classe,x.tipo),aliases:[]});
+      if(feito)feito[x.tipo]=(feito[x.tipo]||0)+1;
+    });
+    return linhas.length;
+  }
   /** Põe na obra o que falta do catálogo padrão. Devolve quantos entraram de cada tipo.
    *  Não apaga nem sobrescreve nada: o que a obra cadastrou por conta dela fica como está. */
   async function catalogoAplicar(obraId,tipos){
@@ -2004,9 +2037,11 @@
       if(!falta.length)continue;
       if(tipo==='apoio'){
         var baseA=APOIO.length;
-        /* A composição vem por NOME e vira id aqui, depois de funções e equipamentos já terem
-         * entrado (é por isso que 'apoio' é o último da fila). Recurso que a obra não tem é
-         * pulado em vez de derrubar o item inteiro — item sem equipe ainda é item. */
+        /* A composição vem por NOME e vira id aqui. Quem clica só no botão do apoio não tem
+         * como saber que ela depende de funções e equipamentos estarem cadastrados antes —
+         * e o item entraria com metade da equipe faltando, sem dizer nada. Então o apoio
+         * puxa junto os recursos que a composição dele usa e a obra ainda não tem. */
+        await catRecursosDoApoio(obraId,falta,feito);
         var recPorNome={};
         RECURSOS.forEach(function(r){ recPorNome[r.tipo+'::'+catChaveRec(r.n,r.tipo)]=r; });
         var montaCrew=function(lista){
@@ -2051,13 +2086,19 @@
     var falta=catFaltantes(tipo), NL=String.fromCharCode(10);
     if(!falta.length){ toast('Esta obra já tem tudo o que o catálogo padrão traz.'); return; }
     var amostra=falta.slice(0,6).map(function(x){ return tipo==='apoio'?(x.nivel2+' · '+x.nivel3):x.nome; });
+    var linhasComp=0;
+    if(tipo==='apoio')falta.forEach(function(x){ linhasComp+=(x.crew||[]).length; });
     if(!confirm('Carregar o catálogo padrão da construtora?'+NL+NL+
       'Entram '+falta.length+' '+CAT_ROTULO[tipo]+' que esta obra ainda não tem:'+NL+
-      amostra.join(', ')+(falta.length>6?(' e mais '+(falta.length-6)):'')+'.'+NL+NL+
-      'Nada do que já está cadastrado é alterado ou apagado.'))return;
+      amostra.join(', ')+(falta.length>6?(' e mais '+(falta.length-6)):'')+'.'+NL+
+      (linhasComp?(NL+'Cada item já vem com a composição típica — '+linhasComp+
+        ' linha(s) de função/equipamento com quantidade. As funções e equipamentos que faltarem para isso entram junto.'+NL):'')+
+      NL+'Nada do que já está cadastrado é alterado ou apagado.'))return;
     try{
       var r=await catalogoAplicar(selectedObra.id,[tipo]);
-      toast((r[tipo]||0)+' '+CAT_ROTULO[tipo]+' do catálogo padrão.');
+      var extras=(tipo==='apoio')?((r.funcao||0)+(r.equipamento||0)):0;
+      toast((r[tipo]||0)+' '+CAT_ROTULO[tipo]+' do catálogo padrão'+
+        (extras?(' · '+extras+' recurso(s) que a composição usa'):'')+'.');
       go(current);
     }catch(e){ alert('Falha ao carregar o catálogo: '+((e&&e.message)||e)); }
   }
@@ -24295,7 +24336,7 @@
     go('cr-hist');
     toast(r.servicos+' serviço(s) com equipe padrão · '+r.itens+' recurso(s)'+
       (r.equipes?(' · '+r.equipes+' com o número de equipes do padrão'):'')+
-      (r.faltaram.length?(' · '+r.faltaram.length+' recurso(s) não existem nesta obra'):'')+
+      (r.faltaram.length?(' · '+r.faltaram.length+' recurso(s) não existem nesta obra — carregue o Catálogo padrão de funções e equipamentos e clique de novo'):'')+
       '. Salve para gravar.');
   }
 
